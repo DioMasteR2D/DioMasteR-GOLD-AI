@@ -99,15 +99,14 @@ public final class PaperTradingEngine {
     public synchronized Result open(String side, double price, long quoteReceivedAt) {
         rollDay();
         if (!"BUY".equals(side) && !"SELL".equals(side)) return new Result(false, "Invalid direction");
-        if (price <= 0 || System.currentTimeMillis() - quoteReceivedAt > 120000L) return new Result(false, "No fresh market quote. New trades are blocked.");
-        if (state.optBoolean("paused")) return new Result(false, "Trading is paused.");
         JSONArray positions = array("positions");
-        if (positions.length() >= MAX_POSITIONS) return new Result(false, "Maximum 3 open positions reached.");
         double equity = state.optDouble("balance", START_BALANCE) + floating(price);
-        if (state.optDouble("daily") + floating(price) <= -DAILY_LOSS_LIMIT) return new Result(false, "Daily loss guard is active.");
-        if (equity <= state.optDouble("peak", START_BALANCE) * (1.0 - MAX_DRAWDOWN)) return new Result(false, "Maximum drawdown guard is active.");
-        double riskCash = equity * RISK_PERCENT;
-        double oz = Math.min(MAX_OZ, Math.floor((riskCash / STOP_DISTANCE) * 10.0) / 10.0);
+        String refusal = RiskGovernor.refusal(
+                price > 0 && System.currentTimeMillis() - quoteReceivedAt <= 120000L,
+                state.optBoolean("paused"), positions.length(), equity,
+                state.optDouble("peak", START_BALANCE), state.optDouble("daily"), floating(price));
+        if (!refusal.isEmpty()) return new Result(false, refusal + ". New entries blocked.");
+        double oz = RiskGovernor.positionSize(equity);
         if (oz < 0.1) return new Result(false, "Position size is below the minimum.");
         JSONObject p = new JSONObject();
         try {
@@ -143,6 +142,10 @@ public final class PaperTradingEngine {
             String reason = buy ? (price <= sl ? "STOP LOSS" : price >= tp ? "TAKE PROFIT" : null)
                     : (price >= sl ? "STOP LOSS" : price <= tp ? "TAKE PROFIT" : null);
             if (reason != null) closeAtIndex(i, price, reason);
+        }
+        double markedEquity = state.optDouble("balance", START_BALANCE) + floating(price);
+        if (markedEquity > state.optDouble("peak", START_BALANCE)) {
+            try { state.put("peak", markedEquity); } catch (JSONException ignored) {}
         }
         save();
     }
@@ -182,9 +185,10 @@ public final class PaperTradingEngine {
             state.put("balance", state.optDouble("balance", START_BALANCE) + pnl);
             state.put("daily", state.optDouble("daily") + pnl);
             state.put("peak", Math.max(state.optDouble("peak", START_BALANCE), state.optDouble("balance")));
-            JSONArray history = array("history");
-            history.put(0, p);
-            while (history.length() > 100) history.remove(history.length() - 1);
+            JSONArray oldHistory = array("history");
+            JSONArray history = new JSONArray();
+            history.put(p);
+            for (int h = 0; h < oldHistory.length() && h < 99; h++) history.put(oldHistory.opt(h));
             state.put("history", history);
             positions.remove(index);
             state.put("positions", positions);
@@ -204,12 +208,13 @@ public final class PaperTradingEngine {
     }
 
     private void event(String type, String detail) {
-        JSONArray events = array("events");
+        JSONArray oldEvents = array("events");
+        JSONArray events = new JSONArray();
         JSONObject e = new JSONObject();
         try {
             e.put("type", type); e.put("detail", detail); e.put("at", System.currentTimeMillis());
-            events.put(0, e);
-            while (events.length() > 100) events.remove(events.length() - 1);
+            events.put(e);
+            for (int i = 0; i < oldEvents.length() && i < 99; i++) events.put(oldEvents.opt(i));
             state.put("events", events);
         } catch (JSONException ignored) {}
     }

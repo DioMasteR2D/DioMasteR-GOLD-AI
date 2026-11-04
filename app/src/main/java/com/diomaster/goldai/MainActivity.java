@@ -238,8 +238,8 @@ public class MainActivity extends Activity {
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
-        metrics.addView(metric("ΑΞΙΑ ΛΟΓΑΡΙΑΣΜΟΥ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
-        metrics.addView(metric("ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        metrics.addView(metric("PAPER ΚΕΦΑΛΑΙΟ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
+        metrics.addView(metric("PAPER ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
         root.addView(metrics);
         addSpace(8);
         LinearLayout metrics2 = new LinearLayout(this);
@@ -270,7 +270,7 @@ public class MainActivity extends Activity {
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
         actionRow.addView(actionButton("SELL", RED, () -> openTrade("SELL")), weight());
         actions.addView(actionRow);
-        Button closeAll = actionButton("ΚΛΕΙΣΙΜΟ ΟΛΩΝ ΤΩΝ ΘΕΣΕΩΝ", 0xFF343943, () -> {
+        Button closeAll = actionButton("ΚΛΕΙΣΙΜΟ ΟΛΩΝ ΤΩΝ PAPER ΘΕΣΕΩΝ", 0xFF343943, () -> {
             if (!quoteFresh()) { Toast.makeText(this, "Waiting for fresh quote.", Toast.LENGTH_SHORT).show(); fetchPrice(); return; }
             new AlertDialog.Builder(this).setTitle("Να κλείσουν όλες οι εικονικές θέσεις;")
                     .setMessage("Όλες οι ανοιχτές εικονικές θέσεις θα κλείσουν στην τρέχουσα ενδεικτική τιμή.")
@@ -286,7 +286,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout positions = card();
-        addLabel(positions, "ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
+        addLabel(positions, "PAPER ΘΕΣΕΙΣ · ΤΟ MT5 ΕΜΦΑΝΙΖΕΤΑΙ ΣΤΗΝ ΞΕΧΩΡΙΣΤΗ ΛΙΣΤΑ");
         JSONArray open = snap.optJSONArray("positions");
         if (open == null || open.length() == 0) positions.addView(text("Δεν υπάρχουν ανοιχτές εικονικές θέσεις.", 12, MUTED, false));
         else {

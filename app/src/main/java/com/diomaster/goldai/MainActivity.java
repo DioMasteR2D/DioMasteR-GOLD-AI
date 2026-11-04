@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
         render();
         fetchPrice();
+        if (mt5ExecutionEnabled && !mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) startAutoTradingOnLaunch();
         handler.postDelayed(refreshLoop, 30000L);
     }
 
@@ -79,6 +80,23 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         handler.removeCallbacks(refreshLoop);
         super.onDestroy();
+    }
+
+
+    private void startAutoTradingOnLaunch() {
+        new Thread(() -> {
+            String result;
+            try {
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject status = client.status();
+                if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || !status.optBoolean("execution_enabled"))
+                    throw new IllegalStateException("Το MT5 δεν είναι συνδεδεμένο σε ενεργό DEMO execution.");
+                JSONObject started = client.autoStart();
+                result = started.optBoolean("running") ? "DioMasteR AI AUTO ξεκίνησε στο Vantage DEMO." : "Η αυτόματη λειτουργία δεν ξεκίνησε.";
+            } catch(Exception e) { result = "AI AUTO σε αναμονή: " + e.getMessage(); }
+            final String message = result;
+            runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
+        }).start();
     }
 
     private void fetchPrice() {
@@ -214,6 +232,9 @@ public class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setOrientation(LinearLayout.HORIZONTAL);
         TextView brand = text("◆ DioMasteR GOLD AI", 19, GOLD, true);
+        android.view.animation.AlphaAnimation glow = new android.view.animation.AlphaAnimation(0.72f, 1.0f);
+        glow.setDuration(1100L); glow.setRepeatMode(android.view.animation.Animation.REVERSE); glow.setRepeatCount(android.view.animation.Animation.INFINITE);
+        brand.startAnimation(glow);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
         TextView mode = text("DEMO · ΕΙΚΟΝΙΚΕΣ", 10, GREEN, true);
         mode.setPadding(dp(10), dp(7), dp(10), dp(7));

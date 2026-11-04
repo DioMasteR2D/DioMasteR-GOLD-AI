@@ -78,7 +78,7 @@ async function getPrice(){
  }finally{busy=false}
 }
 function ema(period){if(samples.length<period)return null;let v=samples.slice(0,period).reduce((a,x)=>a+x.p,0)/period,k=2/(period+1);for(let i=period;i<samples.length;i++)v=samples[i].p*k+v*(1-k);return v}
-function checkStops(){if(price===null)return;let changed=false;state.positions=[...state.positions];for(let i=state.positions.length-1;i>=0;i--){const p=state.positions[i],hit=p.side==='BUY'?(price<=p.sl?'SL':price>=p.tp?'TP'):price>=p.sl?'SL':price<=p.tp?'TP':null;if(hit){closePosition(p.id,hit);changed=true}}if(changed)save()}
+function checkStops(){if(price===null)return;let changed=false;state.positions=[...state.positions];for(let i=state.positions.length-1;i>=0;i--){const p=state.positions[i],hit=p.side==='BUY'?(price<=p.sl?'SL':price>=p.tp?'TP':null):(price>=p.sl?'SL':price<=p.tp?'TP':null);if(hit){closePosition(p.id,hit);changed=true}}if(changed)save()}
 function openTrade(side){
  today();if(price===null){alert('Δεν υπάρχει επιβεβαιωμένη τιμή αγοράς.');return}
  if(Date.now()-new Date(updatedAt).getTime()>120000){alert('Η τιμή είναι παλιά. Περιμένετε νέα ενημέρωση.');return}

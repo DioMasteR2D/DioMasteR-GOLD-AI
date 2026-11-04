@@ -27,18 +27,8 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
-      - name: Validate dashboard JavaScript
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const html = fs.readFileSync('app/src/main/assets/index.html', 'utf8');
-          const match = html.match(/<script>([\s\S]*?)<\/script>/);
-          if (!match) throw new Error('Dashboard script not found');
-          fs.writeFileSync('/tmp/dashboard.js', match[1]);
-          NODE
-          node --check /tmp/dashboard.js
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Verify APK
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk

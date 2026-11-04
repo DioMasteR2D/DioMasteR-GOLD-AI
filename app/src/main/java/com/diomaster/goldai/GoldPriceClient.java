@@ -32,12 +32,12 @@ public final class GoldPriceClient {
             double price = json.optDouble("price", Double.NaN);
             if (!(!Double.isNaN(price) && !Double.isInfinite(price))) price = json.optDouble("ask", Double.NaN);
             if (!(!Double.isNaN(price) && !Double.isInfinite(price))) price = json.optDouble("value", Double.NaN);
-            if (!Double.isFinite(price) || price < 100 || price > 100000) {
-                throw new IllegalStateException("Invalid XAU price response");
+            if (Double.isNaN(price) || Double.isInfinite(price) || price < 100 || price > 100000) {
+                throw new IllegalStateException("Μη έγκυρη τιμή XAU");
             }
             callback.onPrice(price, System.currentTimeMillis());
         } catch (Exception e) {
-            callback.onError(e.getMessage() == null ? "Price feed unavailable" : e.getMessage());
+            callback.onError(e.getMessage() == null ? "Η πηγή τιμής δεν είναι διαθέσιμη" : e.getMessage());
         } finally {
             if (connection != null) connection.disconnect();
         }

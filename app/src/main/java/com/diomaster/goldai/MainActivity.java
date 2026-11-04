@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
-    private String feedMessage = "Connecting to XAU spot feed…";
+    private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
                     fetching = false;
                     price = value;
                     quoteAt = receivedAt;
-                    feedMessage = "Live reference feed · updated " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
+                    feedMessage = "Ζωντανή ενδεικτική τιμή · ενημέρωση " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                     chartPrices.add(value);
                     while (chartPrices.size() > 90) chartPrices.remove(0);
                     engine.onQuote(value);
@@ -85,7 +85,7 @@ public class MainActivity extends Activity {
             @Override public void onError(String message) {
                 runOnUiThread(() -> {
                     fetching = false;
-                    feedMessage = "Feed unavailable: " + message;
+                    feedMessage = "Αδυναμία λήψης τιμής: " + message;
                     render();
                 });
             }
@@ -98,7 +98,7 @@ public class MainActivity extends Activity {
 
     private void openTrade(String side) {
         if (!quoteFresh()) {
-            Toast.makeText(this, "Waiting for a fresh XAU quote. New entries are blocked.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Δεν υπάρχει φρέσκια τιμή XAU. Οι νέες συναλλαγές μπλοκαρίστηκαν.", Toast.LENGTH_LONG).show();
             fetchPrice();
             return;
         }
@@ -109,7 +109,7 @@ public class MainActivity extends Activity {
 
     private void closePosition(int id) {
         if (!quoteFresh()) {
-            Toast.makeText(this, "No fresh quote. Close is blocked until price refreshes.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Δεν υπάρχει φρέσκια τιμή. Το κλείσιμο θα γίνει μόλις ανανεωθεί η τιμή.", Toast.LENGTH_LONG).show();
             fetchPrice();
             return;
         }
@@ -135,7 +135,7 @@ public class MainActivity extends Activity {
         header.setOrientation(LinearLayout.HORIZONTAL);
         TextView brand = text("◆ DioMasteR GOLD AI", 19, GOLD, true);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mode = text("PAPER MODE", 10, GREEN, true);
+        TextView mode = text("DEMO · ΕΙΚΟΝΙΚΕΣ", 10, GREEN, true);
         mode.setPadding(dp(10), dp(7), dp(10), dp(7));
         mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
         header.addView(mode);
@@ -143,7 +143,7 @@ public class MainActivity extends Activity {
         addSpace(14);
 
         LinearLayout market = card();
-        addLabel(market, "XAUUSD · GOLD SPOT REFERENCE");
+        addLabel(market, "XAUUSD · ΕΝΔΕΙΚΤΙΚΗ ΤΙΜΗ ΧΡΥΣΟΥ");
         TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
@@ -158,57 +158,57 @@ public class MainActivity extends Activity {
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
-        metrics.addView(metric("ACCOUNT EQUITY", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
-        metrics.addView(metric("FLOATING P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        metrics.addView(metric("ΑΞΙΑ ΛΟΓΑΡΙΑΣΜΟΥ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
+        metrics.addView(metric("ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
         root.addView(metrics);
         addSpace(8);
         LinearLayout metrics2 = new LinearLayout(this);
         metrics2.setOrientation(LinearLayout.HORIZONTAL);
-        metrics2.addView(metric("CLOSED P/L TODAY", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
-        metrics2.addView(metric("OPEN POSITIONS", snap.optJSONArray("positions").length() + " / " + PaperTradingEngine.MAX_POSITIONS, GOLD), weight());
+        metrics2.addView(metric("ΚΛΕΙΣΜΕΝΟ P/L ΣΗΜΕΡΑ", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
+        metrics2.addView(metric("ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ", snap.optJSONArray("positions").length() + " / " + PaperTradingEngine.MAX_POSITIONS, GOLD), weight());
         root.addView(metrics2);
         addSpace(10);
 
         LinearLayout risk = card();
-        addLabel(risk, "RISK GOVERNOR · ACTIVE");
-        addRow(risk, "Risk per trade", "0.5% of equity");
-        addRow(risk, "Stop / target", "$8 / $16");
-        addRow(risk, "Max position size", "5.0 oz");
-        addRow(risk, "Daily loss guard", "$200");
-        addRow(risk, "Max equity drawdown", "5%");
-        addRow(risk, "New entries", snap.optBoolean("paused") ? "PAUSED" : "ENABLED");
-        TextView riskNote = text("Every new paper entry is checked by the same deterministic risk engine. Stale or missing quotes block new entries.", 10, MUTED, false);
+        addLabel(risk, "ΔΙΑΧΕΙΡΙΣΗ ΚΙΝΔΥΝΟΥ · ΕΝΕΡΓΗ");
+        addRow(risk, "Ρίσκο ανά συναλλαγή", "0.5% of equity");
+        addRow(risk, "Stop Loss / Take Profit", "$8 / $16");
+        addRow(risk, "Μέγιστο μέγεθος θέσης", "5.0 oz");
+        addRow(risk, "Ημερήσιο όριο ζημιάς", "$200");
+        addRow(risk, "Μέγιστη πτώση κεφαλαίου", "5%");
+        addRow(risk, "Νέες συναλλαγές", snap.optBoolean("paused") ? "ΣΕ ΠΑΥΣΗ" : "ΕΝΕΡΓΕΣ");
+        TextView riskNote = text("Κάθε νέα εικονική συναλλαγή περνά από τον ίδιο αυτόματο έλεγχο κινδύνου. Παλιές ή ανύπαρκτες τιμές μπλοκάρουν τις νέες εισόδους.", 10, MUTED, false);
         riskNote.setPadding(0, dp(8), 0, 0);
         risk.addView(riskNote);
         root.addView(risk);
         addSpace(10);
 
         LinearLayout actions = card();
-        addLabel(actions, "PAPER EXECUTION · MANUAL");
+        addLabel(actions, "ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ · ΧΕΙΡΟΚΙΝΗΤΑ");
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
         actionRow.addView(actionButton("SELL", RED, () -> openTrade("SELL")), weight());
         actions.addView(actionRow);
-        Button closeAll = actionButton("CLOSE ALL POSITIONS", 0xFF343943, () -> {
+        Button closeAll = actionButton("ΚΛΕΙΣΙΜΟ ΟΛΩΝ ΤΩΝ ΘΕΣΕΩΝ", 0xFF343943, () -> {
             if (!quoteFresh()) { Toast.makeText(this, "Waiting for fresh quote.", Toast.LENGTH_SHORT).show(); fetchPrice(); return; }
-            new AlertDialog.Builder(this).setTitle("Close all paper positions?")
-                    .setMessage("All open virtual positions will be closed at the current reference price.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Close all", (d, w) -> { engine.closeAll(price); render(); })
+            new AlertDialog.Builder(this).setTitle("Να κλείσουν όλες οι εικονικές θέσεις;")
+                    .setMessage("Όλες οι ανοιχτές εικονικές θέσεις θα κλείσουν στην τρέχουσα ενδεικτική τιμή.")
+                    .setNegativeButton("Ακύρωση", null)
+                    .setPositiveButton("Κλείσιμο όλων", (d, w) -> { engine.closeAll(price); render(); })
                     .show();
         });
         actions.addView(closeAll);
-        Button pause = actionButton(snap.optBoolean("paused") ? "RESUME NEW ENTRIES" : "PAUSE NEW ENTRIES", 0xFF292C34,
+        Button pause = actionButton(snap.optBoolean("paused") ? "ΕΠΑΝΕΝΕΡΓΟΠΟΙΗΣΗ ΝΕΩΝ ΕΙΣΟΔΩΝ" : "ΠΑΥΣΗ ΝΕΩΝ ΕΙΣΟΔΩΝ", 0xFF292C34,
                 () -> { engine.setPaused(!engine.snapshot(quoteFresh() ? price : 0).optBoolean("paused")); render(); });
         actions.addView(pause);
         root.addView(actions);
         addSpace(10);
 
         LinearLayout positions = card();
-        addLabel(positions, "OPEN POSITIONS");
+        addLabel(positions, "ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
         JSONArray open = snap.optJSONArray("positions");
-        if (open == null || open.length() == 0) positions.addView(text("No open paper positions.", 12, MUTED, false));
+        if (open == null || open.length() == 0) positions.addView(text("Δεν υπάρχουν ανοιχτές εικονικές θέσεις.", 12, MUTED, false));
         else {
             for (int i = 0; i < open.length(); i++) {
                 JSONObject p = open.optJSONObject(i);
@@ -223,8 +223,8 @@ public class MainActivity extends Activity {
                 LinearLayout details = new LinearLayout(this);
                 details.setOrientation(LinearLayout.VERTICAL);
                 details.addView(text("#" + id + "  " + side + "  ·  " + String.format(Locale.US, "%.1f", p.optDouble("oz")) + " oz", 13, "BUY".equals(side) ? GREEN : RED, true));
-                details.addView(text("Entry " + money(p.optDouble("entry")) + "   SL " + money(p.optDouble("sl")) + "   TP " + money(p.optDouble("tp")), 10, MUTED, false));
-                details.addView(text("Unrealised " + PaperTradingEngine.money(pnl), 11, pnl >= 0 ? GREEN : RED, true));
+                details.addView(text("Είσοδος " + money(p.optDouble("entry")) + "   SL " + money(p.optDouble("sl")) + "   TP " + money(p.optDouble("tp")), 10, MUTED, false));
+                details.addView(text("Μη πραγματοποιημένο P/L " + PaperTradingEngine.money(pnl), 11, pnl >= 0 ? GREEN : RED, true));
                 row.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
                 Button closeButton = actionButton("CLOSE", 0xFF343943, () -> closePosition(id));
                 closeButton.setLayoutParams(new LinearLayout.LayoutParams(-2, -2));
@@ -237,9 +237,9 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout history = card();
-        addLabel(history, "CLOSED TRADE HISTORY");
+        addLabel(history, "ΙΣΤΟΡΙΚΟ ΚΛΕΙΣΜΕΝΩΝ ΣΥΝΑΛΛΑΓΩΝ");
         JSONArray closed = snap.optJSONArray("history");
-        if (closed == null || closed.length() == 0) history.addView(text("No closed trades yet.", 12, MUTED, false));
+        if (closed == null || closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη.", 12, MUTED, false));
         else {
             for (int i = 0; i < Math.min(8, closed.length()); i++) {
                 JSONObject p = closed.optJSONObject(i);
@@ -252,30 +252,45 @@ public class MainActivity extends Activity {
         root.addView(history);
         addSpace(10);
 
+        LinearLayout audit = card();
+        addLabel(audit, "ΚΑΤΑΓΡΑΦΗ ΑΠΟΦΑΣΕΩΝ");
+        JSONArray events = snap.optJSONArray("events");
+        if (events == null || events.length() == 0) audit.addView(text("Δεν υπάρχουν ακόμη καταγεγραμμένες ενέργειες.", 12, MUTED, false));
+        else {
+            for (int i = 0; i < Math.min(6, events.length()); i++) {
+                JSONObject e = events.optJSONObject(i);
+                if (e == null) continue;
+                String when = new SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(new Date(e.optLong("at")));
+                addRow(audit, e.optString("type") + " · " + when, e.optString("detail"), GOLD);
+            }
+        }
+        root.addView(audit);
+        addSpace(10);
+
         LinearLayout connections = card();
-        addLabel(connections, "CONNECTIONS & SYSTEM STATUS");
-        addRow(connections, "Market data", quoteFresh() ? "SPOT FEED ONLINE" : "WAITING / STALE", quoteFresh() ? GREEN : RED);
-        addRow(connections, "MT5 Demo Bridge", "NOT CONNECTED", MUTED);
-        addRow(connections, "AI signal engine", "NOT ACTIVE", MUTED);
-        addRow(connections, "Real broker orders", "DISABLED", GREEN);
-        TextView bridgeNote = text("MT5 needs a separate Windows PC or VPS running MetaTrader 5 and a secured bridge. This Android app does not pretend that a broker is connected.", 10, MUTED, false);
+        addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
+        addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
+        addRow(connections, "Γέφυρα MT5 Demo", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ", MUTED);
+        addRow(connections, "Μηχανή σημάτων AI", "ΜΗ ΕΝΕΡΓΗ", MUTED);
+        addRow(connections, "Πραγματικές εντολές broker", "ΑΠΕΝΕΡΓΟΠΟΙΗΜΕΝΕΣ", GREEN);
+        TextView bridgeNote = text("Το MT5 χρειάζεται ξεχωριστό υπολογιστή Windows ή VPS με MetaTrader 5 και ασφαλή γέφυρα σύνδεσης. Η εφαρμογή δεν εμφανίζει ψεύτικη σύνδεση broker.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
-        Button bridgeInfo = actionButton("MT5 DEMO BRIDGE REQUIREMENTS", 0xFF292C34, () ->
-                new AlertDialog.Builder(this).setTitle("MT5 Demo connection")
-                        .setMessage("A real MT5 connection needs a Windows PC/VPS with the MT5 terminal, a demo account and a separate authenticated bridge service. The bridge must verify the account is DEMO and reject every LIVE account. This build has no broker connection yet.")
-                        .setPositiveButton("OK", null).show());
+        Button bridgeInfo = actionButton("ΑΠΑΙΤΗΣΕΙΣ ΣΥΝΔΕΣΗΣ MT5 DEMO", 0xFF292C34, () ->
+                new AlertDialog.Builder(this).setTitle("Σύνδεση MT5 Demo")
+                        .setMessage("Για σύνδεση MT5 χρειάζεται υπολογιστής Windows/VPS με MT5, demo λογαριασμός και ξεχωριστή πιστοποιημένη υπηρεσία bridge. Η γέφυρα πρέπει να επιβεβαιώνει ότι ο λογαριασμός είναι DEMO και να απορρίπτει κάθε LIVE λογαριασμό. Αυτή η έκδοση δεν έχει ακόμη σύνδεση broker.")
+                        .setPositiveButton("Εντάξει", null).show());
         connections.addView(bridgeInfo);
-        Button reset = actionButton("RESET PAPER ACCOUNT", 0xFF292C34, () ->
-                new AlertDialog.Builder(this).setTitle("Reset paper account?")
-                        .setMessage("This deletes virtual positions and trade history and restores $10,000.")
-                        .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Reset", (d, w) -> { engine.reset(); render(); })
+        Button reset = actionButton("ΕΠΑΝΑΦΟΡΑ DEMO ΛΟΓΑΡΙΑΣΜΟΥ", 0xFF292C34, () ->
+                new AlertDialog.Builder(this).setTitle("Επαναφορά demo λογαριασμού;")
+                        .setMessage("Θα διαγραφούν οι εικονικές θέσεις και το ιστορικό και θα επανέλθει κεφάλαιο $10.000.")
+                        .setNegativeButton("Ακύρωση", null)
+                        .setPositiveButton("Επαναφορά", (d, w) -> { engine.reset(); render(); })
                         .show());
         connections.addView(reset);
         root.addView(connections);
         addSpace(16);
-        TextView footer = text("DioMasteR GOLD AI · Native Android · Paper Trading only", 10, MUTED, false);
+        TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
     }

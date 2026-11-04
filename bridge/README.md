@@ -1,6 +1,6 @@
 # DioMasteR GOLD AI — Vantage / MetaTrader 5 DEMO bridge
 
-This companion service runs on a **Windows PC or Windows VPS** with the Vantage MetaTrader 5 desktop terminal installed and logged in to a Vantage **DEMO** account. It now supports guarded demo market orders, position reads, and closing only bot-owned positions.
+This companion service runs on a **Windows PC or Windows VPS** with the Vantage MetaTrader 5 desktop terminal installed and logged in to a Vantage **DEMO** account. It supports guarded demo market orders, position reads, closing bot-owned positions, and an optional automatic M5 strategy loop.
 
 ## Safety rules (do not remove)
 - Every private request requires the Bearer token `DIO_BRIDGE_TOKEN`.
@@ -9,6 +9,8 @@ This companion service runs on a **Windows PC or Windows VPS** with the Vantage 
 - Only symbols in `DIO_MT5_ALLOWED_SYMBOLS` can be traded. Set the exact Vantage symbol shown in Market Watch, e.g. `XAUUSD` or `XAUUSDm`.
 - Volume is capped by `DIO_MT5_MAX_VOLUME` (default 0.10 lots). The bridge validates broker min/step and requires server-side Stop Loss and Take Profit on every new order.
 - New orders are checked with MT5 `order_check` before `order_send`. No LIVE order endpoint exists.
+- Automatic strategy endpoints are `/v1/auto/start`, `/v1/auto/status`, and `/v1/auto/stop`. The app requests auto-start on launch only when its MT5 execution connection is already enabled.
+- The M5 engine combines trend/range breakout confirmation and liquidity-sweep reversal candidates. It sizes positions from broker contract specifications and equity risk, checks spread, daily realized bot loss, and open bot positions. It is deterministic rule-based signal scoring, not a trained predictive AI model.
 - Close endpoint only closes positions carrying this bridge's configured magic number.
 - Bind to localhost by default. For Android remote access, use a private VPN or authenticated HTTPS reverse proxy. Never expose port 8787 directly to the public internet.
 - Never share your Vantage password or MT5 investor/master password in chat or put them in the Android app.
@@ -41,6 +43,9 @@ This companion service runs on a **Windows PC or Windows VPS** with the Vantage 
 - `GET /v1/positions` — current MT5 positions.
 - `POST /v1/order` — DEMO market BUY/SELL with mandatory server-side SL/TP.
 - `POST /v1/positions/{ticket}/close` — closes only positions with the configured bot magic number.
+- `POST /v1/auto/start` — start the strategy loop on the Windows bridge (DEMO only).
+- `GET /v1/auto/status` — strategy state, last signal and guard status.
+- `POST /v1/auto/stop` — stop new automatic entries.
 
 Example order body:
 ```json
@@ -58,5 +63,5 @@ Use live broker bid/ask and symbol specifications to calculate valid prices and 
 ## Important limitations
 - The bridge must run on Windows with the actual MT5 terminal; it cannot run on Android, Netlify, or a Linux-only Render service.
 - A running bridge and a reachable private HTTPS/VPN route are prerequisites for Android commands.
-- This repository update adds the guarded server-side DEMO execution API. It does **not** mean a Vantage account has already been connected or that an order has been tested. Test with the Vantage demo account first and verify the resulting ticket in MT5.
+- Automatic strategy code is newly added and must be validated with broker-specific XAUUSD history and the Vantage DEMO terminal before relying on it. This repository update does **not** mean a Vantage account has already been connected or that an order has been tested. The auto-loop currently enters at most one bot position at a time; multi-position stacking and advanced partial-profit/trailing management remain future validation work. Test with the Vantage demo account first and verify the resulting ticket in MT5.
 - Do not switch to a LIVE account. The bridge rejects it.

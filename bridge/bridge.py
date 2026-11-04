@@ -88,6 +88,13 @@ def place_demo_order(req:OrderRequest,authorization:Optional[str]=Header(default
         raise HTTPException(422,f"Volume must respect broker min/step ({minimum}/{step})")
     price=float(tick.ask if side=="BUY" else tick.bid)
     sl,tp=float(req.stop_loss),float(req.take_profit)
+    account=mt5.account_info()
+    contract_size=float(info.trade_contract_size or 0.0)
+    if account is None or contract_size<=0: raise HTTPException(503,"Account equity or contract specification unavailable")
+    exposure_oz=float(req.volume)*contract_size
+    estimated_risk=abs(price-sl)*exposure_oz
+    if exposure_oz>5.0+1e-8: raise HTTPException(422,"Hard exposure limit is 5 troy ounces")
+    if estimated_risk>float(account.equity)*0.005+1e-8: raise HTTPException(422,"Order exceeds 0.5% account-equity risk limit")
     point=float(info.point or 0.0); min_gap=float(info.trade_stops_level or 0)*point
     if side=="BUY" and not (sl<price-min_gap and tp>price+min_gap):
         raise HTTPException(422,"BUY requires valid server-side SL below and TP above market")

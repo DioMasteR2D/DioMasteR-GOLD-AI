@@ -21,8 +21,6 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private final int BG = 0xFF090A0D;
@@ -32,7 +30,6 @@ public class MainActivity extends Activity {
     private final int GREEN = 0xFF39C98A;
     private final int RED = 0xFFFF6570;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final GoldPriceClient priceClient = new GoldPriceClient();
     private final ArrayList<Double> chartPrices = new ArrayList<>();
     private PaperTradingEngine engine;
@@ -66,7 +63,6 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         handler.removeCallbacks(refreshLoop);
-        worker.shutdownNow();
         super.onDestroy();
     }
 
@@ -230,7 +226,9 @@ public class MainActivity extends Activity {
                 details.addView(text("Entry " + money(p.optDouble("entry")) + "   SL " + money(p.optDouble("sl")) + "   TP " + money(p.optDouble("tp")), 10, MUTED, false));
                 details.addView(text("Unrealised " + PaperTradingEngine.money(pnl), 11, pnl >= 0 ? GREEN : RED, true));
                 row.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
-                row.addView(actionButton("CLOSE", 0xFF343943, () -> closePosition(id)));
+                Button closeButton = actionButton("CLOSE", 0xFF343943, () -> closePosition(id));
+                closeButton.setLayoutParams(new LinearLayout.LayoutParams(-2, -2));
+                row.addView(closeButton);
                 positions.addView(row);
                 if (i < open.length() - 1) addDivider(positions);
             }

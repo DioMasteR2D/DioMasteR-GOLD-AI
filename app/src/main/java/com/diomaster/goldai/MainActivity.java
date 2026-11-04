@@ -1,17 +1,378 @@
 package com.diomaster.goldai;
+
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public class MainActivity extends Activity {
- @Override public void onCreate(Bundle state) {
-  super.onCreate(state);
-  WebView web = new WebView(this);
-  WebSettings s = web.getSettings();
-  s.setJavaScriptEnabled(true);
-  s.setDomStorageEnabled(true);
-  web.setBackgroundColor(0xFF090A0D);
-  setContentView(web);
-  web.loadUrl("file:///android_asset/index.html");
- }
+    private final int BG = 0xFF090A0D;
+    private final int PANEL = 0xFF14161B;
+    private final int GOLD = 0xFFD7AD54;
+    private final int MUTED = 0xFF9296A0;
+    private final int GREEN = 0xFF39C98A;
+    private final int RED = 0xFFFF6570;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final GoldPriceClient priceClient = new GoldPriceClient();
+    private final ArrayList<Double> chartPrices = new ArrayList<>();
+    private PaperTradingEngine engine;
+    private LinearLayout root;
+    private double price = 0.0;
+    private long quoteAt = 0L;
+    private boolean fetching = false;
+    private String feedMessage = "Connecting to XAU spot feed…";
+
+    private final Runnable refreshLoop = new Runnable() {
+        @Override public void run() {
+            fetchPrice();
+            handler.postDelayed(this, 30000L);
+        }
+    };
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
+        engine = new PaperTradingEngine(this);
+        render();
+        fetchPrice();
+        handler.postDelayed(refreshLoop, 30000L);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        fetchPrice();
+    }
+
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(refreshLoop);
+        worker.shutdownNow();
+        super.onDestroy();
+    }
+
+    private void fetchPrice() {
+        if (fetching) return;
+        fetching = true;
+        new Thread(() -> priceClient.fetch(new GoldPriceClient.Callback() {
+            @Override public void onPrice(double value, long receivedAt) {
+                runOnUiThread(() -> {
+                    fetching = false;
+                    price = value;
+                    quoteAt = receivedAt;
+                    feedMessage = "Live reference feed · updated " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
+                    chartPrices.add(value);
+                    while (chartPrices.size() > 90) chartPrices.remove(0);
+                    engine.onQuote(value);
+                    render();
+                });
+            }
+            @Override public void onError(String message) {
+                runOnUiThread(() -> {
+                    fetching = false;
+                    feedMessage = "Feed unavailable: " + message;
+                    render();
+                });
+            }
+        })).start();
+    }
+
+    private boolean quoteFresh() {
+        return price > 0 && quoteAt > 0 && System.currentTimeMillis() - quoteAt <= 120000L;
+    }
+
+    private void openTrade(String side) {
+        if (!quoteFresh()) {
+            Toast.makeText(this, "Waiting for a fresh XAU quote. New entries are blocked.", Toast.LENGTH_LONG).show();
+            fetchPrice();
+            return;
+        }
+        PaperTradingEngine.Result result = engine.open(side, price, quoteAt);
+        Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
+        render();
+    }
+
+    private void closePosition(int id) {
+        if (!quoteFresh()) {
+            Toast.makeText(this, "No fresh quote. Close is blocked until price refreshes.", Toast.LENGTH_LONG).show();
+            fetchPrice();
+            return;
+        }
+        PaperTradingEngine.Result result = engine.close(id, price);
+        Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show();
+        render();
+    }
+
+    private void render() {
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(12), dp(16), dp(24));
+        root.setBackgroundColor(BG);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(BG);
+        scroll.addView(root);
+        setContentView(scroll);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        TextView brand = text("◆ DioMasteR GOLD AI", 19, GOLD, true);
+        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView mode = text("PAPER MODE", 10, GREEN, true);
+        mode.setPadding(dp(10), dp(7), dp(10), dp(7));
+        mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
+        header.addView(mode);
+        root.addView(header);
+        addSpace(14);
+
+        LinearLayout market = card();
+        addLabel(market, "XAUUSD · GOLD SPOT REFERENCE");
+        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
+        market.addView(priceText);
+        TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
+        market.addView(feed);
+        GoldChartView chart = new GoldChartView(this);
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(92)));
+        for (double p : chartPrices) chart.addPrice(p);
+        market.addView(chart);
+        root.addView(market);
+        addSpace(10);
+
+        JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
+        LinearLayout metrics = new LinearLayout(this);
+        metrics.setOrientation(LinearLayout.HORIZONTAL);
+        metrics.addView(metric("ACCOUNT EQUITY", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
+        metrics.addView(metric("FLOATING P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        root.addView(metrics);
+        addSpace(8);
+        LinearLayout metrics2 = new LinearLayout(this);
+        metrics2.setOrientation(LinearLayout.HORIZONTAL);
+        metrics2.addView(metric("CLOSED P/L TODAY", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
+        metrics2.addView(metric("OPEN POSITIONS", snap.optJSONArray("positions").length() + " / " + PaperTradingEngine.MAX_POSITIONS, GOLD), weight());
+        root.addView(metrics2);
+        addSpace(10);
+
+        LinearLayout risk = card();
+        addLabel(risk, "RISK GOVERNOR · ACTIVE");
+        addRow(risk, "Risk per trade", "0.5% of equity");
+        addRow(risk, "Stop / target", "$8 / $16");
+        addRow(risk, "Max position size", "5.0 oz");
+        addRow(risk, "Daily loss guard", "$200");
+        addRow(risk, "Max equity drawdown", "5%");
+        addRow(risk, "New entries", snap.optBoolean("paused") ? "PAUSED" : "ENABLED");
+        TextView riskNote = text("Every new paper entry is checked by the same deterministic risk engine. Stale or missing quotes block new entries.", 10, MUTED, false);
+        riskNote.setPadding(0, dp(8), 0, 0);
+        risk.addView(riskNote);
+        root.addView(risk);
+        addSpace(10);
+
+        LinearLayout actions = card();
+        addLabel(actions, "PAPER EXECUTION · MANUAL");
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
+        actionRow.addView(actionButton("SELL", RED, () -> openTrade("SELL")), weight());
+        actions.addView(actionRow);
+        Button closeAll = actionButton("CLOSE ALL POSITIONS", 0xFF343943, () -> {
+            if (!quoteFresh()) { Toast.makeText(this, "Waiting for fresh quote.", Toast.LENGTH_SHORT).show(); fetchPrice(); return; }
+            new AlertDialog.Builder(this).setTitle("Close all paper positions?")
+                    .setMessage("All open virtual positions will be closed at the current reference price.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Close all", (d, w) -> { engine.closeAll(price); render(); })
+                    .show();
+        });
+        actions.addView(closeAll);
+        Button pause = actionButton(snap.optBoolean("paused") ? "RESUME NEW ENTRIES" : "PAUSE NEW ENTRIES", 0xFF292C34,
+                () -> { engine.setPaused(!engine.snapshot(quoteFresh() ? price : 0).optBoolean("paused")); render(); });
+        actions.addView(pause);
+        root.addView(actions);
+        addSpace(10);
+
+        LinearLayout positions = card();
+        addLabel(positions, "OPEN POSITIONS");
+        JSONArray open = snap.optJSONArray("positions");
+        if (open == null || open.length() == 0) positions.addView(text("No open paper positions.", 12, MUTED, false));
+        else {
+            for (int i = 0; i < open.length(); i++) {
+                JSONObject p = open.optJSONObject(i);
+                if (p == null) continue;
+                int id = p.optInt("id");
+                String side = p.optString("side");
+                double pnl = quoteFresh() ? ("BUY".equals(side) ? price - p.optDouble("entry") : p.optDouble("entry") - price) * p.optDouble("oz") : 0;
+                LinearLayout row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, dp(8), 0, dp(8));
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout details = new LinearLayout(this);
+                details.setOrientation(LinearLayout.VERTICAL);
+                details.addView(text("#" + id + "  " + side + "  ·  " + String.format(Locale.US, "%.1f", p.optDouble("oz")) + " oz", 13, "BUY".equals(side) ? GREEN : RED, true));
+                details.addView(text("Entry " + money(p.optDouble("entry")) + "   SL " + money(p.optDouble("sl")) + "   TP " + money(p.optDouble("tp")), 10, MUTED, false));
+                details.addView(text("Unrealised " + PaperTradingEngine.money(pnl), 11, pnl >= 0 ? GREEN : RED, true));
+                row.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
+                row.addView(actionButton("CLOSE", 0xFF343943, () -> closePosition(id)));
+                positions.addView(row);
+                if (i < open.length() - 1) addDivider(positions);
+            }
+        }
+        root.addView(positions);
+        addSpace(10);
+
+        LinearLayout history = card();
+        addLabel(history, "CLOSED TRADE HISTORY");
+        JSONArray closed = snap.optJSONArray("history");
+        if (closed == null || closed.length() == 0) history.addView(text("No closed trades yet.", 12, MUTED, false));
+        else {
+            for (int i = 0; i < Math.min(8, closed.length()); i++) {
+                JSONObject p = closed.optJSONObject(i);
+                if (p == null) continue;
+                double pnl = p.optDouble("pnl");
+                String time = new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(new Date(p.optLong("closedAt")));
+                addRow(history, "#" + p.optInt("id") + " " + p.optString("side") + " · " + time, PaperTradingEngine.money(pnl) + " · " + p.optString("reason"), pnl >= 0 ? GREEN : RED);
+            }
+        }
+        root.addView(history);
+        addSpace(10);
+
+        LinearLayout connections = card();
+        addLabel(connections, "CONNECTIONS & SYSTEM STATUS");
+        addRow(connections, "Market data", quoteFresh() ? "SPOT FEED ONLINE" : "WAITING / STALE", quoteFresh() ? GREEN : RED);
+        addRow(connections, "MT5 Demo Bridge", "NOT CONNECTED", MUTED);
+        addRow(connections, "AI signal engine", "NOT ACTIVE", MUTED);
+        addRow(connections, "Real broker orders", "DISABLED", GREEN);
+        TextView bridgeNote = text("MT5 needs a separate Windows PC or VPS running MetaTrader 5 and a secured bridge. This Android app does not pretend that a broker is connected.", 10, MUTED, false);
+        bridgeNote.setPadding(0, dp(8), 0, dp(8));
+        connections.addView(bridgeNote);
+        Button bridgeInfo = actionButton("MT5 DEMO BRIDGE REQUIREMENTS", 0xFF292C34, () ->
+                new AlertDialog.Builder(this).setTitle("MT5 Demo connection")
+                        .setMessage("A real MT5 connection needs a Windows PC/VPS with the MT5 terminal, a demo account and a separate authenticated bridge service. The bridge must verify the account is DEMO and reject every LIVE account. This build has no broker connection yet.")
+                        .setPositiveButton("OK", null).show());
+        connections.addView(bridgeInfo);
+        Button reset = actionButton("RESET PAPER ACCOUNT", 0xFF292C34, () ->
+                new AlertDialog.Builder(this).setTitle("Reset paper account?")
+                        .setMessage("This deletes virtual positions and trade history and restores $10,000.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Reset", (d, w) -> { engine.reset(); render(); })
+                        .show());
+        connections.addView(reset);
+        root.addView(connections);
+        addSpace(16);
+        TextView footer = text("DioMasteR GOLD AI · Native Android · Paper Trading only", 10, MUTED, false);
+        footer.setGravity(Gravity.CENTER);
+        root.addView(footer);
+    }
+
+    private LinearLayout card() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(14), dp(14), dp(14));
+        box.setBackground(round(PANEL, 16, 0xFF292C34));
+        return box;
+    }
+
+    private LinearLayout metric(String label, String value, int color) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(12), dp(12), dp(12));
+        box.setBackground(round(PANEL, 13, 0xFF292C34));
+        box.addView(text(label, 9, MUTED, true));
+        TextView v = text(value, 17, color, true);
+        v.setPadding(0, dp(5), 0, 0);
+        box.addView(v);
+        return box;
+    }
+
+    private void addLabel(LinearLayout box, String value) {
+        TextView t = text(value, 11, GOLD, true);
+        t.setPadding(0, 0, 0, dp(10));
+        box.addView(t);
+    }
+
+    private void addRow(LinearLayout box, String left, String right) { addRow(box, left, right, 0xFFF1F1F1); }
+    private void addRow(LinearLayout box, String left, String right, int color) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(6));
+        TextView l = text(left, 11, MUTED, false);
+        TextView r = text(right, 11, color, true);
+        r.setGravity(Gravity.RIGHT);
+        row.addView(l, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(r);
+        box.addView(row);
+        addDivider(box);
+    }
+
+    private void addDivider(LinearLayout box) {
+        View line = new View(this);
+        line.setBackgroundColor(0xFF292C34);
+        box.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+
+    private Button actionButton(String label, int color, Runnable action) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(12);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setTextColor(color == GREEN || color == GOLD ? Color.BLACK : Color.WHITE);
+        b.setAllCaps(false);
+        b.setMinHeight(dp(46));
+        b.setPadding(dp(8), dp(6), dp(8), dp(6));
+        b.setBackground(round(color, 11, color));
+        b.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(dp(3), dp(5), dp(3), dp(3));
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private TextView text(String value, int size, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(value);
+        t.setTextSize(size);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return t;
+    }
+
+    private GradientDrawable round(int color, int radius, int stroke) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(dp(radius));
+        d.setStroke(dp(1), stroke);
+        return d;
+    }
+
+    private LinearLayout.LayoutParams weight() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1);
+        p.setMargins(dp(3), 0, dp(3), 0);
+        return p;
+    }
+
+    private void addSpace(int height) {
+        View v = new View(this);
+        root.addView(v, new LinearLayout.LayoutParams(1, dp(height)));
+    }
+
+    private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
+    private String money(double value) { return "$" + String.format(Locale.US, "%,.2f", value); }
 }

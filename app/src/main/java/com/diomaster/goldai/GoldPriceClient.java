@@ -31,7 +31,7 @@ public final class GoldPriceClient {
             JSONObject json = new JSONObject(body.toString());
             double price = json.optDouble("price", Double.NaN);
             if (!(!Double.isNaN(price) && !Double.isInfinite(price))) price = json.optDouble("ask", Double.NaN);
-            if (!Double.isFinite(price)) price = json.optDouble("value", Double.NaN);
+            if (!(!Double.isNaN(price) && !Double.isInfinite(price))) price = json.optDouble("value", Double.NaN);
             if (!Double.isFinite(price) || price < 100 || price > 100000) {
                 throw new IllegalStateException("Invalid XAU price response");
             }

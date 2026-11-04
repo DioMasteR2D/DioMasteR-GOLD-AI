@@ -11,6 +11,7 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -39,6 +40,7 @@ public class MainActivity extends Activity {
     private long quoteAt = 0L;
     private boolean fetching = false;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
+    private String mt5Status = "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ";
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
@@ -274,16 +276,13 @@ public class MainActivity extends Activity {
         LinearLayout connections = card();
         addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
         addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
-        addRow(connections, "Γέφυρα MT5 Demo", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ", MUTED);
+        addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
         addRow(connections, "Μηχανή σημάτων AI", "ΜΗ ΕΝΕΡΓΗ", MUTED);
         addRow(connections, "Πραγματικές εντολές broker", "ΑΠΕΝΕΡΓΟΠΟΙΗΜΕΝΕΣ", GREEN);
         TextView bridgeNote = text("Το MT5 χρειάζεται ξεχωριστό υπολογιστή Windows ή VPS με MetaTrader 5 και ασφαλή γέφυρα σύνδεσης. Η εφαρμογή δεν εμφανίζει ψεύτικη σύνδεση broker.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
-        Button bridgeInfo = actionButton("ΑΠΑΙΤΗΣΕΙΣ ΣΥΝΔΕΣΗΣ MT5 DEMO", 0xFF292C34, () ->
-                new AlertDialog.Builder(this).setTitle("Σύνδεση MT5 Demo")
-                        .setMessage("Για σύνδεση MT5 χρειάζεται υπολογιστής Windows/VPS με MT5, demo λογαριασμός και ξεχωριστή πιστοποιημένη υπηρεσία bridge. Η γέφυρα πρέπει να επιβεβαιώνει ότι ο λογαριασμός είναι DEMO και να απορρίπτει κάθε LIVE λογαριασμό. Αυτή η έκδοση δεν έχει ακόμη σύνδεση broker.")
-                        .setPositiveButton("Εντάξει", null).show());
+        Button bridgeInfo = actionButton("ΡΥΘΜΙΣΗ / ΕΛΕΓΧΟΣ ΣΥΝΔΕΣΗΣ MT5 DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
         Button reset = actionButton("ΕΠΑΝΑΦΟΡΑ DEMO ΛΟΓΑΡΙΑΣΜΟΥ", 0xFF292C34, () ->
                 new AlertDialog.Builder(this).setTitle("Επαναφορά demo λογαριασμού;")
@@ -297,6 +296,84 @@ public class MainActivity extends Activity {
         TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
+    }
+
+
+    private void configureMt5Bridge() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(8);
+        EditText endpoint = new EditText(this);
+        endpoint.setSingleLine(true);
+        endpoint.setTextColor(Color.WHITE);
+        endpoint.setHintTextColor(MUTED);
+        endpoint.setHint("HTTPS διεύθυνση bridge, π.χ. https://...");
+        endpoint.setInputType( android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        form.addView(endpoint);
+        EditText token = new EditText(this);
+        token.setSingleLine(true);
+        token.setTextColor(Color.WHITE);
+        token.setHintTextColor(MUTED);
+        token.setHint("DIO_BRIDGE_TOKEN");
+        token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        form.addView(token);
+        TextView note = text("Απαιτείται HTTPS και ενεργό MT5 σε Windows/VPS. Η εφαρμογή ελέγχει μόνο λογαριασμό DEMO και δεν στέλνει εντολές.", 11, MUTED, false);
+        note.setPadding(0, pad, 0, 0);
+        form.addView(note);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Σύνδεση MT5 Demo")
+                .setView(form)
+                .setNegativeButton("Ακύρωση", null)
+                .setPositiveButton("Έλεγχος", null)
+                .create();
+        dialog.setOnShowListener(v -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            String base = endpoint.getText().toString().trim().replaceAll("/+$", "");
+            String secret = token.getText().toString().trim();
+            if (!base.startsWith("https://") || secret.length() < 16) {
+                Toast.makeText(this, "Βάλε έγκυρο HTTPS URL και token τουλάχιστον 16 χαρακτήρων.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            dialog.dismiss();
+            mt5Status = "ΕΛΕΓΧΟΣ…";
+            render();
+            new Thread(() -> {
+                HttpURLConnection connection = null;
+                String result;
+                try {
+                    URL url = new URL(base + "/v1/status");
+                    connection = (HttpURLConnection) url.openConnection();
+                    connection.setRequestMethod("GET");
+                    connection.setConnectTimeout(8000);
+                    connection.setReadTimeout(8000);
+                    connection.setRequestProperty("Authorization", "Bearer " + secret);
+                    connection.setRequestProperty("Accept", "application/json");
+                    int code = connection.getResponseCode();
+                    java.io.InputStream stream = code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream();
+                    java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(stream, "UTF-8"));
+                    StringBuilder body = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) body.append(line);
+                    reader.close();
+                    if (code < 200 || code >= 300) throw new IllegalStateException("Bridge HTTP " + code);
+                    JSONObject status = new JSONObject(body.toString());
+                    if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || status.optBoolean("execution_enabled")) {
+                        throw new IllegalStateException("Δεν επιβεβαιώθηκε ασφαλής σύνδεση DEMO.");
+                    }
+                    result = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login");
+                } catch (Exception e) {
+                    result = "ΑΠΟΤΥΧΙΑ ΣΥΝΔΕΣΗΣ";
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+                final String finalResult = result;
+                runOnUiThread(() -> {
+                    mt5Status = finalResult;
+                    Toast.makeText(this, finalResult, Toast.LENGTH_LONG).show();
+                    render();
+                });
+            }).start();
+        }));
+        dialog.show();
     }
 
     private LinearLayout card() {

@@ -19,10 +19,16 @@ The design takes inspiration from the separation of concerns in [MooreSi/forex-g
 - This is **paper trading only**. There are no real broker orders, no wallet and no live execution switch.
 - Gold-API.com provides an indicative spot reference, not the broker's executable XAUUSD CFD bid/ask, spread or commission. Paper fills use the received reference price and do not model spread, slippage, swaps or fees.
 - The Android app checks stops and targets while it is running and receiving fresh quotes. Android may suspend or kill an app in the background; this is not a guaranteed unattended stop-loss service.
-- The app currently has no MT5 connection and no AI signal engine. The status screen says so rather than pretending they are connected.
+- Android 2.1.0 adds an HTTPS MT5 bridge connection check. It verifies the bridge token, terminal heartbeat and DEMO account mode; it does not send broker orders or import positions into the paper ledger.
+- The AI signal engine is not active. The app reports that honestly.
 
-## MT5 Demo bridge — next integration
-MetaTrader 5's Python integration runs alongside a desktop MT5 terminal on Windows, not directly inside an Android APK. A proper connection requires a separate PC/VPS bridge, authenticated app-to-bridge transport, broker-specific bid/ask and candle data, account-mode verification (DEMO only), order reconciliation, heartbeat and a kill switch. The bridge must reject LIVE accounts and must not accept an order until the user explicitly approves the demo connection. This integration has not yet been deployed or tested.
+## MT5 Demo bridge — read-only companion added
+The repository now includes a Windows companion service in `bridge/`. It provides authenticated `/v1/status`, `/v1/quote/{symbol}` and `/v1/positions` read endpoints. Every private request re-checks the MT5 account and rejects LIVE or contest accounts. There is intentionally no order submission endpoint. The Android app accepts HTTPS bridge URLs only and verifies `account_mode=DEMO`, terminal heartbeat and `execution_enabled=false`.
+
+The bridge is a scaffold and still needs to be installed on a Windows PC/VPS with your MT5 DEMO terminal and broker-specific symbol. It has not been tested against a live terminal or deployed HTTPS tunnel.
+
+## MT5 Demo bridge — deployment requirements
+MetaTrader 5's Python integration runs alongside a desktop MT5 terminal on Windows, not directly inside an Android APK. A proper connection requires a separate PC/VPS bridge, authenticated app-to-bridge transport, broker-specific bid/ask and candle data, account-mode verification (DEMO only), order reconciliation, heartbeat and a kill switch. The bridge must reject LIVE accounts and must not accept an order until the user explicitly approves the demo connection. The service is not yet deployed or tested against your broker.
 
 ## Build and tests
 GitHub Actions runs `testDebugUnitTest` and `assembleDebug`, verifies the APK exists and uploads `DioMasteR-GOLD-AI-debug-APK`.

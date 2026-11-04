@@ -1,0 +1,37 @@
+<!doctype html><html lang="el"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><title>DioMasteR GOLD AI</title>
+<style>
+:root{--bg:#090a0d;--panel:#15171c;--gold:#d7ad54;--muted:#9296a0;--green:#39c98a;--red:#ff6570}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f5f5f5;font:15px Arial;padding:18px}
+header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 20px}.brand{font-weight:800;color:var(--gold);font-size:18px}.pill{font-size:11px;color:var(--green);border:1px solid #286d50;border-radius:20px;padding:6px 9px}
+.card{background:var(--panel);border:1px solid #292c34;border-radius:16px;padding:17px;margin-bottom:13px}h2{font-size:13px;color:var(--muted);font-weight:500;margin:0 0 10px}
+.price{font-size:34px;font-weight:800;color:var(--gold);margin:5px 0}.sub{font-size:12px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{background:#101216;border-radius:12px;padding:13px}.metric b{display:block;font-size:19px;margin-top:6px}.gold{color:var(--gold)}.positive{color:var(--green)}.negative{color:var(--red)}
+.notice{font-size:11px;line-height:1.5;color:#e0c77e;background:#2b2415;border:1px solid #59451c;border-radius:10px;padding:11px;margin:12px 0}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{border:0;border-radius:11px;padding:14px 10px;font-weight:800;font-size:14px;width:100%;margin-top:8px}.buy{background:var(--green);color:#07130e}.sell{background:var(--red);color:#190609}.secondary{background:#292c34;color:#fff}
+.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #292c34;font-size:13px}.row:last-child{border:0}footer{text-align:center;color:#666b75;font-size:10px;margin:18px 0}
+</style></head><body>
+<header><div class="brand">◆ DioMasteR GOLD AI</div><div class="pill">● DEMO MODE</div></header>
+<div class="card"><h2>XAUUSD · GOLD</h2><div class="price" id="price">$2,750.00</div><div class="sub">Προσομοιωμένη τιμή · DEMO FEED (όχι ζωντανή αγορά)</div></div>
+<div class="grid">
+<div class="metric"><span class="sub">Εικονικό κεφάλαιο</span><b id="balance" class="gold">$10,000.00</b></div>
+<div class="metric"><span class="sub">Συνολικό P/L</span><b id="pnl">$0.00</b></div>
+<div class="metric"><span class="sub">Ανοιχτές θέσεις</span><b id="positions">0</b></div>
+<div class="metric"><span class="sub">Διαθέσιμο υπόλοιπο</span><b id="available">$10,000.00</b></div></div>
+<div class="notice">⚠ Μόνο εικονικές συναλλαγές. Δεν υπάρχει σύνδεση broker, πραγματικές εντολές ή ενεργό AI. Η τιμή είναι τυχαία προσομοίωση.</div>
+<div class="card"><h2>ΕΙΚΟΝΙΚΗ ΣΥΝΑΛΛΑΓΗ</h2><div class="sub">Demo μονάδα: 1 · Μέγιστο 10 ανοιχτές θέσεις</div><div class="actions"><button class="buy" onclick="trade('BUY')">ΑΓΟΡΑ BUY</button><button class="sell" onclick="trade('SELL')">ΠΩΛΗΣΗ SELL</button></div><button class="secondary" onclick="closeAll()">Κλείσιμο όλων των θέσεων</button></div>
+<div class="card"><h2>ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ</h2><div id="list" class="sub">Δεν υπάρχουν ανοιχτές θέσεις.</div></div>
+<div class="card"><h2>ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ</h2><div class="row"><span>Λειτουργία</span><b class="positive">Paper Trading</b></div><div class="row"><span>Αρχικό κεφάλαιο</span><b>$10,000</b></div><div class="row"><span>AI signals</span><b>Δεν είναι ενεργά</b></div><div class="row"><span>MT5</span><b>Δεν έχει συνδεθεί</b></div><button class="secondary" onclick="resetDemo()">Επαναφορά demo</button></div>
+<footer>Έκδοση 1.0.0 · Εκπαιδευτικό demo</footer>
+<script>
+let balance=10000,price=2750,positions=[];
+const fmt=n=>'$'+n.toFixed(2);
+function render(){let pnl=positions.reduce((v,p)=>v+(p.side==='BUY'?price-p.entry:p.entry-price),0);
+document.getElementById('price').textContent=fmt(price);document.getElementById('balance').textContent=fmt(balance+pnl);
+document.getElementById('pnl').textContent=fmt(pnl);document.getElementById('pnl').className=pnl>=0?'positive':'negative';
+document.getElementById('positions').textContent=positions.length;document.getElementById('available').textContent=fmt(balance);
+document.getElementById('list').innerHTML=positions.length?positions.map(p=>'<div class="row"><span>'+p.side+' @ '+fmt(p.entry)+'</span><b class="'+(p.side==='BUY'?'positive':'negative')+'">'+fmt(p.side==='BUY'?price-p.entry:p.entry-price)+'</b></div>').join(''):'Δεν υπάρχουν ανοιχτές θέσεις.'}
+function trade(side){if(positions.length>=10){alert('Έφτασες το όριο των 10 demo θέσεων.');return}positions.push({side,entry:price});render()}
+function closeAll(){positions.forEach(p=>balance+=(p.side==='BUY'?price-p.entry:p.entry-price));positions=[];render()}
+function resetDemo(){balance=10000;price=2750;positions=[];render()}
+setInterval(()=>{price=Math.max(1,price+(Math.random()-.49)*2);render()},1800);render();
+</script></body></html>

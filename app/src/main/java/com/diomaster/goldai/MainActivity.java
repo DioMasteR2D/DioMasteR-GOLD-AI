@@ -236,7 +236,7 @@ public class MainActivity extends Activity {
         glow.setDuration(1100L); glow.setRepeatMode(android.view.animation.Animation.REVERSE); glow.setRepeatCount(android.view.animation.Animation.INFINITE);
         brand.startAnimation(glow);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mode = text("DEMO · ΕΙΚΟΝΙΚΕΣ", 10, GREEN, true);
+        TextView mode = text(mt5ExecutionEnabled ? "MT5 DEMO · AUTO AI" : "PAPER MODE", 10, GREEN, true);
         mode.setPadding(dp(10), dp(7), dp(10), dp(7));
         mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
         header.addView(mode);
@@ -285,7 +285,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout actions = card();
-        addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · ΕΝΤΟΛΕΣ ΜΕ ΕΙΚΟΝΙΚΑ ΧΡΗΜΑΤΑ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
+        addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · AI AUTO ΕΝΕΡΓΟΠΟΙΕΙΤΑΙ ΣΤΗΝ ΕΚΚΙΝΗΣΗ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());

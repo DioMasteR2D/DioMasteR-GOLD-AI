@@ -14,11 +14,11 @@ public final class RiskGovernor {
     public static String refusal(boolean quoteFresh, boolean paused, int openPositions,
                                  double equity, double peakEquity,
                                  double realisedToday, double floatingPnl) {
-        if (!quoteFresh) return "No fresh market quote";
-        if (paused) return "Trading is paused";
-        if (openPositions >= MAX_POSITIONS) return "Maximum open positions reached";
-        if (realisedToday + floatingPnl <= -DAILY_LOSS_LIMIT) return "Daily loss limit reached";
-        if (peakEquity > 0 && equity <= peakEquity * (1.0 - MAX_DRAWDOWN)) return "Maximum drawdown reached";
+        if (!quoteFresh) return "Δεν υπάρχει φρέσκια τιμή αγοράς";
+        if (paused) return "Οι νέες συναλλαγές είναι σε παύση";
+        if (openPositions >= MAX_POSITIONS) return "Έφτασες το μέγιστο αριθμό ανοιχτών θέσεων";
+        if (realisedToday + floatingPnl <= -DAILY_LOSS_LIMIT) return "Ενεργοποιήθηκε το ημερήσιο όριο ζημιάς";
+        if (peakEquity > 0 && equity <= peakEquity * (1.0 - MAX_DRAWDOWN)) return "Ενεργοποιήθηκε το όριο μέγιστης πτώσης κεφαλαίου";
         return "";
     }
 

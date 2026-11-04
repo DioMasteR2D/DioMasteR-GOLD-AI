@@ -43,6 +43,10 @@ public class MainActivity extends Activity {
     private boolean fetching = false;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
     private String mt5Status = "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ";
+    private String mt5BaseUrl = "";
+    private String mt5Token = "";
+    private String mt5Symbol = "XAUUSD";
+    private boolean mt5ExecutionEnabled = false;
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
@@ -56,6 +60,12 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         engine = new PaperTradingEngine(this);
+        android.content.SharedPreferences mt5Prefs = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE);
+        mt5BaseUrl = mt5Prefs.getString("base", "");
+        mt5Token = mt5Prefs.getString("token", "");
+        mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
+        mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
+        mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
         render();
         fetchPrice();
         handler.postDelayed(refreshLoop, 30000L);
@@ -102,6 +112,7 @@ public class MainActivity extends Activity {
     }
 
     private void openTrade(String side) {
+        if (mt5ExecutionEnabled && !mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) { openMt5Trade(side); return; }
         if (!quoteFresh()) {
             Toast.makeText(this, "Δεν υπάρχει φρέσκια τιμή XAU. Οι νέες συναλλαγές μπλοκαρίστηκαν.", Toast.LENGTH_LONG).show();
             fetchPrice();
@@ -110,6 +121,67 @@ public class MainActivity extends Activity {
         PaperTradingEngine.Result result = engine.open(side, price, quoteAt);
         Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
         render();
+    }
+
+
+    private void openMt5Trade(String side) {
+        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty()) { Toast.makeText(this, "Πρώτα σύνδεσε το MT5 Demo.", Toast.LENGTH_LONG).show(); return; }
+        Toast.makeText(this, "Αποστολή εντολής στο Vantage MT5 DEMO…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String message;
+            try {
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject status = client.status();
+                if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || !status.optBoolean("execution_enabled")) throw new IllegalStateException("Το MT5 δεν επιβεβαιώνει ενεργό DEMO execution.");
+                JSONArray symbols = status.optJSONArray("allowed_symbols");
+                if (symbols != null && symbols.length() > 0) mt5Symbol = symbols.optString(0, mt5Symbol);
+                JSONObject q = client.quote(mt5Symbol);
+                double bid=q.optDouble("bid"), ask=q.optDouble("ask");
+                if (bid<=0 || ask<=0 || ask<bid) throw new IllegalStateException("Μη έγκυρη τιμή broker.");
+                double entry="BUY".equals(side)?ask:bid;
+                double sl="BUY".equals(side)?entry-8.0:entry+8.0;
+                double tp="BUY".equals(side)?entry+16.0:entry-16.0;
+                JSONObject result=client.order(mt5Symbol,side,0.01,sl,tp);
+                message="VANTAGE DEMO "+side+" · "+mt5Symbol+" · 0.01 lot · order #"+result.optLong("order")+" · "+String.format(Locale.US,"%.2f",result.optDouble("price"));
+            } catch(Exception e) { message="Η εντολή δεν εκτελέστηκε: "+e.getMessage(); }
+            final String done=message;
+            runOnUiThread(() -> { Toast.makeText(this,done,Toast.LENGTH_LONG).show(); render(); });
+        }).start();
+    }
+
+    private void showMt5Positions() {
+        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty()) { Toast.makeText(this,"Σύνδεσε πρώτα το MT5 Demo.",Toast.LENGTH_SHORT).show(); return; }
+        new Thread(() -> {
+            try {
+                JSONObject result=new Mt5DemoClient(mt5BaseUrl,mt5Token).positions();
+                JSONArray rows=result.optJSONArray("positions");
+                ArrayList<JSONObject> positions=new ArrayList<>();
+                ArrayList<String> labels=new ArrayList<>();
+                if(rows!=null) for(int i=0;i<rows.length();i++) {
+                    JSONObject p=rows.optJSONObject(i); if(p==null) continue;
+                    positions.add(p);
+                    labels.add("#"+p.optLong("ticket")+"  "+p.optString("symbol")+"  "+(p.optInt("type")==0?"BUY":"SELL")+"  "+p.optDouble("volume")+" lot  P/L "+p.optDouble("profit"));
+                }
+                runOnUiThread(() -> {
+                    if(positions.isEmpty()) { new AlertDialog.Builder(this).setTitle("Vantage MT5 DEMO").setMessage("Δεν υπάρχουν ανοιχτές θέσεις.").setPositiveButton("OK",null).show(); return; }
+                    new AlertDialog.Builder(this).setTitle("Θέσεις Vantage MT5 DEMO").setItems(labels.toArray(new String[0]),(d,which)->confirmMt5Close(positions.get(which))).setNegativeButton("Κλείσιμο",null).show();
+                });
+            } catch(Exception e) { runOnUiThread(() -> Toast.makeText(this,"Σφάλμα ανάγνωσης MT5: "+e.getMessage(),Toast.LENGTH_LONG).show()); }
+        }).start();
+    }
+
+    private void confirmMt5Close(JSONObject position) {
+        long ticket=position.optLong("ticket");
+        new AlertDialog.Builder(this).setTitle("Κλείσιμο θέσης #"+ticket)
+            .setMessage("Θα σταλεί εντολή κλεισίματος στον Vantage MT5 DEMO.")
+            .setNegativeButton("Άκυρο",null)
+            .setPositiveButton("Κλείσιμο",(d,w)->new Thread(()->{
+                String msg;
+                try { JSONObject r=new Mt5DemoClient(mt5BaseUrl,mt5Token).close(ticket); msg="Εντολή κλεισίματος στάλθηκε · deal #"+r.optLong("deal"); }
+                catch(Exception e) { msg="Δεν έκλεισε: "+e.getMessage(); }
+                final String done=msg;
+                runOnUiThread(()->Toast.makeText(this,done,Toast.LENGTH_LONG).show());
+            }).start()).show();
     }
 
     private void closePosition(int id) {
@@ -192,7 +264,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout actions = card();
-        addLabel(actions, "ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ · ΧΕΙΡΟΚΙΝΗΤΑ");
+        addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · ΕΝΤΟΛΕΣ ΜΕ ΕΙΚΟΝΙΚΑ ΧΡΗΜΑΤΑ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
@@ -286,6 +358,8 @@ public class MainActivity extends Activity {
         connections.addView(bridgeNote);
         Button bridgeInfo = actionButton("ΡΥΘΜΙΣΗ / ΕΛΕΓΧΟΣ ΣΥΝΔΕΣΗΣ MT5 DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
+        Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
+        connections.addView(mt5Positions);
         Button reset = actionButton("ΕΠΑΝΑΦΟΡΑ DEMO ΛΟΓΑΡΙΑΣΜΟΥ", 0xFF292C34, () ->
                 new AlertDialog.Builder(this).setTitle("Επαναφορά demo λογαριασμού;")
                         .setMessage("Θα διαγραφούν οι εικονικές θέσεις και το ιστορικό και θα επανέλθει κεφάλαιο $10.000.")
@@ -310,6 +384,7 @@ public class MainActivity extends Activity {
         endpoint.setTextColor(Color.WHITE);
         endpoint.setHintTextColor(MUTED);
         endpoint.setHint("HTTPS διεύθυνση bridge, π.χ. https://...");
+        endpoint.setText(mt5BaseUrl);
         endpoint.setInputType( android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         form.addView(endpoint);
         EditText token = new EditText(this);
@@ -317,9 +392,10 @@ public class MainActivity extends Activity {
         token.setTextColor(Color.WHITE);
         token.setHintTextColor(MUTED);
         token.setHint("DIO_BRIDGE_TOKEN");
+        token.setText(mt5Token);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(token);
-        TextView note = text("Απαιτείται HTTPS και ενεργό MT5 σε Windows/VPS. Η εφαρμογή ελέγχει μόνο λογαριασμό DEMO και δεν στέλνει εντολές.", 11, MUTED, false);
+        TextView note = text("Απαιτείται HTTPS/VPN, ενεργό MT5 Windows/VPS και Vantage DEMO. Αν ο bridge επιτρέπει DEMO execution, τα BUY/SELL στέλνουν εντολές με SL/TP στον broker. LIVE λογαριασμοί απορρίπτονται.", 11, MUTED, false);
         note.setPadding(0, pad, 0, 0);
         form.addView(note);
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -358,10 +434,16 @@ public class MainActivity extends Activity {
                     reader.close();
                     if (code < 200 || code >= 300) throw new IllegalStateException("Bridge HTTP " + code);
                     JSONObject status = new JSONObject(body.toString());
-                    if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || status.optBoolean("execution_enabled")) {
+                    if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected")) {
                         throw new IllegalStateException("Δεν επιβεβαιώθηκε ασφαλής σύνδεση DEMO.");
                     }
-                    result = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login");
+                    JSONArray allowed = status.optJSONArray("allowed_symbols");
+                    String selectedSymbol = allowed != null && allowed.length()>0 ? allowed.optString(0,"XAUUSD") : "XAUUSD";
+                    boolean execEnabled = status.optBoolean("execution_enabled");
+                    String display = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login") + (execEnabled ? " · ORDERS ON" : " · READ ONLY");
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).putBoolean("execution_enabled",execEnabled).putString("status",display).apply();
+                    mt5BaseUrl=base; mt5Token=secret; mt5Symbol=selectedSymbol; mt5ExecutionEnabled=execEnabled;
+                    result = display;
                 } catch (Exception e) {
                     result = "ΑΠΟΤΥΧΙΑ ΣΥΝΔΕΣΗΣ";
                 } finally {

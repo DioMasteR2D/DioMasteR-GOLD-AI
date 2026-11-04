@@ -65,7 +65,7 @@ async function getPrice(){
   if(!res.ok)throw new Error('HTTP '+res.status);
   const d=await res.json();const raw=Array.isArray(d)?d[0]?.price:(d.price??d.ask??d.value??d.price_usd);
   const v=Number(raw);if(!Number.isFinite(v)||v<100||v>100000)throw new Error('Μη έγκυρη τιμή');
-  price=v;updatedAt=d.updatedAt??d.updated_at??d.timestamp??new Date().toISOString();
+  price=v;const rawTime=d.updatedAt??d.updated_at??d.timestamp??new Date().toISOString();updatedAt=typeof rawTime==='number'?(rawTime<1e12?rawTime*1000:rawTime):rawTime;
   samples.push({t:Date.now(),p:price});if(samples.length>100)samples.shift();
   document.getElementById('feedBadge').textContent='SPOT FEED LIVE';document.getElementById('feedBadge').style.color='var(--green)';
   document.getElementById('feedStatus').innerHTML='<span class="dot"></span>Λήψη τιμής επιτυχής';
@@ -83,7 +83,7 @@ function openTrade(side){
  today();if(price===null){alert('Δεν υπάρχει επιβεβαιωμένη τιμή αγοράς.');return}
  if(Date.now()-new Date(updatedAt).getTime()>120000){alert('Η τιμή είναι παλιά. Περιμένετε νέα ενημέρωση.');return}
  if(state.positions.length>=MAX_POS){alert('Όριο: 3 ανοιχτές θέσεις.');return}
- const eq=equity();if(state.daily<=-DAILY_LIMIT){alert('Ενεργοποιήθηκε το ημερήσιο όριο ζημιάς.');return}
+ const eq=equity();if(state.daily+floatPnl()<=-DAILY_LIMIT){alert('Ενεργοποιήθηκε το ημερήσιο όριο ζημιάς.');return}
  if(eq<=state.peak*(1-MAX_DD)){alert('Ενεργοποιήθηκε το όριο μέγιστης υποχώρησης 5%.');return}
  const riskCash=eq*RISK,oz=Math.min(MAX_OZ,Math.max(.1,Math.floor((riskCash/STOP)*10)/10));
  const p={id:state.next++,side,entry:price,oz,sl:side==='BUY'?price-STOP:price+STOP,tp:side==='BUY'?price+TARGET:price-TARGET,opened:new Date().toISOString()};

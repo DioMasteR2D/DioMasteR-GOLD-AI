@@ -98,7 +98,7 @@ public final class PaperTradingEngine {
 
     public synchronized Result open(String side, double price, long quoteReceivedAt) {
         rollDay();
-        if (!"BUY".equals(side) && !"SELL".equals(side)) return new Result(false, "Invalid direction");
+        if (!"BUY".equals(side) && !"SELL".equals(side)) return new Result(false, "Μη έγκυρη κατεύθυνση");
         JSONArray positions = array("positions");
         double equity = state.optDouble("balance", START_BALANCE) + floating(price);
         String refusal = RiskGovernor.refusal(
@@ -107,7 +107,7 @@ public final class PaperTradingEngine {
                 state.optDouble("peak", START_BALANCE), state.optDouble("daily"), floating(price));
         if (!refusal.isEmpty()) return new Result(false, refusal + ". New entries blocked.");
         double oz = RiskGovernor.positionSize(equity);
-        if (oz < 0.1) return new Result(false, "Position size is below the minimum.");
+        if (oz < 0.1) return new Result(false, "Το μέγεθος θέσης είναι κάτω από το ελάχιστο.");
         JSONObject p = new JSONObject();
         try {
             int id = state.optInt("nextId", 1);
@@ -125,7 +125,7 @@ public final class PaperTradingEngine {
             save();
             return new Result(true, "Demo " + side + " opened · " + oz + " oz · risk cap " + money(oz * STOP_DISTANCE));
         } catch (JSONException e) {
-            return new Result(false, "Could not save position.");
+            return new Result(false, "Δεν ήταν δυνατή η αποθήκευση της θέσης.");
         }
     }
 

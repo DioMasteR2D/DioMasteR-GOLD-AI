@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private final ArrayList<Double> chartPrices = new ArrayList<>();
     private PaperTradingEngine engine;
     private LinearLayout root;
+    private ScrollView currentScroll;
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
@@ -124,11 +125,14 @@ public class MainActivity extends Activity {
         root.setPadding(dp(16), dp(12), dp(16), dp(24));
         root.setBackgroundColor(BG);
 
+        int previousScrollY = currentScroll == null ? 0 : currentScroll.getScrollY();
         ScrollView scroll = new ScrollView(this);
+        currentScroll = scroll;
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BG);
         scroll.addView(root);
         setContentView(scroll);
+        scroll.post(() -> scroll.scrollTo(0, previousScrollY));
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -226,7 +230,7 @@ public class MainActivity extends Activity {
                 details.addView(text("Είσοδος " + money(p.optDouble("entry")) + "   SL " + money(p.optDouble("sl")) + "   TP " + money(p.optDouble("tp")), 10, MUTED, false));
                 details.addView(text("Μη πραγματοποιημένο P/L " + PaperTradingEngine.money(pnl), 11, pnl >= 0 ? GREEN : RED, true));
                 row.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
-                Button closeButton = actionButton("CLOSE", 0xFF343943, () -> closePosition(id));
+                Button closeButton = actionButton("ΚΛΕΙΣΙΜΟ", 0xFF343943, () -> closePosition(id));
                 closeButton.setLayoutParams(new LinearLayout.LayoutParams(-2, -2));
                 row.addView(closeButton);
                 positions.addView(row);

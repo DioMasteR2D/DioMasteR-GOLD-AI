@@ -11,14 +11,14 @@ public class RiskGovernorTest {
     }
 
     @Test public void failsClosedForStaleQuoteAndPause() {
-        assertEquals("No fresh market quote", RiskGovernor.refusal(false, false, 0, 10000, 10000, 0, 0));
-        assertEquals("Trading is paused", RiskGovernor.refusal(true, true, 0, 10000, 10000, 0, 0));
+        assertEquals("Δεν υπάρχει φρέσκια τιμή αγοράς", RiskGovernor.refusal(false, false, 0, 10000, 10000, 0, 0));
+        assertEquals("Οι νέες συναλλαγές είναι σε παύση", RiskGovernor.refusal(true, true, 0, 10000, 10000, 0, 0));
     }
 
     @Test public void enforcesPositionAndLossLimits() {
-        assertEquals("Maximum open positions reached", RiskGovernor.refusal(true, false, 3, 10000, 10000, 0, 0));
-        assertEquals("Daily loss limit reached", RiskGovernor.refusal(true, false, 0, 9800, 10000, -190, -10));
-        assertEquals("Maximum drawdown reached", RiskGovernor.refusal(true, false, 0, 9499, 10000, 0, 0));
+        assertEquals("Έφτασες το μέγιστο αριθμό ανοιχτών θέσεων", RiskGovernor.refusal(true, false, 3, 10000, 10000, 0, 0));
+        assertEquals("Ενεργοποιήθηκε το ημερήσιο όριο ζημιάς", RiskGovernor.refusal(true, false, 0, 9800, 10000, -190, -10));
+        assertEquals("Ενεργοποιήθηκε το όριο μέγιστης πτώσης κεφαλαίου", RiskGovernor.refusal(true, false, 0, 9499, 10000, 0, 0));
         assertEquals("", RiskGovernor.refusal(true, false, 1, 10000, 10000, 0, 0));
     }
 }

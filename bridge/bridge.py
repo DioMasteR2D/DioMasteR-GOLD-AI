@@ -64,7 +64,7 @@ def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
     authorized(authorization); connect_demo()
     if symbol not in ALLOWED_SYMBOLS: raise HTTPException(403,"Symbol is not allow-listed")
     _,tick=symbol_tick(symbol)
-    return {"symbol":symbol,"bid":float(tick.bid),"ask":float(tick.ask),"time_msc":int(tick.time_msc),"account_mode":"DEMO"}
+    return {"symbol":symbol,"bid":float(tick.bid),"ask":float(tick.ask),"time_msc":int(tick.time_msc),"account_mode":"DEMO","contract_size":float(mt5.symbol_info(symbol).trade_contract_size),"volume_min":float(mt5.symbol_info(symbol).volume_min),"volume_step":float(mt5.symbol_info(symbol).volume_step),"volume_max":float(mt5.symbol_info(symbol).volume_max)}
 
 @app.get("/v1/positions")
 def positions(authorization:Optional[str]=Header(default=None)):

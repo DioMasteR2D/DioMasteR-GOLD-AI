@@ -71,6 +71,42 @@ public class MainActivity extends Activity {
         render();
         fetchPrice();
         handler.postDelayed(refreshLoop, 30000L);
+        if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) autoConnectMt5();
+    }
+
+    // Reconnects to the saved DEMO bridge on every app launch; never places orders.
+    private void autoConnectMt5() {
+        mt5Status = "ΑΥΤΟΜΑΤΗ ΣΥΝΔΕΣΗ DEMO…";
+        render();
+        new Thread(() -> {
+            String message;
+            boolean connected = false;
+            try {
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).status();
+                if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected"))
+                    throw new IllegalStateException("Ο server δεν επιβεβαίωσε ενεργό DEMO λογαριασμό.");
+                JSONArray allowed = status.optJSONArray("allowed_symbols");
+                String symbol = allowed != null && allowed.length() > 0 ? allowed.optString(0, "XAUUSD") : "XAUUSD";
+                mt5Symbol = symbol;
+                mt5ExecutionEnabled = false; // remain read-only until broker API is independently verified
+                message = "DEMO · " + status.optString("server", "Vantage") + " · #" +
+                        status.optString("account_login") + " · READ ONLY";
+                connected = true;
+                getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                    .putString("symbol", symbol).putBoolean("execution_enabled", false)
+                    .putString("status", message).apply();
+            } catch (Exception e) {
+                message = "ΑΥΤΟΜΑΤΗ ΣΥΝΔΕΣΗ: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            }
+            final String result = message;
+            final boolean ok = connected;
+            runOnUiThread(() -> {
+                mt5Status = result;
+                mt5ExecutionEnabled = false;
+                render();
+                Toast.makeText(this, result, Toast.LENGTH_LONG).show();
+            });
+        }).start();
     }
 
     @Override protected void onResume() {

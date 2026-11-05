@@ -63,6 +63,9 @@ public class MainActivity extends Activity {
     private double mt5Balance = 0.0;
     private double mt5Equity = 0.0;
     private boolean aiEngineStarted = false;
+    private boolean autoOrderInFlight = false;
+    private long lastAutoSignalBar = 0L;
+    private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
 
     private final Runnable refreshLoop = new Runnable() {
@@ -189,7 +192,9 @@ public class MainActivity extends Activity {
                         feedMessage = "VANTAGE MT5 DEMO · broker candle · " + selectedTimeframe + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
-                        engine.onQuote(latest); render();
+                        engine.onQuote(latest);
+                        if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
+                        render();
                     });
                 } catch (Exception e) {
                     runOnUiThread(() -> {
@@ -705,8 +710,9 @@ public class MainActivity extends Activity {
         connections.addView(bridgeNote);
         Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ TICKERALL API · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
-        Button startAi = actionButton(aiEngineStarted ? "AI ENGINE · ΕΝΕΡΓΟ" : "START AI ENGINE · ΕΝΑΡΞΗ ΜΕ ΕΝΑ ΠΑΤΗΜΑ", 0xFFB58A35, this::startAiEngine);
+        Button startAi = actionButton(aiEngineStarted ? "STOP AUTO · ΔΙΑΚΟΠΗ ΝΕΩΝ ΕΝΤΟΛΩΝ" : "START AUTO · MT5 DEMO", 0xFFB58A35, aiEngineStarted ? this::stopAiEngine : this::startAiEngine);
         connections.addView(startAi);
+        addRow(connections, "Αυτόματη εκτέλεση", autoExecutionMessage, aiEngineStarted ? GREEN : MUTED);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
         connections.addView(mt5Positions);
         Button reset = actionButton("ΕΠΑΝΑΦΟΡΑ DEMO ΛΟΓΑΡΙΑΣΜΟΥ", 0xFF292C34, () ->
@@ -746,19 +752,117 @@ public class MainActivity extends Activity {
     }
 
 
-    // Starts analysis/monitoring only. It does not submit broker orders.
+    // Local execution loop: strategy stays in GoldAiAgent; broker execution is DEMO-only.
     private void startAiEngine() {
-        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || !mt5Status.startsWith("DEMO")) {
-            new AlertDialog.Builder(this)
-                .setTitle("Πρώτα σύνδεση DEMO")
-                .setMessage("Σύνδεσε και επιβεβαίωσε πρώτα τον Vantage MT5 DEMO λογαριασμό. Το AI δεν θα ξεκινήσει χωρίς επιτυχή έλεγχο.")
-                .setPositiveButton("OK", null).show();
+        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty()) {
+            Toast.makeText(this, "Πρώτα σύνδεσε τον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
             return;
         }
-        aiEngineStarted = true;
-        Toast.makeText(this, "DioMasteR AI ξεκίνησε: ανάλυση και παρακολούθηση μόνο · χωρίς αυτόματες εντολές.", Toast.LENGTH_LONG).show();
-        fetchPrice();
+        autoExecutionMessage = "Έλεγχος Vantage MT5 DEMO και δικαιώματος εντολών…";
         render();
+        new Thread(() -> {
+            String failure = null;
+            try {
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).status();
+                if (!"DEMO".equals(status.optString("account_mode"))
+                        || !status.optBoolean("terminal_connected")
+                        || !status.optBoolean("execution_enabled")) {
+                    throw new IllegalStateException("Απαιτείται συνδεδεμένος Vantage MT5 DEMO με ενεργό server-side DEMO execution.");
+                }
+                String server = status.optString("server", "");
+                if (!server.toLowerCase(Locale.US).contains("vantage") || !server.toLowerCase(Locale.US).contains("demo")) {
+                    throw new IllegalStateException("Ο broker server δεν επιβεβαιώθηκε ως Vantage DEMO.");
+                }
+            } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία ελέγχου MT5" : e.getMessage(); }
+            final String error = failure;
+            runOnUiThread(() -> {
+                if (error != null) {
+                    aiEngineStarted = false;
+                    autoExecutionMessage = "ΜΠΛΟΚΑΡΙΣΜΕΝΟ · " + error;
+                    Toast.makeText(this, autoExecutionMessage, Toast.LENGTH_LONG).show();
+                } else {
+                    aiEngineStarted = true;
+                    autoExecutionMessage = "ΕΝΕΡΓΟ · εντολές μόνο στον Vantage MT5 DEMO";
+                    Toast.makeText(this, "AUTO ενεργό στον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
+                    fetchPrice();
+                }
+                render();
+            });
+        }).start();
+    }
+
+    private void stopAiEngine() {
+        aiEngineStarted = false;
+        autoExecutionMessage = "STOP · δεν θα σταλούν νέες εντολές· οι ανοιχτές θέσεις μένουν στο MT5 με τα SL/TP τους";
+        Toast.makeText(this, "Auto σταμάτησε. Δεν θα ανοίξουν νέες θέσεις.", Toast.LENGTH_LONG).show();
+        render();
+    }
+
+    private void evaluateAutoSignal(JSONArray bars, long quoteTimestamp) {
+        if (!aiEngineStarted || autoOrderInFlight || !brokerChartActive || !quoteFresh()
+                || !mt5ExecutionEnabled || !aiSignal.ready
+                || !("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
+                || aiSignal.stopLoss <= 0 || aiSignal.takeProfit <= 0) return;
+        JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
+        if (latestBar == null) return;
+        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
+        if (barTime <= 0 || barTime == lastAutoSignalBar) return;
+        autoOrderInFlight = true;
+        autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
+        final String side = aiSignal.side;
+        final double sl = aiSignal.stopLoss;
+        final double tp = aiSignal.takeProfit;
+        final long signalBar = barTime;
+        render();
+        new Thread(() -> {
+            String resultMessage;
+            boolean submitted = false;
+            try {
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject status = client.status();
+                if (!"DEMO".equals(status.optString("account_mode"))
+                        || !status.optBoolean("terminal_connected")
+                        || !status.optBoolean("execution_enabled")) {
+                    throw new IllegalStateException("DEMO execution/σύνδεση δεν επιβεβαιώθηκε ξανά.");
+                }
+                JSONObject posResponse = client.positions();
+                JSONArray positions = posResponse.optJSONArray("positions");
+                int botOpen = 0;
+                if (positions != null) {
+                    for (int i = 0; i < positions.length(); i++) {
+                        JSONObject p = positions.optJSONObject(i);
+                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")) botOpen++;
+                    }
+                }
+                if (botOpen > 0) {
+                    resultMessage = "Αναμονή · υπάρχει ήδη ανοιχτή θέση DioMasteR στο MT5 DEMO";
+                } else {
+                    JSONObject q = client.quote(mt5Symbol);
+                    double ref = q.optDouble("bid", 0);
+                    long qTime = (long)(q.optDouble("time", 0) * 1000L);
+                    if (ref <= 0 || qTime <= 0 || System.currentTimeMillis() - qTime > 120000L)
+                        throw new IllegalStateException("Η τιμή broker δεν είναι φρέσκια.");
+                    if (("BUY".equals(side) && !(sl < ref && ref < tp))
+                            || ("SELL".equals(side) && !(tp < ref && ref < sl)))
+                        throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
+                    JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
+                    submitted = true;
+                    resultMessage = "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · ticket #" + order.optLong("order");
+                }
+            } catch (Exception e) {
+                resultMessage = "Η εντολή DEMO μπλοκαρίστηκε: " + (e.getMessage() == null ? "άγνωστο σφάλμα" : e.getMessage());
+            }
+            final String message = resultMessage;
+            final boolean sent = submitted;
+            runOnUiThread(() -> {
+                autoOrderInFlight = false;
+                if (sent) lastAutoSignalBar = signalBar;
+                autoExecutionMessage = message;
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                loadMt5AccountData();
+                render();
+            });
+        }).start();
     }
 
 

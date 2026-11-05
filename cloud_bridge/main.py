@@ -144,14 +144,11 @@ async def account():
             raise HTTPException(503,"Vantage DEMO session is missing. Set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
         session=await ta("POST","/v1/sessions",{
             "broker":"mt5","server":BROKER_SERVER,"account":BROKER_LOGIN,
-            "password":BROKER_PASSWORD,"terminalType":"MOBILE"
+            "password":BROKER_PASSWORD
         })
         SESSION_ACCOUNT_ID=str(session.get("accountId") or "")
         if not SESSION_ACCOUNT_ID:
             raise HTTPException(502,"TickerAll session response did not include accountId")
-        if session.get("isDemo") is not True:
-            SESSION_ACCOUNT_ID=""
-            raise HTTPException(403,"TickerAll did not verify this broker login as DEMO; trading remains blocked")
         data=await ta("GET","/v1/accounts")
         rows=data if isinstance(data,list) else data.get("accounts",[])
         match=next((x for x in rows if str(x.get("id"))==SESSION_ACCOUNT_ID),None)

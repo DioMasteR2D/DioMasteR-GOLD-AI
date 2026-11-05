@@ -15,7 +15,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=int(os.getenv("DIO_MT5_MAX_POSITIONS","3"))
+MAX_BOT_POSITIONS=int(os.getenv("DIO_MT5_MAX_POSITIONS","10"))
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.0.0")
 
 class Order(BaseModel):

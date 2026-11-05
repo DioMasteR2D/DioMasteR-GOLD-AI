@@ -39,6 +39,9 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final GoldPriceClient priceClient = new GoldPriceClient();
     private final ArrayList<Double> chartPrices = new ArrayList<>();
+    private JSONArray brokerCandles = new JSONArray();
+    private String selectedTimeframe = "M15";
+    private boolean brokerChartActive = false;
     private PaperTradingEngine engine;
     private LinearLayout root;
     private ScrollView currentScroll;
@@ -144,26 +147,56 @@ public class MainActivity extends Activity {
     private void fetchPrice() {
         if (fetching) return;
         fetching = true;
+        if (mt5BaseUrl != null && !mt5BaseUrl.isEmpty() && mt5Token != null && !mt5Token.isEmpty()
+                && mt5Status != null && mt5Status.startsWith("DEMO")) {
+            new Thread(() -> {
+                try {
+                    Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                    JSONObject quote = client.quote(mt5Symbol);
+                    JSONObject candleData = client.candles(mt5Symbol, selectedTimeframe, 48);
+                    JSONArray rows = candleData.optJSONArray("candles");
+                    if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    double latest = quote.optDouble("bid", 0);
+                    long stamp = (long)(quote.optDouble("time", 0) * 1000L);
+                    if (latest <= 0 || stamp <= 0) throw new IllegalStateException("Μη έγκυρη broker τιμή.");
+                    final JSONArray bars = rows;
+                    final long receivedAt = stamp;
+                    runOnUiThread(() -> {
+                        fetching = false; price = latest; quoteAt = receivedAt;
+                        brokerCandles = bars; brokerChartActive = true;
+                        chartPrices.clear();
+                        for (int i=0;i<bars.length();i++) {
+                            JSONObject bar=bars.optJSONObject(i);
+                            if(bar!=null && bar.optDouble("close",0)>0) chartPrices.add(bar.optDouble("close"));
+                        }
+                        feedMessage = "VANTAGE MT5 DEMO · broker candle · " + selectedTimeframe + " · " +
+                                new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
+                        aiSignal = GoldAiAgent.analyze(chartPrices, latest);
+                        engine.onQuote(latest); render();
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> {
+                        fetching=false; brokerChartActive=false;
+                        feedMessage="MT5 DEMO feed error: "+(e.getMessage()==null?"unknown":e.getMessage());
+                        render();
+                    });
+                }
+            }).start();
+            return;
+        }
         new Thread(() -> priceClient.fetch(new GoldPriceClient.Callback() {
             @Override public void onPrice(double value, long receivedAt) {
                 runOnUiThread(() -> {
-                    fetching = false;
-                    price = value;
-                    quoteAt = receivedAt;
-                    feedMessage = "Ζωντανή ενδεικτική τιμή · ενημέρωση " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
-                    chartPrices.add(value);
-                    while (chartPrices.size() > 90) chartPrices.remove(0);
-                    aiSignal = GoldAiAgent.analyze(chartPrices, value);
-                    engine.onQuote(value);
-                    render();
+                    fetching = false; price = value; quoteAt = receivedAt; brokerChartActive=false;
+                    brokerCandles = new JSONArray();
+                    feedMessage = "Ενδεικτική spot τιμή · όχι broker tick · " +
+                            new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
+                    chartPrices.add(value); while (chartPrices.size() > 90) chartPrices.remove(0);
+                    aiSignal = GoldAiAgent.analyze(chartPrices, value); engine.onQuote(value); render();
                 });
             }
             @Override public void onError(String message) {
-                runOnUiThread(() -> {
-                    fetching = false;
-                    feedMessage = "Αδυναμία λήψης τιμής: " + message;
-                    render();
-                });
+                runOnUiThread(() -> { fetching=false; feedMessage="Αδυναμία λήψης τιμής: "+message; render(); });
             }
         })).start();
     }
@@ -349,16 +382,19 @@ public class MainActivity extends Activity {
         periods.setGravity(Gravity.CENTER);
         String[] frames={"M1","M5","M15","M30","H1","H4","D1"};
         for(String frame:frames) {
-            TextView chip=text(frame,10,"M15".equals(frame)?Color.BLACK:0xFFE8E8EA,true);
-            chip.setGravity(Gravity.CENTER); chip.setPadding(dp(8),dp(8),dp(8),dp(8));
-            chip.setBackground("M15".equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+            final String tf=frame;
+            TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
+            chip.setGravity(Gravity.CENTER); chip.setPadding(dp(7),dp(8),dp(7),dp(8));
+            chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+            chip.setOnClickListener(v->{selectedTimeframe=tf;fetchPrice();});
             periods.addView(chip,new LinearLayout.LayoutParams(0,-2,1));
         }
         market.addView(periods);
         addSpace(8);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(92)));
-        for (double p : chartPrices) chart.addPrice(p);
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(220)));
+        if (brokerChartActive) chart.setCandles(brokerCandles);
+        else for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
         indicators.setOrientation(LinearLayout.HORIZONTAL);
@@ -367,7 +403,7 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)","—",GREEN),weight());
         indicators.addView(metric("Τάση EMA","—",GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text("Ενδεικτική spot ροή ανά 30s · όχι ακόμη broker tick / OHLC feed.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 9 / EMA 21." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);

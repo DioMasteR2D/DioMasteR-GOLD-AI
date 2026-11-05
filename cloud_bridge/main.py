@@ -1,5 +1,6 @@
 """DioMasteR GOLD AI bridge for TickerAll MT5 DEMO."""
 import os, hmac, uuid
+from datetime import datetime, timezone
 from typing import Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -112,12 +113,52 @@ async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
     bars=candles.get("candles",[])
     if not bars: raise HTTPException(503,"No broker M1 candles available")
     last=bars[-1]; bid=float(last.get("close") or last.get("bid") or 0)
-    ts=float(last.get("timestamp") or 0)
-    if bid<=0: raise HTTPException(503,"Invalid broker candle price")
-    # TickerAll REST candles provide OHLC but not a bid/ask tick. Return last M1 close
-    # as an indicative reference only; order placement is still broker market execution.
+    raw_ts=last.get("timestamp")
+    if isinstance(raw_ts,(int,float)):
+        ts=float(raw_ts)
+    elif isinstance(raw_ts,str):
+        try: ts=datetime.fromisoformat(raw_ts.replace("Z","+00:00")).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError: raise HTTPException(502,"TickerAll returned an invalid candle timestamp")
+    else:
+        ts=0.0
+    if bid<=0 or ts<=0: raise HTTPException(503,"Invalid broker candle price/timestamp")
+    # REST candles are OHLC bar closes, not a bid/ask tick. Keep the distinction explicit.
     return {"symbol":symbol,"bid":bid,"ask":bid,"time":ts,
       "quote_source":"last_M1_candle_close_not_live_tick","account_mode":"DEMO"}
+
+@app.get("/v1/candles/{symbol}")
+async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Optional[str]=Header(default=None)):
+    auth(authorization); row,_=await account_detail()
+    allowed_frames={"M1","M5","M15","M30","H1","H4","D1","W1","MN1"}
+    if timeframe not in allowed_frames: raise HTTPException(422,"Unsupported timeframe")
+    if hours<1 or hours>8760: raise HTTPException(422,"hours must be between 1 and 8760")
+    symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
+    if symbol not in symbols_data.get("symbols",[]): raise HTTPException(404,"Broker-native symbol not found")
+    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+    rows=data.get("candles",[])
+    if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
+    clean=[]
+    for bar in rows:
+        try:
+            clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),
+              "high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),
+              "tick_volume":float(bar.get("tickVolume") or 0),"spread":float(bar.get("spread") or 0)})
+        except (KeyError,TypeError,ValueError):
+            continue
+    return {"account_mode":"DEMO","symbol":symbol,"timeframe":timeframe,
+      "candles":clean,"count":len(clean),"coverage":data.get("coverage"),
+      "truncated":bool(data.get("truncated",False)),"served":data.get("served")}
+
+@app.get("/v1/history")
+async def history(symbol:Optional[str]=None,limit:int=50,authorization:Optional[str]=Header(default=None)):
+    auth(authorization); row,_=await account_detail()
+    limit=max(1,min(limit,200))
+    query=f"?limit={limit}"
+    if symbol: query+=f"&symbol={symbol}"
+    data=await ta("GET",f"/v1/accounts/{row['id']}/history{query}")
+    rows=data.get("history",data.get("trades",[])) if isinstance(data,dict) else data
+    if not isinstance(rows,list): raise HTTPException(502,"TickerAll history payload is invalid")
+    return {"account_mode":"DEMO","history":rows,"count":len(rows)}
 
 @app.get("/v1/positions")
 async def positions(authorization:Optional[str]=Header(default=None)):

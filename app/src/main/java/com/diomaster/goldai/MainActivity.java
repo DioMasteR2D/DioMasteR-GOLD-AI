@@ -38,6 +38,7 @@ public class MainActivity extends Activity {
     private PaperTradingEngine engine;
     private LinearLayout root;
     private ScrollView currentScroll;
+    private LinearLayout marketSection, agentSection, tradesSection, historySection, settingsSection;
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
@@ -288,9 +289,33 @@ public class MainActivity extends Activity {
         mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
         header.addView(mode);
         root.addView(header);
-        addSpace(14);
+        addSpace(10);
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setGravity(Gravity.CENTER);
+        nav.setBackground(round(0xFF11141A, 18, 0xFF806126));
+        String[] navLabels = {"⌂ Αρχική", "▥ Chart", "✧ AI Agent", "⇄ Συναλλαγές", "◷ Ιστορικό", "⚙ Ρυθμίσεις"};
+        Runnable[] navActions = {
+            () -> scrollToSection(marketSection), () -> scrollToSection(marketSection),
+            () -> scrollToSection(agentSection), () -> scrollToSection(tradesSection),
+            () -> scrollToSection(historySection), () -> scrollToSection(settingsSection)
+        };
+        for (int i=0;i<navLabels.length;i++) {
+            final int index=i;
+            Button tab = new Button(this);
+            tab.setText(navLabels[i]); tab.setTextSize(9); tab.setAllCaps(false);
+            tab.setTextColor(i==0 ? GOLD : 0xFFE4E5E8);
+            tab.setPadding(dp(2),dp(8),dp(2),dp(8));
+            tab.setMinWidth(0); tab.setMinimumWidth(0);
+            tab.setBackgroundColor(Color.TRANSPARENT);
+            tab.setOnClickListener(v -> navActions[index].run());
+            nav.addView(tab,new LinearLayout.LayoutParams(0,-2,1));
+        }
+        root.addView(nav);
+        addSpace(12);
 
         LinearLayout market = card();
+        marketSection = market;
         addLabel(market, "XAUUSD · SPOT PRICE SNAPSHOTS");
         TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
         market.addView(priceText);
@@ -307,6 +332,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout agent = card();
+        agentSection = agent;
         addLabel(agent, "DIOMASTER AI AGENT · LIVE MARKET ANALYSIS");
         int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
         String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
@@ -367,6 +393,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout actions = card();
+        tradesSection = actions;
         addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · ΧΕΙΡΟΚΙΝΗΤΕΣ ΕΝΤΟΛΕΣ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -420,6 +447,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout history = card();
+        historySection = history;
         addLabel(history, "ΙΣΤΟΡΙΚΟ ΚΛΕΙΣΜΕΝΩΝ ΣΥΝΑΛΛΑΓΩΝ");
         JSONArray closed = snap.optJSONArray("history");
         if (closed == null || closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη.", 12, MUTED, false));
@@ -451,6 +479,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout connections = card();
+        settingsSection = connections;
         addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
         addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
@@ -579,6 +608,11 @@ public class MainActivity extends Activity {
             }).start();
         }));
         dialog.show();
+    }
+
+    private void scrollToSection(View section) {
+        if (currentScroll == null || section == null) return;
+        currentScroll.post(() -> currentScroll.smoothScrollTo(0, section.getTop() + root.getTop() - dp(8)));
     }
 
     private LinearLayout card() {

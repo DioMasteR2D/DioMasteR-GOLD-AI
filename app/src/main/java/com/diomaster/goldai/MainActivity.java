@@ -532,12 +532,17 @@ public class MainActivity extends Activity {
 
         LinearLayout risk = card();
         addLabel(risk, "ΔΙΑΧΕΙΡΙΣΗ ΚΙΝΔΥΝΟΥ · ΕΝΕΡΓΗ");
-        addRow(risk, "Ρίσκο ανά συναλλαγή", "0.5% of equity");
-        addRow(risk, "Stop Loss / Take Profit", "$8 / $16");
-        addRow(risk, "Μέγιστο μέγεθος θέσης", "5.0 oz");
-        addRow(risk, "Ημερήσιο όριο ζημιάς", "$200");
-        addRow(risk, "Μέγιστη πτώση κεφαλαίου", "5%");
-        addRow(risk, "Νέες συναλλαγές", snap.optBoolean("paused") ? "ΣΕ ΠΑΥΣΗ" : "ΕΝΕΡΓΕΣ");
+        LinearLayout riskRow1=new LinearLayout(this); riskRow1.setOrientation(LinearLayout.HORIZONTAL);
+        riskRow1.addView(metric("Ρίσκο / Trade","0.5%",GOLD),weight());
+        riskRow1.addView(metric("Stop Loss","$8",RED),weight());
+        riskRow1.addView(metric("Take Profit","$16",GREEN),weight());
+        risk.addView(riskRow1);
+        LinearLayout riskRow2=new LinearLayout(this); riskRow2.setOrientation(LinearLayout.HORIZONTAL);
+        riskRow2.addView(metric("Μέγ. μέγεθος","5.0 oz",GOLD),weight());
+        riskRow2.addView(metric("Ημερ. όριο","$200",GOLD),weight());
+        riskRow2.addView(metric("Μέγ. ημερήσια ζημιά","5%",RED),weight());
+        risk.addView(riskRow2);
+        addRow(risk,"Νέες PAPER συναλλαγές",snap.optBoolean("paused")?"ΣΕ ΠΑΥΣΗ":"ΕΝΕΡΓΕΣ");
         TextView riskNote = text("Κάθε νέα εικονική συναλλαγή περνά από τον ίδιο αυτόματο έλεγχο κινδύνου. Παλιές ή ανύπαρκτες τιμές μπλοκάρουν τις νέες εισόδους.", 10, MUTED, false);
         riskNote.setPadding(0, dp(8), 0, 0);
         risk.addView(riskNote);

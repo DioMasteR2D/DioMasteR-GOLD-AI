@@ -419,10 +419,10 @@ public class MainActivity extends Activity {
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
         addRow(connections, "Μηχανή σημάτων AI", aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ", aiSignal.ready ? GOLD : MUTED);
         addRow(connections, "Εντολές MT5 DEMO", mt5ExecutionEnabled ? "ΕΝΕΡΓΕΣ · ΜΟΝΟ ΜΕ ΕΠΙΒΕΒΑΙΩΣΗ DEMO" : "ΑΝΑΜΟΝΗ ΣΥΝΔΕΣΗΣ", mt5ExecutionEnabled ? GREEN : GOLD);
-        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω MetaApi Cloud προς τον Vantage MT5 DEMO, χωρίς δικό σου Windows VPS. Τα BUY/SELL στέλνουν εντολές μόνο όταν ο server επιβεβαιώνει DEMO, με υποχρεωτικά Stop Loss και Take Profit. Η αυτόματη στρατηγική cloud δεν έχει ενεργοποιηθεί ακόμη.", 10, MUTED, false);
+        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς τον Vantage MT5 DEMO. Ο server ελέγχει ότι ο λογαριασμός είναι DEMO. Η τιμή αναφοράς για εντολές προέρχεται από το τελευταίο M1 candle και όχι από live bid/ask tick. Οι εντολές παραμένουν απενεργοποιημένες μέχρι να ολοκληρωθούν οι έλεγχοι. Η αυτόματη στρατηγική cloud δεν έχει υλοποιηθεί ακόμη.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
-        Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ METAAPI CLOUD · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
+        Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ TICKERALL API · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
         connections.addView(mt5Positions);
@@ -461,7 +461,7 @@ public class MainActivity extends Activity {
         token.setText(mt5Token);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(token);
-        TextView note = text("Βάλε το HTTPS URL του cloud bridge και το DIO_BRIDGE_TOKEN από τα Render secrets. Τα MetaApi credentials δεν μπαίνουν στην εφαρμογή. Ο server απορρίπτει κάθε λογαριασμό που δεν επιβεβαιώνεται ως DEMO.", 11, MUTED, false);
+        TextView note = text("Βάλε το HTTPS URL του cloud bridge και το DIO_BRIDGE_TOKEN από τα Render secrets. Το TickerAll API key παραμένει μόνο στο Render και δεν μπαίνει στην εφαρμογή. Ο server απορρίπτει κάθε λογαριασμό που δεν επιβεβαιώνεται ως DEMO.", 11, MUTED, false);
         note.setPadding(0, pad, 0, 0);
         form.addView(note);
         AlertDialog dialog = new AlertDialog.Builder(this)

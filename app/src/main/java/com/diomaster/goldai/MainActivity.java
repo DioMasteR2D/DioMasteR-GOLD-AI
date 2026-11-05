@@ -284,7 +284,12 @@ public class MainActivity extends Activity {
                 new int[]{0xFF17120B,0xFF080A10,0xFF241805});
         heroBg.setCornerRadius(dp(18)); heroBg.setStroke(dp(1),0xFFB98B32);
         hero.setBackground(heroBg);
-        TextView crown = text("♛",27,GOLD,true); hero.addView(crown);
+        LinearLayout crest = new LinearLayout(this);
+        crest.setGravity(Gravity.CENTER); crest.setOrientation(LinearLayout.HORIZONTAL);
+        crest.addView(text("🦁",30,GOLD,true));
+        crest.addView(text("♛",25,GOLD,true));
+        crest.addView(text("🤖",30,0xFFE5E8EF,true));
+        hero.addView(crest);
         TextView brand = text("DioMasteR",29,0xFFF4F4F5,true); hero.addView(brand);
         TextView goldTitle = text("GOLD AI  v2.0 PRO",26,0xFFFFC83D,true); hero.addView(goldTitle);
         TextView subtitle = text("AI TRADING SYSTEM  •  XAUUSD  •  MT5  •  AUTO",9,0xFFD7D9DF,true);
@@ -404,9 +409,9 @@ public class MainActivity extends Activity {
             waiting.setPadding(0, dp(8), 0, 0);
             agent.addView(waiting);
         }
-        Button refreshAgent = actionButton("ΑΝΑΝΕΩΣΗ ΑΝΑΛΥΣΗΣ", 0xFF292C34, this::fetchPrice);
-        agent.addView(refreshAgent);
-        Button aiToggle = actionButton(aiEngineStarted ? "Ⅱ STOP AI ENGINE" : "▶ START AI ENGINE", aiEngineStarted ? 0xFF49302B : 0xFFB58A35,
+        LinearLayout aiButtons = new LinearLayout(this);
+        aiButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button aiToggle = actionButton(aiEngineStarted ? "Ⅱ STOP AI" : "▶ START AI ENGINE", aiEngineStarted ? 0xFF49302B : 0xFF25D86F,
                 () -> {
                     if (aiEngineStarted) {
                         aiEngineStarted = false;
@@ -414,7 +419,11 @@ public class MainActivity extends Activity {
                         render();
                     } else startAiEngine();
                 });
-        agent.addView(aiToggle);
+        aiToggle.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
+        Button refreshAgent = actionButton("↻ ΑΝΑΛΥΣΗ", 0xFF292C34, this::fetchPrice);
+        refreshAgent.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        aiButtons.addView(aiToggle); aiButtons.addView(refreshAgent);
+        agent.addView(aiButtons);
         root.addView(agent);
         addSpace(10);
 

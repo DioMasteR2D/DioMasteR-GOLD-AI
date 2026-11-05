@@ -5,9 +5,8 @@ import java.util.Locale;
 
 /**
  * On-device XAUUSD signal assistant.
- * Uses sampled spot quotes only; it is deliberately not presented as a trained ML model
- * or as a broker execution engine. OHLC-based liquidity-sweep confirmation requires
- * a verified candle feed.
+ * Uses broker candle closes when MT5 is connected. The rules and thresholds are
+ * intentionally unchanged; diagnostics expose why a setup is or is not confirmed.
  */
 public final class GoldAiAgent {
     private GoldAiAgent() {}
@@ -39,7 +38,9 @@ public final class GoldAiAgent {
 
     public static Signal analyze(List<Double> prices, double current) {
         if (prices == null || prices.size() < 24 || current <= 0) {
-            return Signal.waiting("Χρειάζονται τουλάχιστον 24 έγκυρες μετρήσεις τιμής πριν αξιολογηθεί η τάση.");
+            int count = prices == null ? 0 : prices.size();
+            return Signal.waiting("ΑΝΕΠΑΡΚΗ ΔΕΔΟΜΕΝΑ · Μετρήσεις: " + count
+                    + "/24 · απαιτούνται τουλάχιστον 24 έγκυρες τιμές και θετική τρέχουσα τιμή.");
         }
 
         double fast = ema(prices, 6);
@@ -61,26 +62,47 @@ public final class GoldAiAgent {
         }
         double volatility = changes == 0 ? 0 : movement / changes;
         double floor = Math.max(0.35, volatility * 1.8);
+        double breakoutBuffer = Math.max(0.08, volatility * 0.12);
         boolean upTrend = fast > slow && current > prices.get(n - 5);
         boolean downTrend = fast < slow && current < prices.get(n - 5);
-        boolean breakoutUp = current > high + Math.max(0.08, volatility * 0.12);
-        boolean breakoutDown = current < low - Math.max(0.08, volatility * 0.12);
+        boolean breakoutUp = current > high + breakoutBuffer;
+        boolean breakoutDown = current < low - breakoutBuffer;
+
+        String metrics = "ΔΙΑΓΝΩΣΗ · " + n + " candles | EMA6 " + fmt(fast)
+                + " / EMA15 " + fmt(slow) + " | εύρος " + fmt(low) + "–" + fmt(high)
+                + " | τιμή " + fmt(current) + " | buffer " + fmt(breakoutBuffer);
 
         if (upTrend && breakoutUp) {
             int score = score(Math.abs(fast - slow), volatility, current - high);
             double sl = current - floor;
-            return new Signal("BUY", "Ανοδική EMA τάση και διάσπαση του πρόσφατου εύρους τιμών. Επιβεβαίωσε spread και νέα τιμή πριν από οποιαδήποτε εκτέλεση.",
+            return new Signal("BUY", "ΕΠΙΒΕΒΑΙΩΜΕΝΟ BUY · Ανοδική EMA τάση και διάσπαση πρόσφατου εύρους. "
+                    + metrics + " | απόσταση διάσπασης " + fmt(current - high)
+                    + " | επιβεβαίωσε spread και νέα τιμή πριν από εκτέλεση.",
                     score, current, sl, current + floor * 1.8, true);
         }
         if (downTrend && breakoutDown) {
             int score = score(Math.abs(fast - slow), volatility, low - current);
             double sl = current + floor;
-            return new Signal("SELL", "Καθοδική EMA τάση και διάσπαση του πρόσφατου εύρους τιμών. Επιβεβαίωσε spread και νέα τιμή πριν από οποιαδήποτε εκτέλεση.",
+            return new Signal("SELL", "ΕΠΙΒΕΒΑΙΩΜΕΝΟ SELL · Καθοδική EMA τάση και διάσπαση πρόσφατου εύρους. "
+                    + metrics + " | απόσταση διάσπασης " + fmt(low - current)
+                    + " | επιβεβαίωσε spread και νέα τιμή πριν από εκτέλεση.",
                     score, current, sl, current - floor * 1.8, true);
         }
+
         String trend = fast > slow ? "ήπια ανοδική" : fast < slow ? "ήπια καθοδική" : "ουδέτερη";
-        return new Signal("HOLD", "Δεν υπάρχει επιβεβαιωμένο breakout. Τάση: " + trend
-                + ". Ο Agent αποφεύγει την είσοδο μέχρι να υπάρξει καθαρό σήμα.", 0, 0, 0, 0, true);
+        String blockers = (upTrend ? "UPTREND ΝΑΙ" : "UPTREND ΟΧΙ") + " · "
+                + (downTrend ? "DOWNTREND ΝΑΙ" : "DOWNTREND ΟΧΙ") + " · "
+                + (breakoutUp ? "BREAKOUT UP ΝΑΙ" : "BREAKOUT UP ΟΧΙ") + " · "
+                + (breakoutDown ? "BREAKOUT DOWN ΝΑΙ" : "BREAKOUT DOWN ΟΧΙ");
+        return new Signal("HOLD", "HOLD · Δεν υπάρχει επιβεβαιωμένο breakout. Τάση: " + trend
+                + ". " + blockers + ". " + metrics
+                + " | απαιτείται τιμή πάνω από " + fmt(high + breakoutBuffer)
+                + " για breakout UP ή κάτω από " + fmt(low - breakoutBuffer)
+                + " για breakout DOWN.", 0, 0, 0, 0, true);
+    }
+
+    private static String fmt(double value) {
+        return String.format(Locale.US, "%.2f", value);
     }
 
     private static double ema(List<Double> values, int period) {

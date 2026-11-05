@@ -1,20 +1,21 @@
-"""DioMasteR GOLD AI cloud bridge for MetaApi. DEMO-only; fail-closed."""
+"""DioMasteR GOLD AI bridge for TickerAll MT5 DEMO."""
 import os, hmac, uuid
 from typing import Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-META_TOKEN=os.getenv("METAAPI_TOKEN","")
-ACCOUNT_ID=os.getenv("METAAPI_ACCOUNT_ID","")
-META_BASE=os.getenv("METAAPI_CLIENT_API","https://mt-client-api-v1.new-york.agiliumtrade.ai").rstrip("/")
+TA_TOKEN=os.getenv("TICKERALL_API_KEY","").strip()
+TA_BASE=os.getenv("TICKERALL_API_BASE","https://api.tickerall.com").rstrip("/")
+ACCOUNT_ID=os.getenv("TICKERALL_ACCOUNT_ID","").strip()
+BROKER_SERVER=os.getenv("TICKERALL_SERVER","VantageMarkets-Demo").strip()
 BRIDGE_TOKEN=os.getenv("DIO_BRIDGE_TOKEN","")
 EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="true"
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAGIC=int(os.getenv("DIO_MT5_MAGIC","26051105"))
-app=FastAPI(title="DioMasteR GOLD AI MetaApi DEMO Bridge",version="1.0.0")
+MAX_BOT_POSITIONS=int(os.getenv("DIO_MT5_MAX_POSITIONS","3"))
+app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.0.0")
 
 class Order(BaseModel):
     symbol:str=Field(min_length=3,max_length=32)
@@ -30,134 +31,160 @@ def auth(value:Optional[str]):
     if not hmac.compare_digest(got,BRIDGE_TOKEN): raise HTTPException(401,"Unauthorized")
 
 def configured():
-    if not META_TOKEN or not ACCOUNT_ID: raise HTTPException(503,"MetaApi account is not configured")
+    if not TA_TOKEN: raise HTTPException(503,"TickerAll API key is not configured")
     if not BRIDGE_TOKEN: raise HTTPException(503,"Bridge auth is not configured")
 
-async def api(method,path,body=None):
+async def ta(method,path,body=None,idem=False):
     configured()
-    headers={"auth-token":META_TOKEN,"Accept":"application/json"}
-    async with httpx.AsyncClient(timeout=20) as client:
-        r=await client.request(method,META_BASE+path,headers=headers,json=body)
+    headers={"Authorization":"Bearer "+TA_TOKEN,"Accept":"application/json"}
+    if body is not None: headers["Content-Type"]="application/json"
+    if idem: headers["Idempotency-Key"]=str(uuid.uuid4())
+    async with httpx.AsyncClient(timeout=25) as client:
+        r=await client.request(method,TA_BASE+path,headers=headers,json=body)
     if r.status_code>=400:
-        detail=r.text[:600]
-        raise HTTPException(502,f"MetaApi {r.status_code}: {detail}")
-    return r.json() if r.content else {}
+        try:
+            data=r.json(); detail=data.get("message") or data.get("error") or str(data)
+        except Exception: detail=r.text[:400]
+        raise HTTPException(r.status_code,str(detail)[:500])
+    if not r.content: return {}
+    return r.json()
 
-def basepath():
-    return f"/users/current/accounts/{ACCOUNT_ID}"
+async def account():
+    data=await ta("GET","/v1/accounts")
+    rows=data if isinstance(data,list) else data.get("accounts",[])
+    if ACCOUNT_ID:
+        match=next((x for x in rows if str(x.get("id"))==ACCOUNT_ID),None)
+    else:
+        candidates=[x for x in rows if str(x.get("broker","")).lower()=="mt5"
+          and x.get("isDemo") is True
+          and str(x.get("server","")).lower()==BROKER_SERVER.lower()]
+        if len(candidates)>1: raise HTTPException(409,"More than one matching Vantage DEMO account; set TICKERALL_ACCOUNT_ID")
+        match=candidates[0] if candidates else None
+    if not match: raise HTTPException(503,"Vantage DEMO account not found in this TickerAll API key")
+    if match.get("isDemo") is not True: raise HTTPException(403,"TickerAll did not verify this as DEMO")
+    if str(match.get("broker","")).lower()!="mt5": raise HTTPException(403,"Only MT5 is allowed")
+    if str(match.get("server","")).lower()!=BROKER_SERVER.lower(): raise HTTPException(403,"Unexpected broker server")
+    return match
 
-async def demo_account():
-    info=await api("GET",basepath()+"/account-information")
-    mode=str(info.get("type") or info.get("tradeMode") or "").upper()
-    if mode not in ("ACCOUNT_TRADE_MODE_DEMO","DEMO"):
-        raise HTTPException(403,"DEMO account not verified by MetaApi; all trading blocked")
-    if info.get("tradeAllowed") is False:
-        raise HTTPException(403,"Broker reports trading disabled for this DEMO account")
-    state=await api("GET",basepath()+"/connection-state")
-    connected=bool(state.get("connected") or state.get("connectedToBroker"))
-    if not connected:
-        raise HTTPException(503,"MetaApi terminal is not connected to Vantage")
-    return info,state
+async def account_detail():
+    row=await account()
+    detail=await ta("GET",f"/v1/accounts/{row['id']}")
+    if detail.get("isDemo") is not True: raise HTTPException(403,"DEMO verification failed; trading blocked")
+    online=str(detail.get("status","")).lower() in ("online","connected")
+    if not online: raise HTTPException(503,"Vantage DEMO connection is offline/cold; reconnect it in TickerAll")
+    return row,detail
+
+def choose_symbol(symbols):
+    available=symbols or []
+    for preferred in ("XAUUSD","XAUUSDm","GOLD","GOLDm"):
+        if preferred in available: return preferred
+    for s in available:
+        if "XAUUSD" in str(s).upper() or str(s).upper().startswith("GOLD"): return str(s)
+    return next(iter(SYMBOLS), "XAUUSD")
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"diomaster-metaapi-demo-bridge","execution_enabled":EXECUTION_ENABLED}
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.0.0"}
 
 @app.get("/v1/status")
 async def status(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); info,state=await demo_account()
-    return {"service":"DioMasteR GOLD AI","bridge_version":"1.0.0",
+    auth(authorization); row,detail=await account_detail()
+    symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
+    available=symbols_data.get("symbols",[])
+    symbol=choose_symbol(available)
+    acc=detail.get("account",{})
+    return {"service":"DioMasteR GOLD AI","bridge_version":"2.0.0",
       "terminal_connected":True,"account_mode":"DEMO",
-      "account_login":str(info.get("login","")),"server":str(info.get("broker","")),
-      "currency":str(info.get("currency","USD")),"balance":float(info.get("balance",0)),
-      "equity":float(info.get("equity",0)),"execution_enabled":EXECUTION_ENABLED,
-      "allowed_symbols":sorted(SYMBOLS),"connection_state":state}
+      "account_login":str(row.get("accountNumber","")),
+      "server":str(row.get("server","")),"currency":str(acc.get("currency","USD")),
+      "balance":float(acc.get("balance") or 0),"equity":float(acc.get("equity") or 0),
+      "execution_enabled":EXECUTION_ENABLED,"allowed_symbols":[symbol],
+      "provider":"TickerAll","connection_hot":bool(row.get("hot",False)),
+      "always_hot":bool(row.get("alwaysHot",False))}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await demo_account()
-    if symbol not in SYMBOLS: raise HTTPException(403,"Symbol is not allow-listed")
-    p=await api("GET",basepath()+f"/symbols/{symbol}/current-price")
-    bid=float(p.get("bid",0)); ask=float(p.get("ask",0))
-    if bid<=0 or ask<=0 or ask<bid: raise HTTPException(503,"Broker quote unavailable")
-    return {"symbol":symbol,"bid":bid,"ask":ask,"time":p.get("time"),"account_mode":"DEMO"}
+    auth(authorization); row,_=await account_detail()
+    symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
+    available=symbols_data.get("symbols",[])
+    if symbol not in available: raise HTTPException(404,"Broker-native symbol not found; inspect /v1/status allowed_symbols")
+    candles=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe=M1&hours=1")
+    bars=candles.get("candles",[])
+    if not bars: raise HTTPException(503,"No broker M1 candles available")
+    last=bars[-1]; bid=float(last.get("close") or last.get("bid") or 0)
+    ts=float(last.get("timestamp") or 0)
+    if bid<=0: raise HTTPException(503,"Invalid broker candle price")
+    # TickerAll REST candles provide OHLC but not a bid/ask tick. Return last M1 close
+    # as an indicative reference only; order placement is still broker market execution.
+    return {"symbol":symbol,"bid":bid,"ask":bid,"time":ts,
+      "quote_source":"last_M1_candle_close_not_live_tick","account_mode":"DEMO"}
 
 @app.get("/v1/positions")
 async def positions(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await demo_account()
-    rows=await api("GET",basepath()+"/positions")
+    auth(authorization); row,_=await account_detail()
+    data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    rows=data.get("positions",[]) if isinstance(data,dict) else data
     result=[]
-    for p in (rows if isinstance(rows,list) else rows.get("positions",[])):
-        result.append({"ticket":int(p.get("id") or p.get("ticket") or 0),
-          "symbol":p.get("symbol"),"type":0 if str(p.get("type","")).upper() in ("POSITION_TYPE_BUY","BUY") else 1,
-          "volume":float(p.get("volume",0)),"price_open":float(p.get("openPrice",0)),
-          "price_current":float(p.get("currentPrice",0)),"profit":float(p.get("profit",0)),
-          "sl":float(p.get("stopLoss",0) or 0),"tp":float(p.get("takeProfit",0) or 0),
-          "magic":int(p.get("magic",0) or 0)})
+    for p in rows:
+        result.append({"ticket":int(p.get("ticket") or 0),"symbol":p.get("symbol"),
+          "type":0 if str(p.get("side","")).upper()=="BUY" else 1,
+          "volume":float(p.get("volume") or 0),"price_open":float(p.get("entryPrice") or 0),
+          "price_current":float(p.get("currentPrice") or 0),"profit":float(p.get("profit") or 0),
+          "sl":float(p.get("stopLoss") or 0),"tp":float(p.get("takeProfit") or 0),
+          "comment":p.get("comment","")})
     return {"account_mode":"DEMO","positions":result}
 
 @app.post("/v1/order")
 async def order(req:Order,authorization:Optional[str]=Header(default=None)):
-    auth(authorization); info,_=await demo_account()
-    if not EXECUTION_ENABLED: raise HTTPException(423,"DEMO execution disabled until MetaApi setup is verified")
-    if req.symbol not in SYMBOLS: raise HTTPException(403,"Symbol is not allow-listed")
+    auth(authorization); row,detail=await account_detail()
+    if not EXECUTION_ENABLED: raise HTTPException(423,"DEMO execution is disabled until read-only connection tests pass")
+    if req.symbol not in SYMBOLS and req.symbol not in (await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[]):
+        raise HTTPException(403,"Symbol is not available on this Vantage account")
     side=req.side.upper()
     if side not in ("BUY","SELL"): raise HTTPException(422,"side must be BUY or SELL")
     if req.volume>MAX_VOLUME: raise HTTPException(422,"Volume exceeds configured cap")
-    spec=await api("GET",basepath()+f"/symbols/{req.symbol}/specification")
-    vmin=float(spec.get("minVolume",0.01)); vmax=float(spec.get("maxVolume",MAX_VOLUME)); step=float(spec.get("volumeStep",0.01))
-    if req.volume<vmin or req.volume>min(vmax,MAX_VOLUME) or abs(round(req.volume/step)*step-req.volume)>1e-8:
-        raise HTTPException(422,f"Volume must respect broker min/step ({vmin}/{step})")
-    q=await api("GET",basepath()+f"/symbols/{req.symbol}/current-price")
-    bid=float(q.get("bid",0)); ask=float(q.get("ask",0)); entry=ask if side=="BUY" else bid
+    q=await quote(req.symbol,authorization="Bearer "+BRIDGE_TOKEN)
+    ref=float(q["bid"])
     sl=float(req.stop_loss); tp=float(req.take_profit)
-    if entry<=0 or (side=="BUY" and not sl<entry<tp) or (side=="SELL" and not tp<entry<sl):
-        raise HTTPException(422,"Invalid SL/TP direction for current broker quote")
-    # Conservative XAU risk approximation. MetaApi/broker remains final margin/risk authority.
-    contract=float(spec.get("contractSize",100) or 100)
-    risk=abs(entry-sl)*req.volume*contract
-    equity=float(info.get("equity",0))
+    if (side=="BUY" and not sl<ref<tp) or (side=="SELL" and not tp<ref<sl):
+        raise HTTPException(422,"SL/TP direction does not match latest M1 reference price")
+    equity=float((detail.get("account") or {}).get("equity") or 0)
+    risk=abs(ref-sl)*req.volume*100.0
     if equity<=0 or risk>equity*MAX_RISK_FRACTION:
-        raise HTTPException(422,"Order exceeds configured 0.25% equity risk cap")
-    current=await api("GET",basepath()+"/positions")
-    current=current if isinstance(current,list) else current.get("positions",[])
-    bot_positions=[p for p in current if int(p.get("magic",0) or 0)==MAGIC or str(p.get("comment","")).startswith("DioMasteR DEMO")]
-    if len(bot_positions)>=3:
-        raise HTTPException(423,"Maximum of 3 open DioMasteR DEMO positions reached")
-    body={"actionType":"ORDER_TYPE_BUY" if side=="BUY" else "ORDER_TYPE_SELL",
-      "symbol":req.symbol,"volume":req.volume,"stopLoss":sl,"takeProfit":tp,
-      "stopLossUnits":"ABSOLUTE_PRICE","takeProfitUnits":"ABSOLUTE_PRICE",
-      "comment":"DioMasteR DEMO "+req.client_order_id[-12:],"clientId":req.client_order_id}
-    result=await api("POST",basepath()+"/trade",body)
-    if int(result.get("numericCode",0))!=10009:
-        raise HTTPException(502,{"message":"MetaApi did not confirm order completion","result":result})
-    return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,"volume":req.volume,
-      "order":int(result.get("orderId",0) or 0),"deal":0,"price":entry,
-      "retcode":10009,"comment":result.get("message","Request completed"),
-      "client_order_id":req.client_order_id}
+        raise HTTPException(422,"Order exceeds configured 0.25% equity risk cap (conservative XAU contract estimate)")
+    pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    open_rows=pdata.get("positions",[])
+    bot=[p for p in open_rows if str(p.get("comment","")).startswith("DioMasteR")]
+    if len(bot)>=MAX_BOT_POSITIONS: raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
+    body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
+      "stopLoss":sl,"takeProfit":tp,"comment":"DioMasteR "+req.client_order_id[-16:]}
+    result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
+    return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
+      "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,
+      "price":float(result.get("price") or ref),"retcode":10009 if result.get("status")=="open" else 0,
+      "comment":result.get("status","submitted"),"client_order_id":req.client_order_id}
 
 @app.post("/v1/positions/{ticket}/close")
 async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await demo_account()
+    auth(authorization); row,_=await account_detail()
     if not EXECUTION_ENABLED: raise HTTPException(423,"DEMO execution disabled")
-    rows=await api("GET",basepath()+"/positions")
-    rows=rows if isinstance(rows,list) else rows.get("positions",[])
-    p=next((x for x in rows if int(x.get("id") or x.get("ticket") or 0)==ticket),None)
-    if p is None: raise HTTPException(404,"Position not found")
-    if int(p.get("magic",0) or 0)!=MAGIC and not str(p.get("comment","")).startswith("DioMasteR DEMO"):
+    pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    p=next((x for x in pdata.get("positions",[]) if int(x.get("ticket") or 0)==ticket),None)
+    if not p: raise HTTPException(404,"Position not found")
+    if not str(p.get("comment","")).startswith("DioMasteR"):
         raise HTTPException(403,"Only DioMasteR bot positions can be closed")
-    result=await api("POST",basepath()+"/trade",{"actionType":"POSITION_CLOSE_ID","positionId":str(ticket)})
-    if int(result.get("numericCode",0))!=10009: raise HTTPException(502,{"message":"MetaApi did not confirm close","result":result})
-    return {"ok":True,"account_mode":"DEMO","ticket":ticket,"result":result}
+    result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+    return {"ok":bool(result.get("closed")),"account_mode":"DEMO","ticket":ticket,
+      "deal":result.get("dealTicket"),"result":result}
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await demo_account()
-    raise HTTPException(501,"Automatic strategy loop is not implemented in cloud bridge yet; manual DEMO orders only")
+    auth(authorization); await account_detail()
+    raise HTTPException(501,"Automatic strategy loop is not implemented yet; manual DEMO orders only")
 
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await demo_account()
+    auth(authorization); await account_detail()
     return {"running":False,"supported":False,"last_action":"NOT_IMPLEMENTED","account_mode":"DEMO"}
 
 @app.post("/v1/auto/stop")

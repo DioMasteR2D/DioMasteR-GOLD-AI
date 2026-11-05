@@ -206,7 +206,9 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {
                     runOnUiThread(() -> {
                         fetching=false; brokerChartActive=false;
-                        feedMessage="MT5 DEMO feed error: "+(e.getMessage()==null?"unknown":e.getMessage());
+                        price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
+                        aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
+                        feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
                         render();
                     });
                 }

@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
         engine = new PaperTradingEngine(this);
         android.content.SharedPreferences mt5Prefs = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE);
         mt5BaseUrl = mt5Prefs.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
-        mt5Token = mt5Prefs.getString("token", "");
+        mt5Token = cleanBridgeToken(mt5Prefs.getString("token", ""));
         mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
         mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
@@ -714,7 +714,7 @@ public class MainActivity extends Activity {
     }
 
 
-    private void configureMt5Bridge() {
+    private String cleanBridgeToken(String value) {\n        if (value == null) return "";\n        // Bearer credentials must never contain CR/LF or pasted whitespace.\n        return value.replaceAll("\\\\s+", "");\n    }\n\n    private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(8);
@@ -745,7 +745,7 @@ public class MainActivity extends Activity {
                 .create();
         dialog.setOnShowListener(v -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String base = endpoint.getText().toString().trim().replaceAll("/+$", "");
-            String secret = token.getText().toString().trim();
+            String secret = cleanBridgeToken(token.getText().toString());
             if (!base.startsWith("https://") || secret.length() < 16) {
                 Toast.makeText(this, "Βάλε έγκυρο HTTPS URL και token τουλάχιστον 16 χαρακτήρων.", Toast.LENGTH_LONG).show();
                 return;

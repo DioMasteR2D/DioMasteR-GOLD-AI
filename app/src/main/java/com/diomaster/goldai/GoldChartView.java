@@ -4,6 +4,9 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
+import android.os.SystemClock;
 import android.view.View;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +14,8 @@ import java.util.List;
 public final class GoldChartView extends View {
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint grid = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint area = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final List<Double> values = new ArrayList<>();
 
     public GoldChartView(Context context) {
@@ -22,6 +27,11 @@ public final class GoldChartView extends View {
         line.setStrokeCap(Paint.Cap.ROUND);
         grid.setColor(0xFF292C34);
         grid.setStrokeWidth(1f);
+        glow.setColor(0x55D7AD54);
+        glow.setStrokeWidth(10f);
+        glow.setStyle(Paint.Style.STROKE);
+        glow.setStrokeCap(Paint.Cap.ROUND);
+        area.setStyle(Paint.Style.FILL);
     }
 
     public void addPrice(double value) {
@@ -44,6 +54,14 @@ public final class GoldChartView extends View {
             float y = (float) (h - 8f - ((values.get(i) - min) / range) * (h - 16f));
             if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
         }
+        canvas.drawPath(path, glow);
         canvas.drawPath(path, line);
+        float lastX = w;
+        float lastY = (float) (h - 8f - ((values.get(values.size() - 1) - min) / range) * (h - 16f));
+        float pulse = 0.55f + 0.35f * (float)Math.sin(SystemClock.uptimeMillis() / 420.0);
+        Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dot.setColor(0xFFD7AD54);
+        canvas.drawCircle(lastX - 3f, lastY, 4f + pulse * 2f, dot);
+        if (isAttachedToWindow()) postInvalidateDelayed(90L);
     }
 }

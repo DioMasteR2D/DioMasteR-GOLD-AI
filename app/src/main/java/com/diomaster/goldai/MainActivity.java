@@ -40,6 +40,8 @@ public class MainActivity extends Activity {
     private final GoldPriceClient priceClient = new GoldPriceClient();
     private final ArrayList<Double> chartPrices = new ArrayList<>();
     private JSONArray brokerCandles = new JSONArray();
+    private JSONArray mt5OpenPositions = new JSONArray();
+    private JSONArray mt5ClosedHistory = new JSONArray();
     private String selectedTimeframe = "M15";
     private boolean brokerChartActive = false;
     private PaperTradingEngine engine;
@@ -112,6 +114,7 @@ public class MainActivity extends Activity {
                 mt5Status = result;
                 mt5ExecutionEnabled = false;
                 render();
+                if (ok) { fetchPrice(); loadMt5AccountData(); }
                 Toast.makeText(this, result, Toast.LENGTH_LONG).show();
             });
         }).start();
@@ -249,6 +252,29 @@ public class MainActivity extends Activity {
             } catch(Exception e) { message="Η εντολή δεν εκτελέστηκε: "+e.getMessage(); }
             final String done=message;
             runOnUiThread(() -> { Toast.makeText(this,done,Toast.LENGTH_LONG).show(); render(); });
+        }).start();
+    }
+
+    private void loadMt5AccountData() {
+        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || mt5Status == null || !mt5Status.startsWith("DEMO")) return;
+        new Thread(() -> {
+            try {
+                Mt5DemoClient client=new Mt5DemoClient(mt5BaseUrl,mt5Token);
+                JSONObject open=client.positions();
+                JSONObject history=client.history(mt5Symbol,50);
+                JSONArray openRows=open.optJSONArray("positions");
+                JSONArray closedRows=history.optJSONArray("history");
+                runOnUiThread(() -> {
+                    mt5OpenPositions=openRows==null?new JSONArray():openRows;
+                    mt5ClosedHistory=closedRows==null?new JSONArray():closedRows;
+                    render();
+                });
+            } catch(Exception e) {
+                runOnUiThread(() -> {
+                    feedMessage="MT5 account data: "+(e.getMessage()==null?"unavailable":e.getMessage());
+                    render();
+                });
+            }
         }).start();
     }
 
@@ -541,6 +567,20 @@ public class MainActivity extends Activity {
                 if (i < open.length() - 1) addDivider(positions);
             }
         }
+        if (mt5Status != null && mt5Status.startsWith("DEMO")) {
+            addDivider(positions);
+            addLabel(positions,"VANTAGE MT5 DEMO · ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
+            if(mt5OpenPositions.length()==0) positions.addView(text("Ο broker δεν αναφέρει ανοιχτές θέσεις.",11,MUTED,false));
+            for(int i=0;i<Math.min(10,mt5OpenPositions.length());i++) {
+                JSONObject p=mt5OpenPositions.optJSONObject(i); if(p==null) continue;
+                String side=p.optString("side",p.optInt("type")==0?"BUY":"SELL");
+                double pnl=p.optDouble("profit",0);
+                addRow(positions,"#"+p.optString("ticket")+"  "+p.optString("symbol")+"  "+side+"  "+p.optDouble("volume")+" lot",
+                        PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+            }
+            Button reloadPositions=actionButton("↻ ΑΝΑΝΕΩΣΗ MT5 ΘΕΣΕΩΝ",0xFF292C34,this::loadMt5AccountData);
+            positions.addView(reloadPositions);
+        }
         root.addView(positions);
         addSpace(10);
 
@@ -557,6 +597,22 @@ public class MainActivity extends Activity {
                 String time = new SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(new Date(p.optLong("closedAt")));
                 addRow(history, "#" + p.optInt("id") + " " + p.optString("side") + " · " + time, PaperTradingEngine.money(pnl) + " · " + p.optString("reason"), pnl >= 0 ? GREEN : RED);
             }
+        }
+        if (mt5Status != null && mt5Status.startsWith("DEMO")) {
+            addDivider(history);
+            addLabel(history,"VANTAGE MT5 DEMO · ΚΛΕΙΣΜΕΝΕΣ ΣΥΝΑΛΛΑΓΕΣ");
+            if (mt5ClosedHistory.length()==0) history.addView(text("Δεν επέστρεψε κλεισμένες συναλλαγές ο broker.",11,MUTED,false));
+            for(int i=0;i<Math.min(8,mt5ClosedHistory.length());i++) {
+                JSONObject trade=mt5ClosedHistory.optJSONObject(i); if(trade==null) continue;
+                double pnl=trade.optDouble("profit",Double.NaN);
+                String side=trade.optString("side","—");
+                String time=trade.optString("closeTime",trade.optString("close_time",""));
+                addRow(history,"#"+trade.optString("ticket")+"  "+side+"  "+trade.optString("symbol")+"  "+time,
+                        Double.isNaN(pnl)?"P/L μη διαθέσιμο":PaperTradingEngine.money(pnl),
+                        Double.isNaN(pnl)?MUTED:(pnl>=0?GREEN:RED));
+            }
+            Button reloadHistory=actionButton("↻ ΑΝΑΝΕΩΣΗ MT5 ΙΣΤΟΡΙΚΟΥ",0xFF292C34,this::loadMt5AccountData);
+            history.addView(reloadHistory);
         }
         root.addView(history);
         addSpace(10);

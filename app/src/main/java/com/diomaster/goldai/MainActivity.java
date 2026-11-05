@@ -131,7 +131,16 @@ public class MainActivity extends Activity {
     }
 
     private void openTrade(String side) {
-        if (mt5ExecutionEnabled && !mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) { openMt5Trade(side); return; }
+        if (mt5ExecutionEnabled && !mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) {
+            String action = "BUY".equals(side) ? "ΑΓΟΡΑ" : "ΠΩΛΗΣΗ";
+            new AlertDialog.Builder(this)
+                .setTitle("Vantage MT5 DEMO · " + action)
+                .setMessage("Θα σταλεί εντολή 0.01 lot με Stop Loss $8 και Take Profit $16. Η εντολή θα σταλεί μόνο αν ο server επιβεβαιώσει ξανά ότι ο λογαριασμός είναι DEMO. Συνέχεια;")
+                .setNegativeButton("Ακύρωση", null)
+                .setPositiveButton("Επιβεβαίωση", (d,w) -> openMt5Trade(side))
+                .show();
+            return;
+        }
         if (!quoteFresh()) {
             Toast.makeText(this, "Δεν υπάρχει φρέσκια τιμή XAU. Οι νέες συναλλαγές μπλοκαρίστηκαν.", Toast.LENGTH_LONG).show();
             fetchPrice();

@@ -764,10 +764,10 @@ public class MainActivity extends Activity {
 
     private String cleanBridgeToken(String value) {
         if (value == null) return "";
-        // Bearer credentials must never contain CR/LF or pasted whitespace.
-        String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");\n        return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
+        // Accept either a raw token or a pasted "Bearer <token>" header value.
+        String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
+        return cleaned.replaceAll("[\\r\\n\\t ]+", "");
     }
-
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);

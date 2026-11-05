@@ -41,6 +41,12 @@ public final class Mt5DemoClient {
     public JSONObject status() throws Exception { return request("GET","/v1/status",null); }
     public JSONObject quote(String symbol) throws Exception { return request("GET","/v1/quote/"+symbol,null); }
     public JSONObject positions() throws Exception { return request("GET","/v1/positions",null); }
+    public JSONObject candles(String symbol,String timeframe,int hours) throws Exception {
+        return request("GET","/v1/candles/"+symbol+"?timeframe="+timeframe+"&hours="+hours,null);
+    }
+    public JSONObject history(String symbol,int limit) throws Exception {
+        return request("GET","/v1/history?symbol="+symbol+"&limit="+limit,null);
+    }
     public JSONObject autoStart() throws Exception { return request("POST","/v1/auto/start",new JSONObject()); }
     public JSONObject autoStop() throws Exception { return request("POST","/v1/auto/stop",new JSONObject()); }
     public JSONObject autoStatus() throws Exception { return request("GET","/v1/auto/status",null); }

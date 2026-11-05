@@ -176,9 +176,16 @@ public class MainActivity extends Activity {
                     JSONObject candleData = client.candles(mt5Symbol, selectedTimeframe, 48);
                     JSONArray rows = candleData.optJSONArray("candles");
                     if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
-                    double latest = quote.optDouble("bid", 0);
+                    String quoteSource = quote.optString("quote_source", "");
+                    double bid = quote.optDouble("bid", 0);
+                    double ask = quote.optDouble("ask", 0);
                     long stamp = (long)(quote.optDouble("time", 0) * 1000L);
-                    if (latest <= 0 || stamp <= 0) throw new IllegalStateException("Μη έγκυρη broker τιμή.");
+                    long quoteAge = System.currentTimeMillis() - stamp;
+                    if (!"tickerall_live_websocket_tick".equals(quoteSource))
+                        throw new IllegalStateException("Δεν υπάρχει πραγματικό LIVE tick Bid/Ask από τον broker.");
+                    if (bid <= 0 || ask < bid || stamp <= 0 || quoteAge < -5000L || quoteAge > 15000L)
+                        throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
+                    double latest = (bid + ask) / 2.0;
                     final JSONArray bars = rows;
                     final long receivedAt = stamp;
                     runOnUiThread(() -> {
@@ -189,7 +196,7 @@ public class MainActivity extends Activity {
                             JSONObject bar=bars.optJSONObject(i);
                             if(bar!=null && bar.optDouble("close",0)>0) chartPrices.add(bar.optDouble("close"));
                         }
-                        feedMessage = "VANTAGE MT5 DEMO · broker candle · " + selectedTimeframe + " · " +
+                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + selectedTimeframe + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
                         engine.onQuote(latest);
@@ -224,7 +231,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean quoteFresh() {
-        return price > 0 && quoteAt > 0 && System.currentTimeMillis() - quoteAt <= 120000L;
+        return price > 0 && quoteAt > 0 && System.currentTimeMillis() - quoteAt <= 15000L;
     }
 
     private void openTrade(String side) {

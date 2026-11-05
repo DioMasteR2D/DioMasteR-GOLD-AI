@@ -1,10 +1,12 @@
 """DioMasteR GOLD AI bridge for TickerAll MT5 DEMO."""
-import os, hmac, uuid
+import os, hmac, uuid, logging
 from datetime import datetime, timezone
 from typing import Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+logger=logging.getLogger("diomaster.tickerall.stream")
 
 TA_TOKEN=os.getenv("TICKERALL_API_KEY","").strip()
 TA_BASE=os.getenv("TICKERALL_API_BASE","https://api.tickerall.com").rstrip("/")
@@ -24,33 +26,51 @@ import websockets
 
 LIVE_TICKS={}
 _stream_task=None
+STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
 async def live_tick_stream():
     while True:
         try:
+            STREAM_DIAGNOSTIC["state"]="checking_demo_account"
             row=await account()
             symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
             symbols=symbols_data.get("symbols",[])
             symbol=choose_symbol(symbols)
+            STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None})
+            logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s",symbol)
             url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
             async with websockets.connect(url,ping_interval=20,ping_timeout=20,close_timeout=5) as ws:
+                STREAM_DIAGNOSTIC.update({"state":"connected_subscribing","connected_at":time.time()})
+                logger.info("TickerAll WebSocket connected; sending tick subscription for %s",symbol)
                 await ws.send(json.dumps({"type":"subscribe","channels":[
                     {"kind":"ticks","accountId":row["id"],"symbols":[symbol]}]}))
                 async for raw in ws:
                     msg=json.loads(raw)
-                    if msg.get("type")=="tick" and msg.get("symbol")==symbol:
+                    msg_type=str(msg.get("type") or msg.get("event") or "unknown")
+                    STREAM_DIAGNOSTIC["last_message_type"]=msg_type
+                    if msg_type!="tick":
+                        logger.info("TickerAll WebSocket message received; type=%s keys=%s",msg_type,sorted(msg.keys())[:20])
+                    if msg_type=="tick" and msg.get("symbol")==symbol:
                         bid=float(msg.get("bid") or 0); ask=float(msg.get("ask") or 0)
                         stamp=msg.get("timestamp")
                         if isinstance(stamp,str):
                             ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
                         else: ts=float(stamp or 0)
                         if bid>0 and ask>=bid and ts>0:
+                            now=time.time()
                             LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
-                              "time":ts,"received_at":time.time(),"quote_source":"tickerall_live_websocket_tick",
+                              "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
                               "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
+                            STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
+                            logger.info("TickerAll live DEMO tick received for %s",symbol)
+                        else:
+                            logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
         except asyncio.CancelledError:
+            STREAM_DIAGNOSTIC["state"]="stopped"
             raise
-        except Exception:
+        except Exception as exc:
+            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":f"{type(exc).__name__}: {str(exc)[:300]}"})
+            logger.exception("TickerAll live stream failed; retrying in 5 seconds")
             await asyncio.sleep(5)
 
 @app.on_event("startup")
@@ -151,7 +171,11 @@ async def status(authorization:Optional[str]=Header(default=None)):
       "balance":float(acc.get("balance") or 0),"equity":float(acc.get("equity") or 0),
       "execution_enabled":EXECUTION_ENABLED,"allowed_symbols":[symbol],
       "provider":"TickerAll","connection_hot":bool(row.get("hot",False)),
-      "always_hot":bool(row.get("alwaysHot",False))}
+      "always_hot":bool(row.get("alwaysHot",False)),
+      "price_stream_state":STREAM_DIAGNOSTIC.get("state"),
+      "price_stream_last_error":STREAM_DIAGNOSTIC.get("last_error"),
+      "price_stream_symbol":STREAM_DIAGNOSTIC.get("symbol"),
+      "price_stream_last_tick_at":STREAM_DIAGNOSTIC.get("last_tick_at")}
 
 @app.get("/v1/quote/{symbol}")
 async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):

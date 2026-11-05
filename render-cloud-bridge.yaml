@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: diomaster-gold-ai-cloud-bridge
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: cloud_bridge
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: METAAPI_TOKEN
+        sync: false
+      - key: METAAPI_ACCOUNT_ID
+        sync: false
+      - key: DIO_BRIDGE_TOKEN
+        generateValue: true
+      - key: METAAPI_CLIENT_API
+        value: https://mt-client-api-v1.new-york.agiliumtrade.ai
+      - key: DIO_MT5_ALLOWED_SYMBOLS
+        value: XAUUSD
+      - key: DIO_MT5_MAX_VOLUME
+        value: "0.01"
+      - key: DIO_MT5_MAX_RISK_FRACTION
+        value: "0.0025"
+      - key: DIO_MT5_MAGIC
+        value: "26051105"
+      - key: DIO_MT5_DEMO_EXECUTION_ENABLED
+        value: "false"

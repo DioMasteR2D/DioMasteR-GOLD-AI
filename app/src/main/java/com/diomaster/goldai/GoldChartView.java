@@ -4,64 +4,110 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.LinearGradient;
-import android.graphics.Shader;
-import android.os.SystemClock;
+import android.graphics.RectF;
 import android.view.View;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
 public final class GoldChartView extends View {
-    private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint grid = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint area = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final List<Double> values = new ArrayList<>();
-
+    private static final int UP=0xFF00D98B, DOWN=0xFFFF4968, GOLD=0xFFFFC84A, BLUE=0xFF28B8FF;
+    private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint grid=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final List<Bar> bars=new ArrayList<>();
+    private final List<Double> fallback=new ArrayList<>();
+    private static final class Bar {
+        double o,h,l,c,v;
+        Bar(double o,double h,double l,double c,double v){this.o=o;this.h=h;this.l=l;this.c=c;this.v=v;}
+    }
     public GoldChartView(Context context) {
         super(context);
-        line.setColor(0xFFD7AD54);
-        line.setStrokeWidth(4f);
-        line.setStyle(Paint.Style.STROKE);
-        line.setStrokeJoin(Paint.Join.ROUND);
-        line.setStrokeCap(Paint.Cap.ROUND);
-        grid.setColor(0xFF292C34);
-        grid.setStrokeWidth(1f);
-        glow.setColor(0x55D7AD54);
-        glow.setStrokeWidth(10f);
-        glow.setStyle(Paint.Style.STROKE);
-        glow.setStrokeCap(Paint.Cap.ROUND);
-        area.setStyle(Paint.Style.FILL);
+        grid.setColor(0xFF292D36); grid.setStrokeWidth(1f);
+        setLayerType(View.LAYER_TYPE_SOFTWARE,null);
     }
-
-    public void addPrice(double value) {
-        values.add(value);
-        while (values.size() > 90) values.remove(0);
+    public void setCandles(JSONArray rows) {
+        bars.clear(); fallback.clear();
+        if(rows!=null) for(int i=0;i<rows.length();i++) {
+            JSONObject x=rows.optJSONObject(i); if(x==null) continue;
+            double o=x.optDouble("open",Double.NaN),h=x.optDouble("high",Double.NaN),
+                l=x.optDouble("low",Double.NaN),c=x.optDouble("close",Double.NaN),v=x.optDouble("tick_volume",0);
+            if(Double.isFinite(o)&&Double.isFinite(h)&&Double.isFinite(l)&&Double.isFinite(c)&&h>=l&&o>0&&c>0)
+                bars.add(new Bar(o,h,l,c,v));
+        }
         invalidate();
     }
-
+    public void addPrice(double value) {
+        if(value<=0||!Double.isFinite(value)) return;
+        fallback.add(value); while(fallback.size()>90) fallback.remove(0);
+        invalidate();
+    }
+    private double ema(int end,int period) {
+        int start=Math.max(0,end-period*3); double a=2.0/(period+1.0);
+        double e=bars.get(start).c;
+        for(int i=start+1;i<=end;i++) e=bars.get(i).c*a+e*(1-a);
+        return e;
+    }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        float w = getWidth(), h = getHeight();
-        for (int i = 1; i <= 3; i++) canvas.drawLine(0, h * i / 4f, w, h * i / 4f, grid);
-        if (values.size() < 2) return;
-        double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
-        for (double v : values) { min = Math.min(min, v); max = Math.max(max, v); }
-        double range = Math.max(0.01, max - min);
-        Path path = new Path();
-        for (int i = 0; i < values.size(); i++) {
-            float x = w * i / (values.size() - 1f);
-            float y = (float) (h - 8f - ((values.get(i) - min) / range) * (h - 16f));
-            if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+        float w=getWidth(),h=getHeight();
+        for(int i=1;i<=4;i++) canvas.drawLine(0,h*i/5f,w,h*i/5f,grid);
+        if(bars.size()>=2) drawBars(canvas,w,h);
+        else drawFallback(canvas,w,h);
+    }
+    private void drawBars(Canvas c,float w,float h) {
+        int n=bars.size(); double min=Double.MAX_VALUE,max=-Double.MAX_VALUE,maxVol=1;
+        for(Bar b:bars){min=Math.min(min,b.l);max=Math.max(max,b.h);maxVol=Math.max(maxVol,b.v);}
+        double pad=(max-min)*0.10; if(pad==0)pad=Math.max(0.1,max*0.0002);
+        min-=pad;max+=pad; final double range=max-min;
+        float top=8,bottom=h*0.78f,chartH=bottom-top;
+        float step=w/n,body=Math.max(2f,Math.min(11f,step*0.58f));
+        // Tick-volume bars.
+        p.setStyle(Paint.Style.FILL);
+        for(int i=0;i<n;i++){
+            Bar b=bars.get(i); float x=(i+.5f)*step;
+            p.setColor(b.c>=b.o?0x5532C98B:0x55FF4968);
+            float vh=(float)(Math.max(0,b.v)/maxVol)*(h*.13f);
+            c.drawRect(x-body*.45f,h-3-vh,x+body*.45f,h-3,p);
         }
-        canvas.drawPath(path, glow);
-        canvas.drawPath(path, line);
-        float lastX = w;
-        float lastY = (float) (h - 8f - ((values.get(values.size() - 1) - min) / range) * (h - 16f));
-        float pulse = 0.55f + 0.35f * (float)Math.sin(SystemClock.uptimeMillis() / 420.0);
-        Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
-        dot.setColor(0xFFD7AD54);
-        canvas.drawCircle(lastX - 3f, lastY, 4f + pulse * 2f, dot);
-        if (isAttachedToWindow()) postInvalidateDelayed(90L);
+        // EMA overlays.
+        Path e9=new Path(),e21=new Path();
+        for(int i=0;i<n;i++){
+            float x=(i+.5f)*step;
+            float y9=(float)(bottom-(ema(i,9)-min)/range*chartH);
+            float y21=(float)(bottom-(ema(i,21)-min)/range*chartH);
+            if(i==0){e9.moveTo(x,y9);e21.moveTo(x,y21);}else{e9.lineTo(x,y9);e21.lineTo(x,y21);}
+        }
+        // Candlestick wicks and bodies.
+        for(int i=0;i<n;i++){
+            Bar b=bars.get(i); float x=(i+.5f)*step;
+            float yo=(float)(bottom-(b.o-min)/range*chartH);
+            float yc=(float)(bottom-(b.c-min)/range*chartH);
+            float yh=(float)(bottom-(b.h-min)/range*chartH);
+            float yl=(float)(bottom-(b.l-min)/range*chartH);
+            int color=b.c>=b.o?UP:DOWN;
+            p.setColor(color);p.setStrokeWidth(Math.max(1.2f,step*.10f));p.setStyle(Paint.Style.STROKE);
+            c.drawLine(x,yh,x,yl,p);
+            p.setStyle(Paint.Style.FILL);
+            float bh=Math.max(2f,Math.abs(yc-yo));
+            c.drawRect(x-body/2,Math.min(yo,yc),x+body/2,Math.min(yo,yc)+bh,p);
+        }
+        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);p.setColor(BLUE);c.drawPath(e9,p);
+        p.setStrokeWidth(2.2f);p.setColor(GOLD);c.drawPath(e21,p);
+        Bar last=bars.get(n-1);float ly=(float)(bottom-(last.c-min)/range*chartH);
+        p.setStyle(Paint.Style.FILL);p.setColor(GOLD);c.drawCircle(w-3,ly,3.5f,p);
+    }
+    private void drawFallback(Canvas c,float w,float h) {
+        if(fallback.size()<2)return;
+        double min=Double.MAX_VALUE,max=-Double.MAX_VALUE;
+        for(double v:fallback){min=Math.min(min,v);max=Math.max(max,v);}
+        double range=Math.max(.01,max-min);Path path=new Path();
+        for(int i=0;i<fallback.size();i++){
+            float x=w*i/(fallback.size()-1f);
+            float y=(float)(h-8-((fallback.get(i)-min)/range)*(h-16));
+            if(i==0)path.moveTo(x,y);else path.lineTo(x,y);
+        }
+        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);p.setColor(GOLD);p.setShadowLayer(8,0,0,0x88D7AD54);
+        c.drawPath(path,p);p.clearShadowLayer();
     }
 }

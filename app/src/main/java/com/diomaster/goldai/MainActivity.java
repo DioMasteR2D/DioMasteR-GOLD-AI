@@ -58,6 +58,10 @@ public class MainActivity extends Activity {
     private String mt5Token = "";
     private String mt5Symbol = "XAUUSD";
     private boolean mt5ExecutionEnabled = false;
+    private String mt5Login = "";
+    private String mt5Currency = "USD";
+    private double mt5Balance = 0.0;
+    private double mt5Equity = 0.0;
     private boolean aiEngineStarted = false;
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
 
@@ -79,6 +83,10 @@ public class MainActivity extends Activity {
         mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
         mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
+        mt5Login = mt5Prefs.getString("login", "");
+        mt5Currency = mt5Prefs.getString("currency", "USD");
+        mt5Balance = Double.longBitsToDouble(mt5Prefs.getLong("balance_bits", Double.doubleToRawLongBits(0.0)));
+        mt5Equity = Double.longBitsToDouble(mt5Prefs.getLong("equity_bits", Double.doubleToRawLongBits(0.0)));
         render();
         fetchPrice();
         handler.postDelayed(refreshLoop, 30000L);
@@ -99,12 +107,16 @@ public class MainActivity extends Activity {
                 JSONArray allowed = status.optJSONArray("allowed_symbols");
                 String symbol = allowed != null && allowed.length() > 0 ? allowed.optString(0, "XAUUSD") : "XAUUSD";
                 mt5Symbol = symbol;
+                mt5Login=status.optString("account_login",""); mt5Currency=status.optString("currency","USD");
+                mt5Balance=status.optDouble("balance",0); mt5Equity=status.optDouble("equity",mt5Balance);
                 mt5ExecutionEnabled = status.optBoolean("execution_enabled", false); // server-side DEMO gate is authoritative
                 message = "DEMO · " + status.optString("server", "Vantage") + " · #" +
                         status.optString("account_login") + (mt5ExecutionEnabled ? " · DEMO ORDERS ON" : " · READ ONLY");
                 connected = true;
                 getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
                      .putString("symbol", symbol).putBoolean("execution_enabled", mt5ExecutionEnabled)
+                    .putString("login",mt5Login).putString("currency",mt5Currency)
+                    .putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance)).putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity))
                     .putString("status", message).apply();
             } catch (Exception e) {
                 message = "ΑΥΤΟΜΑΤΗ ΣΥΝΔΕΣΗ: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
@@ -375,29 +387,39 @@ public class MainActivity extends Activity {
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
         hero.setPadding(dp(8),dp(6),dp(8),dp(6));
-        hero.setBackground(round(0xFF090A0D,16,0xFF806126));
+        hero.setBackground(round(0xFF08090B,18,0xFFB98B32));
         ImageView headerArt=new ImageView(this);
         headerArt.setImageResource(R.drawable.ic_gold_launcher);
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(54),dp(54)));
-        LinearLayout brandText = new LinearLayout(this);
-        brandText.setOrientation(LinearLayout.VERTICAL);
-        brandText.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brandTitle=text("Golden Dari",23,0xFFF2C45C,true);
-        brandTitle.setLetterSpacing(0.04f);
-        brandText.addView(brandTitle);
-        TextView brandSub=text("DioMasteR2D  •  AI TRADING",10,0xFFB7A06B,true);
-        brandSub.setLetterSpacing(0.10f);
-        brandText.addView(brandSub);
-        LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1);
-        brandLp.leftMargin=dp(10);
-        hero.addView(brandText,brandLp);
-        TextView demoPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF061A12:0xFFFFE2A0,true);
-        demoPill.setGravity(Gravity.CENTER);
-        demoPill.setPadding(dp(10),dp(7),dp(10),dp(7));
-        demoPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD));
-        hero.addView(demoPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(72)));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(58),dp(58)));
+        LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brandTitle=text("Golden Dari",24,0xFFFFD66B,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView brandSub=text("DioMasteR2D",11,0xFFE0BD73,true); brandSub.setLetterSpacing(0.18f); brandText.addView(brandSub);
+        LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(9); hero.addView(brandText,brandLp);
+        TextView statusPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF071B12:0xFFFFE5A3,true);
+        statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
+        statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD)); hero.addView(statusPill);
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(76)));
+        addSpace(10);
+
+        LinearLayout account=card();
+        account.setBackground(round(0xFF100D08,18,0xFFE3AD43));
+        addLabel(account,"ΛΟΓΑΡΙΑΣΜΟΣ MT5");
+        LinearLayout accountLine=new LinearLayout(this); accountLine.setOrientation(LinearLayout.HORIZONTAL); accountLine.setGravity(Gravity.CENTER_VERTICAL);
+        TextView accountNo=text(mt5Status.startsWith("DEMO")&&!mt5Login.isEmpty()?"#"+mt5Login:"Δεν έχει συνδεθεί λογαριασμός",15,Color.WHITE,true);
+        accountLine.addView(accountNo,new LinearLayout.LayoutParams(0,-2,1));
+        TextView demoTag=text(mt5Status.startsWith("DEMO")?"DEMO":"ΑΝΑΜΟΝΗ",11,Color.WHITE,true); demoTag.setPadding(dp(10),dp(6),dp(10),dp(6)); demoTag.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF39302A,15,GOLD)); accountLine.addView(demoTag); account.addView(accountLine);
+        addRow(account,"Υπόλοιπο",mt5Status.startsWith("DEMO")?String.format(Locale.US,"%s %,.2f",mt5Currency,mt5Balance):"—",GREEN);
+        addRow(account,"Καθαρή αξία",mt5Status.startsWith("DEMO")?String.format(Locale.US,"%s %,.2f",mt5Currency,mt5Equity):"—",GOLD);
+        root.addView(account);
+        addSpace(10);
+
+        LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
+        nav.setBackground(round(0xFF11141A,16,0xFF35302A));
+        String[] navLabels={"▶ Auto Trade","♧ Σήματα","↗ Αγορές","⚙ Ρυθμίσεις"};
+        Runnable[] navActions={()->scrollToSection(agentSection),()->scrollToSection(agentSection),()->scrollToSection(marketSection),()->scrollToSection(settingsSection)};
+        for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(10); tab.setAllCaps(false); tab.setTextColor(i==0?GREEN:(i==3?GOLD:Color.WHITE)); tab.setPadding(dp(2),dp(8),dp(2),dp(8)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(58),1)); }
+        root.addView(nav);
         addSpace(10);
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
@@ -805,6 +827,8 @@ public class MainActivity extends Activity {
                     String display = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login") + (execEnabled ? " · ORDERS ON" : " · READ ONLY");
                     getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).putBoolean("execution_enabled",execEnabled).putString("status",display).apply();
                     mt5BaseUrl=base; mt5Token=secret; mt5Symbol=selectedSymbol; mt5ExecutionEnabled=execEnabled;
+                    mt5Login=status.optString("account_login",""); mt5Currency=status.optString("currency","USD"); mt5Balance=status.optDouble("balance",0); mt5Equity=status.optDouble("equity",mt5Balance);
+                    getSharedPreferences("diomaster_mt5_demo",MODE_PRIVATE).edit().putString("login",mt5Login).putString("currency",mt5Currency).putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance)).putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity)).apply();
                     result = display;
                 } catch (Exception e) {
                     result = "ΑΠΟΤΥΧΙΑ ΣΥΝΔΕΣΗΣ: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());

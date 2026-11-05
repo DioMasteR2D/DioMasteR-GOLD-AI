@@ -31,12 +31,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends Activity {
-    private final int BG = 0xFF090A0D;
-    private final int PANEL = 0xFF14161B;
-    private final int GOLD = 0xFFD7AD54;
-    private final int MUTED = 0xFF9296A0;
-    private final int GREEN = 0xFF39C98A;
-    private final int RED = 0xFFFF6570;
+    private final int BG = 0xFF050506;
+    private final int PANEL = 0xFF111014;
+    private final int GOLD = 0xFFFFC83D;
+    private final int MUTED = 0xFFB5A58A;
+    private final int GREEN = 0xFF19E78A;
+    private final int RED = 0xFFFF5364;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final GoldPriceClient priceClient = new GoldPriceClient();
     private final ArrayList<Double> chartPrices = new ArrayList<>();
@@ -400,22 +400,22 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(8),dp(6),dp(8),dp(6));
-        hero.setBackground(round(0xFF08090B,18,0xFFB98B32));
+        hero.setPadding(dp(10),dp(8),dp(10),dp(8));
+        hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
         ImageView headerArt=new ImageView(this);
         headerArt.setImageResource(R.drawable.ic_gold_launcher);
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(58),dp(58)));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(72),dp(72)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brandTitle=text("Golden DioMasteR2D",20,0xFFFFD66B,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView brandSub=text("DioMasteR2D",11,0xFFE0BD73,true); brandSub.setLetterSpacing(0.18f); brandText.addView(brandSub);
+        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView brandSub=text("GOLD AI  ·  XAUUSD  ·  MT5",10,0xFFFFD98A,true); brandSub.setLetterSpacing(0.18f); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(9); hero.addView(brandText,brandLp);
         TextView statusPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
         statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(76)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(94)));
         addSpace(10);
 
         LinearLayout account=card();
@@ -431,7 +431,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
-        nav.setBackground(round(0xFF11141A,16,0xFF35302A));
+        nav.setBackground(goldShell(0xFF100D08,0xFF5B3A08));
         String[] navLabels={"▶ Auto Trade","♧ Σήματα","↗ Αγορές","⚙ Ρυθμίσεις"};
         Runnable[] navActions={()->scrollToSection(agentSection),()->scrollToSection(agentSection),()->scrollToSection(marketSection),()->scrollToSection(settingsSection)};
         for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(10); tab.setAllCaps(false); tab.setTextColor(i==0?GREEN:(i==3?GOLD:Color.WHITE)); tab.setPadding(dp(2),dp(8),dp(2),dp(8)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(58),1)); }
@@ -737,7 +737,7 @@ public class MainActivity extends Activity {
         bottomNav.setOrientation(LinearLayout.HORIZONTAL);
         bottomNav.setGravity(Gravity.CENTER);
         bottomNav.setPadding(dp(3),dp(7),dp(3),dp(7));
-        bottomNav.setBackground(round(0xFF080A0E,18,0xFF806126));
+        bottomNav.setBackground(goldShell(0xFF080707,0xFF9B6B17));
         String[] bottomLabels={"⌂\\nΑρχική","↗\\nΑγορές","▥\\nΓράφημα","◷\\nΙστορικό","♙\\nΠροφίλ"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
@@ -1058,9 +1058,9 @@ public class MainActivity extends Activity {
         box.setPadding(dp(14), dp(14), dp(14), dp(14));
         GradientDrawable shell = new GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF20212A, 0xFF111319, 0xFF191711});
+                new int[]{0xFF1B1308, 0xFF09090B, 0xFF17100A});
         shell.setCornerRadius(dp(18));
-        shell.setStroke(dp(1), 0xFF806126);
+        shell.setStroke(dp(2), 0xFFC18A20);
         box.setBackground(shell);
         android.view.animation.AlphaAnimation shimmer =
                 new android.view.animation.AlphaAnimation(0.965f, 1.0f);
@@ -1075,7 +1075,7 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(12), dp(12), dp(12), dp(12));
-        box.setBackground(round(PANEL, 13, 0xFF292C34));
+        box.setBackground(goldShell(0xFF121014,0xFF65450F));
         box.addView(text(label, 9, MUTED, true));
         TextView v = text(value, 17, color, true);
         v.setPadding(0, dp(5), 0, 0);
@@ -1133,6 +1133,14 @@ public class MainActivity extends Activity {
         t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return t;
+    }
+
+    private GradientDrawable goldShell(int color, int stroke) {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF241806, color, 0xFF100B06});
+        d.setCornerRadius(dp(16));
+        d.setStroke(dp(2), stroke);
+        return d;
     }
 
     private GradientDrawable round(int color, int radius, int stroke) {

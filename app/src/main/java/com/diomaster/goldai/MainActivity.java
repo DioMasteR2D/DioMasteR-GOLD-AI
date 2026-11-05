@@ -421,8 +421,9 @@ public class MainActivity extends Activity {
         TextView connTitle = text(mt5Status.startsWith("DEMO") ? "✓  ΣΥΝΔΕΣΗ: ΕΝΕΡΓΗ (Αυτόματα)" : "◉  ΣΥΝΔΕΣΗ MT5 DEMO",17,mt5Status.startsWith("DEMO")?0xFF70F5B4:GOLD,true);
         connection.addView(connTitle);
         connection.addView(text("MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD",11,0xFFE0E8E4,false));
-        addRow(connection,"Bridge  ✓","Λογαριασμός  ✓",GREEN);
-        addRow(connection,"Τιμές  "+(quoteFresh()?"✓":"…"),"Εντολές  "+(mt5ExecutionEnabled?"ON":"READ ONLY"),quoteFresh()?GREEN:GOLD);
+        boolean mt5Connected=mt5Status!=null && mt5Status.startsWith("DEMO");
+        addRow(connection,"Bridge  "+(mt5Connected?"✓":"×"),"Λογαριασμός  "+(mt5Connected?"✓":"—"),mt5Connected?GREEN:RED);
+        addRow(connection,"Τιμές  "+(brokerChartActive?"✓":"—"),"Εντολές  "+(mt5ExecutionEnabled?"DEMO ON":"READ ONLY"),brokerChartActive?GREEN:GOLD);
         root.addView(connection);
         addSpace(10);
 
@@ -446,7 +447,13 @@ public class MainActivity extends Activity {
             periods.addView(chip,new LinearLayout.LayoutParams(0,-2,1));
         }
         market.addView(periods);
-        addSpace(8);
+        LinearLayout chartLegend=new LinearLayout(this);
+        chartLegend.setOrientation(LinearLayout.HORIZONTAL);
+        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
+        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
+        ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
+        market.addView(chartLegend);
+        addSpace(5);
         GoldChartView chart = new GoldChartView(this);
         chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(220)));
         if (brokerChartActive) chart.setCandles(brokerCandles);
@@ -454,7 +461,7 @@ public class MainActivity extends Activity {
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
         indicators.setOrientation(LinearLayout.HORIZONTAL);
-        boolean haveOhlc=brokerChartActive && brokerCandles.length()>=22;
+        boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
         double emaFast=calcEma(9), emaSlow=calcEma(21);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());

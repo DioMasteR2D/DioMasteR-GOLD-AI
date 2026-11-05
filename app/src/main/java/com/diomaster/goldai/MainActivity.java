@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private String mt5Token = "";
     private String mt5Symbol = "XAUUSD";
     private boolean mt5ExecutionEnabled = false;
+    private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
@@ -111,6 +112,7 @@ public class MainActivity extends Activity {
                     feedMessage = "Ζωντανή ενδεικτική τιμή · ενημέρωση " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                     chartPrices.add(value);
                     while (chartPrices.size() > 90) chartPrices.remove(0);
+                    aiSignal = GoldAiAgent.analyze(chartPrices, value);
                     engine.onQuote(value);
                     render();
                 });
@@ -256,6 +258,38 @@ public class MainActivity extends Activity {
         root.addView(market);
         addSpace(10);
 
+        LinearLayout agent = card();
+        addLabel(agent, "DIOMASTER AI AGENT · LIVE MARKET ANALYSIS");
+        int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
+        String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
+        TextView signal = text(signalTitle, 25, signalColor, true);
+        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
+            android.view.animation.AlphaAnimation pulse = new android.view.animation.AlphaAnimation(0.55f, 1.0f);
+            pulse.setDuration(850L); pulse.setRepeatMode(android.view.animation.Animation.REVERSE);
+            pulse.setRepeatCount(android.view.animation.Animation.INFINITE); signal.startAnimation(pulse);
+        }
+        agent.addView(signal);
+        TextView confidence = text(aiSignal.ready ? "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%" : "Ο Agent περιμένει επαρκή δεδομένα", 11, MUTED, true);
+        confidence.setPadding(0, dp(4), 0, dp(8));
+        agent.addView(confidence);
+        TextView reason = text(aiSignal.reason, 12, 0xFFE2E4E8, false);
+        agent.addView(reason);
+        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
+            addDivider(agent);
+            addRow(agent, "Ενδεικτική είσοδος", money(aiSignal.entry), GOLD);
+            addRow(agent, "Stop Loss", money(aiSignal.stopLoss), RED);
+            addRow(agent, "Take Profit", money(aiSignal.takeProfit), GREEN);
+            addRow(agent, "Risk / Reward", "1 : 1.8", GOLD);
+        } else {
+            TextView waiting = text("Οι ενδείξεις είναι αναλυτικά σήματα, όχι εντολές broker. Δεν ανοίγει συναλλαγή αυτόματα.", 10, MUTED, false);
+            waiting.setPadding(0, dp(8), 0, 0);
+            agent.addView(waiting);
+        }
+        Button refreshAgent = actionButton("ΑΝΑΝΕΩΣΗ ΑΝΑΛΥΣΗΣ", 0xFF292C34, this::fetchPrice);
+        agent.addView(refreshAgent);
+        root.addView(agent);
+        addSpace(10);
+
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
@@ -372,12 +406,12 @@ public class MainActivity extends Activity {
         addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
         addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
-        addRow(connections, "Μηχανή σημάτων AI", "ΜΗ ΕΝΕΡΓΗ", MUTED);
-        addRow(connections, "Πραγματικές εντολές broker", "ΑΠΕΝΕΡΓΟΠΟΙΗΜΕΝΕΣ", GREEN);
-        TextView bridgeNote = text("Το MT5 χρειάζεται ξεχωριστό υπολογιστή Windows ή VPS με MetaTrader 5 και ασφαλή γέφυρα σύνδεσης. Η εφαρμογή δεν εμφανίζει ψεύτικη σύνδεση broker.", 10, MUTED, false);
+        addRow(connections, "Μηχανή σημάτων AI", aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ", aiSignal.ready ? GOLD : MUTED);
+        addRow(connections, "Αυτόματες εντολές Vantage", "API ACCESS PENDING · OFF", GOLD);
+        TextView bridgeNote = text("Ο AI Agent και το γράφημα λειτουργούν απευθείας στο Android. Η εφαρμογή MT5 Android δεν παρέχει δημόσιο API για τρίτες εφαρμογές ώστε να στέλνουν αυτόματα εντολές. Για αυτόματη εκτέλεση στον Vantage λογαριασμό απαιτείται επίσημη εξουσιοδοτημένη πρόσβαση API από τον broker. Μέχρι να επιβεβαιωθεί, εμφανίζουμε σήματα αλλά δεν στέλνουμε live εντολές. Η παλιά γέφυρα Windows παραμένει προαιρετική.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
-        Button bridgeInfo = actionButton("ΡΥΘΜΙΣΗ / ΕΛΕΓΧΟΣ ΣΥΝΔΕΣΗΣ MT5 DEMO", 0xFF292C34, this::configureMt5Bridge);
+        Button bridgeInfo = actionButton("ΠΑΛΙΑ ΓΕΦΥΡΑ MT5 WINDOWS (ΠΡΟΑΙΡΕΤΙΚΗ)", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
         connections.addView(mt5Positions);

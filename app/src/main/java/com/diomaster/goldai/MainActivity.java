@@ -441,7 +441,7 @@ public class MainActivity extends Activity {
 
         LinearLayout market = card();
         marketSection = market;
-        addLabel(market, "XAUUSD · SPOT PRICE SNAPSHOTS");
+        addLabel(market, brokerChartActive ? "XAUUSD · VANTAGE MT5 DEMO OHLC" : "XAUUSD · SPOT PRICE SNAPSHOTS");
         TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
@@ -541,11 +541,18 @@ public class MainActivity extends Activity {
 
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
         LinearLayout metrics = new LinearLayout(this);
-        metrics.setOrientation(LinearLayout.HORIZONTAL);
-        metrics.addView(metric("PAPER ΚΕΦΑΛΑΙΟ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
-        metrics.addView(metric("ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
-        metrics.addView(metric("ΚΛΕΙΣΜΕΝΟ P/L", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
-        metrics.addView(metric("ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ", snap.optJSONArray("positions").length() + " / 10", GOLD), weight());
+        metrics.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout metricsTop = new LinearLayout(this);
+        metricsTop.setOrientation(LinearLayout.HORIZONTAL);
+        metricsTop.addView(metric("PAPER ΚΕΦΑΛΑΙΟ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
+        metricsTop.addView(metric("ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        LinearLayout metricsBottom = new LinearLayout(this);
+        metricsBottom.setOrientation(LinearLayout.HORIZONTAL);
+        metricsBottom.addView(metric("ΚΛΕΙΣΜΕΝΟ P/L", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
+        metricsBottom.addView(metric("ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ", snap.optJSONArray("positions").length() + " / 10", GOLD), weight());
+        metrics.addView(metricsTop);
+        addSpace(4);
+        metrics.addView(metricsBottom);
         root.addView(metrics);
         addSpace(10);
 
@@ -758,7 +765,7 @@ public class MainActivity extends Activity {
     private String cleanBridgeToken(String value) {
         if (value == null) return "";
         // Bearer credentials must never contain CR/LF or pasted whitespace.
-        return value.replaceAll("\\s+", "");
+        String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");\n        return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
     }
 
     private void configureMt5Bridge() {

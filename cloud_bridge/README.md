@@ -1,34 +1,34 @@
-# DioMasteR GOLD AI — MetaApi Cloud DEMO bridge
+# DioMasteR GOLD AI — TickerAll Vantage MT5 DEMO bridge
 
-This service connects the Android app to a Vantage MT5 DEMO account through MetaApi Cloud. It does not require a user-managed Windows PC/VPS. It is a separate Linux-compatible service; do not deploy the legacy `bridge/` folder to Render because that service imports the Windows-only MetaTrader5 terminal package.
+This service connects the Android application to a Vantage MT5 DEMO account through the TickerAll REST API. The TickerAll API key and the separate app bridge token stay in Render environment secrets; neither is compiled into the APK.
 
-## Required Render environment secrets
-- `METAAPI_TOKEN`: MetaApi API token (secret)
-- `METAAPI_ACCOUNT_ID`: ID of the Vantage MT5 account added to MetaApi
-- `DIO_BRIDGE_TOKEN`: a separate long random token entered in the Android app
-- `METAAPI_CLIENT_API`: optional regional client API URL; default is New York
-- `DIO_MT5_ALLOWED_SYMBOLS`: exact broker symbol, e.g. XAUUSD or XAUUSD.
-- `DIO_MT5_MAX_VOLUME`: default 0.01 lots
-- `DIO_MT5_MAX_RISK_FRACTION`: default 0.0025 (0.25%)
-- `DIO_MT5_MAGIC`: default 26051105
-- `DIO_MT5_DEMO_EXECUTION_ENABLED`: default false; set true only after the account information endpoint confirms DEMO and a broker quote/specification has been verified.
+## Render configuration
+- Root directory: repository root
+- Build: `pip install -r cloud_bridge/requirements.txt`
+- Start: `cd cloud_bridge && uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Health check: `/health`
 
-Never place MetaApi or broker credentials in Android, GitHub, chat, or source control. Configure the MT5 account in MetaApi using its secure end-user configuration link. Use a DEMO account only.
+## Required Render secrets and settings
+- `TICKERALL_API_KEY`: TickerAll bearer API key.
+- `DIO_BRIDGE_TOKEN`: long random bearer token entered once in the Android app.
+- `TICKERALL_ACCOUNT_ID`: optional exact TickerAll account ID when more than one matching Vantage DEMO account exists.
+- `TICKERALL_SERVER`: exact broker server name; default `VantageMarkets-Demo`.
+- `DIO_MT5_ALLOWED_SYMBOLS`: allowed broker-native symbols.
+- `DIO_MT5_DEMO_EXECUTION_ENABLED`: remains false until the account's actual symbol contract and risk sizing have been verified.
+- `DIO_MT5_MAX_VOLUME`, `DIO_MT5_MAX_RISK_FRACTION`, `DIO_MT5_MAX_POSITIONS`: server-side execution caps.
 
-## Deploy
-Root directory: `cloud_bridge`
-Build command: `pip install -r requirements.txt`
-Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-Use a continuously running paid Render web service for unattended availability; free services can sleep.
+Never store the TickerAll key or broker password in the Android app, GitHub, or logs. This bridge rejects accounts unless both the linked account record and the live account details identify it as MT5 DEMO on the configured Vantage server.
 
 ## Endpoints
-Authenticated endpoints use `Authorization: Bearer <DIO_BRIDGE_TOKEN>`.
-- GET `/health`
-- GET `/v1/status` — refuses anything except a MetaApi account reporting `ACCOUNT_TRADE_MODE_DEMO` or `DEMO`, and requires a connected terminal
-- GET `/v1/quote/{symbol}`
-- GET `/v1/positions`
-- POST `/v1/order` — market BUY/SELL with mandatory absolute SL/TP, broker volume-step validation, allowlisted symbol, 0.25% equity risk cap, and fixed max volume
-- POST `/v1/positions/{ticket}/close` — only closes positions with the configured bot magic number
-- Auto endpoints explicitly report unsupported; no fake auto-running status is returned.
+All endpoints except `/health` require `Authorization: Bearer <DIO_BRIDGE_TOKEN>`.
+- `GET /health`: service health.
+- `GET /v1/status`: live MT5 DEMO identity and connection status.
+- `GET /v1/quote/{symbol}`: last M1 candle close, explicitly not a bid/ask tick.
+- `GET /v1/candles/{symbol}?timeframe=M15&hours=48`: normalized broker OHLC candles and completeness metadata.
+- `GET /v1/positions`: live broker open positions.
+- `GET /v1/history?symbol=XAUUSD&limit=50`: broker closed-trade history.
+- `POST /v1/order`: guarded manual DEMO market order; execution stays disabled by default.
+- `POST /v1/positions/{ticket}/close`: guarded close of a DioMasteR-tagged DEMO position.
+- `/v1/auto/*`: explicitly reports that cloud auto-execution is not available until a persistent worker, broker tick feed, verified contract sizing, and restart-safe risk state are implemented.
 
-This first cloud version supports **manual app-initiated DEMO orders**. Automatic strategy execution is not enabled until candle-based strategy logic, position reconciliation, duplicate-order protection, and cloud kill-switch behavior have been implemented and tested. No LIVE trading path exists.
+The Render Free plan can sleep when idle. It is not an always-on unattended trading host. The Android UI must show stale/offline status honestly rather than claiming a live connection.

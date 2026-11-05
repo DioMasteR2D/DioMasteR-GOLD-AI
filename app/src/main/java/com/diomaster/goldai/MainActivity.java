@@ -101,7 +101,7 @@ public class MainActivity extends Activity {
                 mt5Symbol = symbol;
                 mt5ExecutionEnabled = status.optBoolean("execution_enabled", false); // server-side DEMO gate is authoritative
                 message = "DEMO · " + status.optString("server", "Vantage") + " · #" +
-                        status.optString("account_login") + " · READ ONLY";
+                        status.optString("account_login") + (mt5ExecutionEnabled ? " · DEMO ORDERS ON" : " · READ ONLY");
                 connected = true;
                 getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
                      .putString("symbol", symbol).putBoolean("execution_enabled", mt5ExecutionEnabled)
@@ -111,9 +111,10 @@ public class MainActivity extends Activity {
             }
             final String result = message;
             final boolean ok = connected;
+            final boolean ordersEnabled = connected && mt5ExecutionEnabled;
             runOnUiThread(() -> {
                 mt5Status = result;
-                mt5ExecutionEnabled = false;
+                mt5ExecutionEnabled = ordersEnabled;
                 render();
                 if (ok) { fetchPrice(); loadMt5AccountData(); }
                 Toast.makeText(this, result, Toast.LENGTH_LONG).show();

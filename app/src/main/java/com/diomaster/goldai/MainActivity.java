@@ -421,29 +421,7 @@ public class MainActivity extends Activity {
         for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(10); tab.setAllCaps(false); tab.setTextColor(i==0?GREEN:(i==3?GOLD:Color.WHITE)); tab.setPadding(dp(2),dp(8),dp(2),dp(8)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(58),1)); }
         root.addView(nav);
         addSpace(10);
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setGravity(Gravity.CENTER);
-        nav.setBackground(round(0xFF11141A, 18, 0xFF806126));
-        String[] navLabels = {"⌂ Αρχική", "▥ Chart", "✧ AI Agent", "⇄ Συναλλαγές", "◷ Ιστορικό", "⚙ Ρυθμίσεις"};
-        Runnable[] navActions = {
-            () -> scrollToSection(marketSection), () -> scrollToSection(marketSection),
-            () -> scrollToSection(agentSection), () -> scrollToSection(tradesSection),
-            () -> scrollToSection(historySection), () -> scrollToSection(settingsSection)
-        };
-        for (int i=0;i<navLabels.length;i++) {
-            final int index=i;
-            Button tab = new Button(this);
-            tab.setText(navLabels[i]); tab.setTextSize(9); tab.setAllCaps(false);
-            tab.setTextColor(i==0 ? GOLD : 0xFFE4E5E8);
-            tab.setPadding(dp(2),dp(8),dp(2),dp(8));
-            tab.setMinWidth(0); tab.setMinimumWidth(0);
-            tab.setBackgroundColor(Color.TRANSPARENT);
-            tab.setOnClickListener(v -> navActions[index].run());
-            nav.addView(tab,new LinearLayout.LayoutParams(0,-2,1));
-        }
-        root.addView(nav);
-        addSpace(10);
+
 
         LinearLayout connection = card();
         GradientDrawable connBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,

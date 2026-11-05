@@ -379,6 +379,15 @@ public class MainActivity extends Activity {
             pulse.setRepeatCount(android.view.animation.Animation.INFINITE); signal.startAnimation(pulse);
         }
         agent.addView(signal);
+        LinearLayout signalRow = new LinearLayout(this);
+        signalRow.setOrientation(LinearLayout.HORIZONTAL);
+        TextView setup = text(aiSignal.ready && !"HOLD".equals(aiSignal.side) ? aiSignal.side+" SETUP" : "WAITING FOR SETUP",13,0xFFFFFFFF,true);
+        setup.setGravity(Gravity.CENTER); setup.setPadding(dp(12),dp(10),dp(12),dp(10));
+        setup.setBackground(round(aiSignal.ready && "BUY".equals(aiSignal.side)?0xFF087C43:0xFF22262E,12,0xFF24D978));
+        signalRow.addView(setup,new LinearLayout.LayoutParams(0,-2,1));
+        TextView probability=text(aiSignal.ready?aiSignal.confidence+"%":"—",23,GREEN,true);
+        probability.setGravity(Gravity.CENTER); signalRow.addView(probability,new LinearLayout.LayoutParams(dp(84),-2));
+        agent.addView(signalRow);
         TextView confidence = text(!aiSignal.ready ? "Ο Agent περιμένει επαρκή δεδομένα" : "HOLD".equals(aiSignal.side) ? "Δεν υπάρχει επιβεβαιωμένο setup" : "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%", 11, MUTED, true);
         confidence.setPadding(0, dp(4), 0, dp(8));
         agent.addView(confidence);
@@ -413,14 +422,10 @@ public class MainActivity extends Activity {
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.HORIZONTAL);
         metrics.addView(metric("PAPER ΚΕΦΑΛΑΙΟ", PaperTradingEngine.money(snap.optDouble("equity")), GOLD), weight());
-        metrics.addView(metric("PAPER ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        metrics.addView(metric("ΑΝΟΙΧΤΟ P/L", PaperTradingEngine.money(snap.optDouble("floating")), snap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        metrics.addView(metric("ΚΛΕΙΣΜΕΝΟ P/L", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
+        metrics.addView(metric("ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ", snap.optJSONArray("positions").length() + " / 10", GOLD), weight());
         root.addView(metrics);
-        addSpace(8);
-        LinearLayout metrics2 = new LinearLayout(this);
-        metrics2.setOrientation(LinearLayout.HORIZONTAL);
-        metrics2.addView(metric("ΚΛΕΙΣΜΕΝΟ P/L ΣΗΜΕΡΑ", PaperTradingEngine.money(snap.optDouble("daily")), snap.optDouble("daily") >= 0 ? GREEN : RED), weight());
-        metrics2.addView(metric("ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ", snap.optJSONArray("positions").length() + " / " + PaperTradingEngine.MAX_POSITIONS, GOLD), weight());
-        root.addView(metrics2);
         addSpace(10);
 
         LinearLayout risk = card();

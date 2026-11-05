@@ -16,7 +16,52 @@ SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
 MAX_BOT_POSITIONS=int(os.getenv("DIO_MT5_MAX_POSITIONS","10"))
-app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.0.0")
+app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.1.0")
+
+# Live bid/ask cache populated by TickerAll's realtime WebSocket.
+import asyncio, json, time
+import websockets
+
+LIVE_TICKS={}
+_stream_task=None
+
+async def live_tick_stream():
+    while True:
+        try:
+            row=await account()
+            symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
+            symbols=symbols_data.get("symbols",[])
+            symbol=choose_symbol(symbols)
+            url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
+            async with websockets.connect(url,ping_interval=20,ping_timeout=20,close_timeout=5) as ws:
+                await ws.send(json.dumps({"type":"subscribe","channels":[
+                    {"kind":"ticks","accountId":row["id"],"symbols":[symbol]}]}))
+                async for raw in ws:
+                    msg=json.loads(raw)
+                    if msg.get("type")=="tick" and msg.get("symbol")==symbol:
+                        bid=float(msg.get("bid") or 0); ask=float(msg.get("ask") or 0)
+                        stamp=msg.get("timestamp")
+                        if isinstance(stamp,str):
+                            ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
+                        else: ts=float(stamp or 0)
+                        if bid>0 and ask>=bid and ts>0:
+                            LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
+                              "time":ts,"received_at":time.time(),"quote_source":"tickerall_live_websocket_tick",
+                              "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(5)
+
+@app.on_event("startup")
+async def start_live_stream():
+    global _stream_task
+    _stream_task=asyncio.create_task(live_tick_stream())
+
+@app.on_event("shutdown")
+async def stop_live_stream():
+    if _stream_task:
+        _stream_task.cancel()
 
 class Order(BaseModel):
     symbol:str=Field(min_length=3,max_length=32)
@@ -86,7 +131,7 @@ def choose_symbol(symbols):
 @app.get("/")
 @app.head("/")
 def root_health():
-    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.0.0"}
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.1.0"}
 
 @app.get("/health")
 def health():
@@ -112,24 +157,15 @@ async def status(authorization:Optional[str]=Header(default=None)):
 async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
     auth(authorization); row,_=await account_detail()
     symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
-    available=symbols_data.get("symbols",[])
-    if symbol not in available: raise HTTPException(404,"Broker-native symbol not found; inspect /v1/status allowed_symbols")
-    candles=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe=M1&hours=1")
-    bars=candles.get("candles",[])
-    if not bars: raise HTTPException(503,"No broker M1 candles available")
-    last=bars[-1]; bid=float(last.get("close") or last.get("bid") or 0)
-    raw_ts=last.get("timestamp")
-    if isinstance(raw_ts,(int,float)):
-        ts=float(raw_ts)
-    elif isinstance(raw_ts,str):
-        try: ts=datetime.fromisoformat(raw_ts.replace("Z","+00:00")).replace(tzinfo=timezone.utc).timestamp()
-        except ValueError: raise HTTPException(502,"TickerAll returned an invalid candle timestamp")
-    else:
-        ts=0.0
-    if bid<=0 or ts<=0: raise HTTPException(503,"Invalid broker candle price/timestamp")
-    # REST candles are OHLC bar closes, not a bid/ask tick. Keep the distinction explicit.
-    return {"symbol":symbol,"bid":bid,"ask":bid,"time":ts,
-      "quote_source":"last_M1_candle_close_not_live_tick","account_mode":"DEMO"}
+    if symbol not in symbols_data.get("symbols",[]):
+        raise HTTPException(404,"Broker-native symbol not found; inspect /v1/status allowed_symbols")
+    tick=LIVE_TICKS.get(symbol)
+    if not tick:
+        raise HTTPException(503,"WAITING_FOR_LIVE_TICK: TickerAll WebSocket has not delivered a live broker tick yet")
+    age=time.time()-float(tick["received_at"])
+    if tick.get("stale") or age>15:
+        raise HTTPException(503,f"STALE_LIVE_TICK: last broker tick is {int(age)} seconds old")
+    return {k:v for k,v in tick.items() if k!="received_at"}
 
 @app.get("/v1/candles/{symbol}")
 async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Optional[str]=Header(default=None)):

@@ -149,11 +149,11 @@ async def account():
         SESSION_ACCOUNT_ID=str(session.get("accountId") or "")
         if not SESSION_ACCOUNT_ID:
             raise HTTPException(502,"TickerAll session response did not include accountId")
-        data=await ta("GET","/v1/accounts")
-        rows=data if isinstance(data,list) else data.get("accounts",[])
-        match=next((x for x in rows if str(x.get("id"))==SESSION_ACCOUNT_ID),None)
-        if not match:
-            raise HTTPException(503,"TickerAll session created but account is not yet visible; retry shortly")
+        # The session response is the authoritative source of accountId.
+        # Do not depend on the roster list being updated immediately after session creation.
+        match=await ta("GET",f"/v1/accounts/{SESSION_ACCOUNT_ID}")
+        if not isinstance(match,dict) or str(match.get("id"))!=SESSION_ACCOUNT_ID:
+            raise HTTPException(502,"TickerAll session created but account detail did not return the expected accountId")
 
     if match.get("isDemo") is not True: raise HTTPException(403,"TickerAll did not verify this as DEMO")
     if str(match.get("broker","")).lower()!="mt5": raise HTTPException(403,"Only MT5 is allowed")

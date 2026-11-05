@@ -714,7 +714,13 @@ public class MainActivity extends Activity {
     }
 
 
-    private String cleanBridgeToken(String value) {\n        if (value == null) return "";\n        // Bearer credentials must never contain CR/LF or pasted whitespace.\n        return value.replaceAll("\\\\s+", "");\n    }\n\n    private void configureMt5Bridge() {
+    private String cleanBridgeToken(String value) {
+        if (value == null) return "";
+        // Bearer credentials must never contain CR/LF or pasted whitespace.
+        return value.replaceAll("\\s+", "");
+    }
+
+    private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(8);

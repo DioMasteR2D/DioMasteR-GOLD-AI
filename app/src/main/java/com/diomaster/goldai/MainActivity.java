@@ -276,19 +276,23 @@ public class MainActivity extends Activity {
         setContentView(scroll);
         scroll.post(() -> scroll.scrollTo(0, previousScrollY));
 
-        LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        TextView brand = text("◆ DioMasteR GOLD AI", 19, GOLD, true);
-        android.view.animation.AlphaAnimation glow = new android.view.animation.AlphaAnimation(0.72f, 1.0f);
-        glow.setDuration(1100L); glow.setRepeatMode(android.view.animation.Animation.REVERSE); glow.setRepeatCount(android.view.animation.Animation.INFINITE);
-        brand.startAnimation(glow);
-        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mode = text(mt5ExecutionEnabled ? "MT5 DEMO · ORDERS ON" : "PAPER MODE", 10, GREEN, true);
-        mode.setPadding(dp(10), dp(7), dp(10), dp(7));
-        mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
-        header.addView(mode);
-        root.addView(header);
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setGravity(Gravity.CENTER);
+        hero.setPadding(dp(10),dp(14),dp(10),dp(12));
+        GradientDrawable heroBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF17120B,0xFF080A10,0xFF241805});
+        heroBg.setCornerRadius(dp(18)); heroBg.setStroke(dp(1),0xFFB98B32);
+        hero.setBackground(heroBg);
+        TextView crown = text("♛",27,GOLD,true); hero.addView(crown);
+        TextView brand = text("DioMasteR",29,0xFFF4F4F5,true); hero.addView(brand);
+        TextView goldTitle = text("GOLD AI  v2.0 PRO",26,0xFFFFC83D,true); hero.addView(goldTitle);
+        TextView subtitle = text("AI TRADING SYSTEM  •  XAUUSD  •  MT5  •  AUTO",9,0xFFD7D9DF,true);
+        subtitle.setPadding(0,dp(5),0,0); hero.addView(subtitle);
+        android.view.animation.AlphaAnimation glow = new android.view.animation.AlphaAnimation(0.78f,1.0f);
+        glow.setDuration(1300L); glow.setRepeatMode(android.view.animation.Animation.REVERSE); glow.setRepeatCount(android.view.animation.Animation.INFINITE);
+        goldTitle.startAnimation(glow);
+        root.addView(hero);
         addSpace(10);
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
@@ -312,7 +316,20 @@ public class MainActivity extends Activity {
             nav.addView(tab,new LinearLayout.LayoutParams(0,-2,1));
         }
         root.addView(nav);
-        addSpace(12);
+        addSpace(10);
+
+        LinearLayout connection = card();
+        GradientDrawable connBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF062B20,0xFF061B18,0xFF092B22});
+        connBg.setCornerRadius(dp(18)); connBg.setStroke(dp(2), mt5Status.startsWith("DEMO") ? 0xFF19E78A : 0xFFB98B32);
+        connection.setBackground(connBg);
+        TextView connTitle = text(mt5Status.startsWith("DEMO") ? "✓  ΣΥΝΔΕΣΗ: ΕΝΕΡΓΗ (Αυτόματα)" : "◉  ΣΥΝΔΕΣΗ MT5 DEMO",17,mt5Status.startsWith("DEMO")?0xFF70F5B4:GOLD,true);
+        connection.addView(connTitle);
+        connection.addView(text("MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD",11,0xFFE0E8E4,false));
+        addRow(connection,"Bridge  ✓","Λογαριασμός  ✓",GREEN);
+        addRow(connection,"Τιμές  "+(quoteFresh()?"✓":"…"),"Εντολές  "+(mt5ExecutionEnabled?"ON":"READ ONLY"),quoteFresh()?GREEN:GOLD);
+        root.addView(connection);
+        addSpace(10);
 
         LinearLayout market = card();
         marketSection = market;

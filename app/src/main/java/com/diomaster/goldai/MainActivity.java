@@ -246,7 +246,7 @@ public class MainActivity extends Activity {
         addSpace(14);
 
         LinearLayout market = card();
-        addLabel(market, "XAUUSD · ΕΝΔΕΙΚΤΙΚΗ ΤΙΜΗ ΧΡΥΣΟΥ");
+        addLabel(market, "XAUUSD · SPOT PRICE SNAPSHOTS");
         TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
@@ -255,6 +255,9 @@ public class MainActivity extends Activity {
         chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(92)));
         for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
+        TextView chartNote = text("Ενδεικτική spot ροή ανά 30s · όχι ακόμη broker tick / OHLC feed.", 9, MUTED, false);
+        chartNote.setPadding(0, dp(5), 0, 0);
+        market.addView(chartNote);
         root.addView(market);
         addSpace(10);
 
@@ -269,7 +272,7 @@ public class MainActivity extends Activity {
             pulse.setRepeatCount(android.view.animation.Animation.INFINITE); signal.startAnimation(pulse);
         }
         agent.addView(signal);
-        TextView confidence = text(aiSignal.ready ? "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%" : "Ο Agent περιμένει επαρκή δεδομένα", 11, MUTED, true);
+        TextView confidence = text(!aiSignal.ready ? "Ο Agent περιμένει επαρκή δεδομένα" : "HOLD".equals(aiSignal.side) ? "Δεν υπάρχει επιβεβαιωμένο setup" : "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%", 11, MUTED, true);
         confidence.setPadding(0, dp(4), 0, dp(8));
         agent.addView(confidence);
         TextView reason = text(aiSignal.reason, 12, 0xFFE2E4E8, false);
@@ -281,7 +284,7 @@ public class MainActivity extends Activity {
             addRow(agent, "Take Profit", money(aiSignal.takeProfit), GREEN);
             addRow(agent, "Risk / Reward", "1 : 1.8", GOLD);
         } else {
-            TextView waiting = text("Οι ενδείξεις είναι αναλυτικά σήματα, όχι εντολές broker. Δεν ανοίγει συναλλαγή αυτόματα.", 10, MUTED, false);
+            TextView waiting = text("Οι ενδείξεις είναι αναλυτικά σήματα, όχι εντολές broker. Το liquidity sweep / FVG απαιτεί επιβεβαιωμένα OHLC candles. Δεν ανοίγει συναλλαγή αυτόματα.", 10, MUTED, false);
             waiting.setPadding(0, dp(8), 0, 0);
             agent.addView(waiting);
         }

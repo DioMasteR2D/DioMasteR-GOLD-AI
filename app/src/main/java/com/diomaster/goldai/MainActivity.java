@@ -338,10 +338,29 @@ public class MainActivity extends Activity {
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
         market.addView(feed);
+        LinearLayout periods = new LinearLayout(this);
+        periods.setOrientation(LinearLayout.HORIZONTAL);
+        periods.setGravity(Gravity.CENTER);
+        String[] frames={"M1","M5","M15","M30","H1","H4","D1"};
+        for(String frame:frames) {
+            TextView chip=text(frame,10,"M15".equals(frame)?Color.BLACK:0xFFE8E8EA,true);
+            chip.setGravity(Gravity.CENTER); chip.setPadding(dp(8),dp(8),dp(8),dp(8));
+            chip.setBackground("M15".equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+            periods.addView(chip,new LinearLayout.LayoutParams(0,-2,1));
+        }
+        market.addView(periods);
+        addSpace(8);
         GoldChartView chart = new GoldChartView(this);
         chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(92)));
         for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
+        LinearLayout indicators = new LinearLayout(this);
+        indicators.setOrientation(LinearLayout.HORIZONTAL);
+        indicators.addView(metric("RSI (14)","—  Neutral",GREEN),weight());
+        indicators.addView(metric("MACD","—  Waiting",GOLD),weight());
+        indicators.addView(metric("ATR (14)","—",GREEN),weight());
+        indicators.addView(metric("Τάση EMA","—",GOLD),weight());
+        market.addView(indicators);
         TextView chartNote = text("Ενδεικτική spot ροή ανά 30s · όχι ακόμη broker tick / OHLC feed.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);

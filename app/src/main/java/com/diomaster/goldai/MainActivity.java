@@ -549,7 +549,18 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(14), dp(14), dp(14));
-        box.setBackground(round(PANEL, 16, 0xFF292C34));
+        GradientDrawable shell = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF20212A, 0xFF111319, 0xFF191711});
+        shell.setCornerRadius(dp(18));
+        shell.setStroke(dp(1), 0xFF806126);
+        box.setBackground(shell);
+        android.view.animation.AlphaAnimation shimmer =
+                new android.view.animation.AlphaAnimation(0.965f, 1.0f);
+        shimmer.setDuration(2200L);
+        shimmer.setRepeatMode(android.view.animation.Animation.REVERSE);
+        shimmer.setRepeatCount(android.view.animation.Animation.INFINITE);
+        box.startAnimation(shimmer);
         return box;
     }
 

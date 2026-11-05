@@ -798,15 +798,34 @@ public class MainActivity extends Activity {
         render();
     }
 
+    private void setAutoDiagnostic(String message) {
+        if (message == null || message.equals(autoExecutionMessage)) return;
+        autoExecutionMessage = message;
+        render();
+    }
+
+    // Diagnostics explain every local gate; GoldAiAgent strategy and thresholds remain unchanged.
     private void evaluateAutoSignal(JSONArray bars, long quoteTimestamp) {
-        if (!aiEngineStarted || autoOrderInFlight || !brokerChartActive || !quoteFresh()
-                || !mt5ExecutionEnabled || !aiSignal.ready
-                || !("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
-                || aiSignal.stopLoss <= 0 || aiSignal.takeProfit <= 0) return;
+        if (!aiEngineStarted) return;
+        if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
+        if (!brokerChartActive) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · δεν έχουν φορτωθεί broker OHLC candles"); return; }
+        if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 120 δευτ."); return; }
+        if (!mt5ExecutionEnabled) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · ο server δεν επιτρέπει DEMO εντολές"); return; }
+        if (bars == null || bars.length() < 2) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · ανεπαρκή OHLC candles"); return; }
+        if (!aiSignal.ready) { setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · " + aiSignal.reason); return; }
+        if (!("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))) {
+            setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · " + aiSignal.side + " · " + aiSignal.reason);
+            return;
+        }
+        if (aiSignal.stopLoss <= 0 || aiSignal.takeProfit <= 0) {
+            setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · το σήμα δεν έχει έγκυρα SL/TP");
+            return;
+        }
         JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
-        if (latestBar == null) return;
+        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
         long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
-        if (barTime <= 0 || barTime == lastAutoSignalBar) return;
+        if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
+        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη ελεγχθεί"); return; }
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;

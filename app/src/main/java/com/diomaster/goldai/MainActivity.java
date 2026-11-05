@@ -402,20 +402,19 @@ public class MainActivity extends Activity {
         hero.setGravity(Gravity.CENTER_VERTICAL);
         hero.setPadding(dp(10),dp(8),dp(10),dp(8));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
-        ImageView headerArt=new ImageView(this);
-        headerArt.setImageResource(R.drawable.ic_gold_launcher);
-        headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(72),dp(72)));
-        LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView brandSub=text("GOLD AI  ·  XAUUSD  ·  MT5",10,0xFFFFD98A,true); brandSub.setLetterSpacing(0.18f); brandText.addView(brandSub);
-        LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(9); hero.addView(brandText,brandLp);
+        MascotView headerArt=new MascotView(this);
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(82)));
+        LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
+        TextView brandTitle=text("DioMasteR2D",19,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView goldTitle=text("GOLD AI",25,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
+        TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
+        LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         TextView statusPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
         statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(94)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(108)));
         addSpace(10);
 
         LinearLayout account=card();
@@ -432,9 +431,9 @@ public class MainActivity extends Activity {
 
         LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
         nav.setBackground(goldShell(0xFF100D08,0xFF5B3A08));
-        String[] navLabels={"▶ Auto Trade","♧ Σήματα","↗ Αγορές","⚙ Ρυθμίσεις"};
-        Runnable[] navActions={()->scrollToSection(agentSection),()->scrollToSection(agentSection),()->scrollToSection(marketSection),()->scrollToSection(settingsSection)};
-        for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(10); tab.setAllCaps(false); tab.setTextColor(i==0?GREEN:(i==3?GOLD:Color.WHITE)); tab.setPadding(dp(2),dp(8),dp(2),dp(8)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(58),1)); }
+        String[] navLabels={"⌂\nΑρχική","▥\nChart","♧\nAI Agent","⇄\nΣυναλλαγές","◷\nΙστορικό","⚙\nΡυθμίσεις"};
+        Runnable[] navActions={()->currentScroll.smoothScrollTo(0,0),()->scrollToSection(marketSection),()->scrollToSection(agentSection),()->scrollToSection(tradesSection),()->scrollToSection(historySection),()->scrollToSection(settingsSection)};
+        for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(9); tab.setAllCaps(false); tab.setGravity(Gravity.CENTER); tab.setTextColor(i==0?GOLD:Color.WHITE); tab.setPadding(dp(1),dp(5),dp(1),dp(5)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(62),1)); }
         root.addView(nav);
         addSpace(10);
 
@@ -540,7 +539,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout aiButtons = new LinearLayout(this);
         aiButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button aiStart = actionButton("▶ START AI ENGINE", 0xFF25D86F, this::startAiEngine);
+        Button aiStart = actionButton("▶ START AI ENGINE", GOLD, this::startAiEngine);
         aiStart.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
         Button aiStop = actionButton("Ⅱ STOP AI", 0xFF49302B, () -> {
             aiEngineStarted=false;

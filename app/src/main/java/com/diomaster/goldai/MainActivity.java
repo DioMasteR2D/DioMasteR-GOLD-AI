@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private String mt5Token = "";
     private String mt5Symbol = "XAUUSD";
     private boolean mt5ExecutionEnabled = false;
+    private boolean aiEngineStarted = false;
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
 
     private final Runnable refreshLoop = new Runnable() {
@@ -417,13 +418,15 @@ public class MainActivity extends Activity {
         addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
         addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
-        addRow(connections, "Μηχανή σημάτων AI", aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ", aiSignal.ready ? GOLD : MUTED);
+        addRow(connections, "Μηχανή σημάτων AI", aiEngineStarted ? (aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΕΝΕΡΓΗ · ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ") : "ΑΝΑΜΟΝΗ START AI", aiEngineStarted ? GOLD : MUTED);
         addRow(connections, "Εντολές MT5 DEMO", mt5ExecutionEnabled ? "ΕΝΕΡΓΕΣ · ΜΟΝΟ ΜΕ ΕΠΙΒΕΒΑΙΩΣΗ DEMO" : "ΑΝΑΜΟΝΗ ΣΥΝΔΕΣΗΣ", mt5ExecutionEnabled ? GREEN : GOLD);
         TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς τον Vantage MT5 DEMO. Ο server ελέγχει ότι ο λογαριασμός είναι DEMO. Η τιμή αναφοράς για εντολές προέρχεται από το τελευταίο M1 candle και όχι από live bid/ask tick. Οι εντολές παραμένουν απενεργοποιημένες μέχρι να ολοκληρωθούν οι έλεγχοι. Η αυτόματη στρατηγική cloud δεν έχει υλοποιηθεί ακόμη.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
         Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ TICKERALL API · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
+        Button startAi = actionButton(aiEngineStarted ? "AI ENGINE · ΕΝΕΡΓΟ" : "START AI ENGINE · ΕΝΑΡΞΗ ΜΕ ΕΝΑ ΠΑΤΗΜΑ", 0xFFB58A35, this::startAiEngine);
+        connections.addView(startAi);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
         connections.addView(mt5Positions);
         Button reset = actionButton("ΕΠΑΝΑΦΟΡΑ DEMO ΛΟΓΑΡΙΑΣΜΟΥ", 0xFF292C34, () ->
@@ -438,6 +441,22 @@ public class MainActivity extends Activity {
         TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
+    }
+
+
+    // Starts analysis/monitoring only. It does not submit broker orders.
+    private void startAiEngine() {
+        if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || !mt5Status.startsWith("DEMO")) {
+            new AlertDialog.Builder(this)
+                .setTitle("Πρώτα σύνδεση DEMO")
+                .setMessage("Σύνδεσε και επιβεβαίωσε πρώτα τον Vantage MT5 DEMO λογαριασμό. Το AI δεν θα ξεκινήσει χωρίς επιτυχή έλεγχο.")
+                .setPositiveButton("OK", null).show();
+            return;
+        }
+        aiEngineStarted = true;
+        Toast.makeText(this, "DioMasteR AI ξεκίνησε: ανάλυση και παρακολούθηση μόνο · χωρίς αυτόματες εντολές.", Toast.LENGTH_LONG).show();
+        fetchPrice();
+        render();
     }
 
 
@@ -511,7 +530,7 @@ public class MainActivity extends Activity {
                     mt5BaseUrl=base; mt5Token=secret; mt5Symbol=selectedSymbol; mt5ExecutionEnabled=execEnabled;
                     result = display;
                 } catch (Exception e) {
-                    result = "ΑΠΟΤΥΧΙΑ ΣΥΝΔΕΣΗΣ";
+                    result = "ΑΠΟΤΥΧΙΑ ΣΥΝΔΕΣΗΣ: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                 } finally {
                     if (connection != null) connection.disconnect();
                 }

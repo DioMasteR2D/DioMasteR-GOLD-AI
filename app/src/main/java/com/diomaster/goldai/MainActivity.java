@@ -361,6 +361,15 @@ public class MainActivity extends Activity {
         }
         Button refreshAgent = actionButton("ΑΝΑΝΕΩΣΗ ΑΝΑΛΥΣΗΣ", 0xFF292C34, this::fetchPrice);
         agent.addView(refreshAgent);
+        Button aiToggle = actionButton(aiEngineStarted ? "Ⅱ STOP AI ENGINE" : "▶ START AI ENGINE", aiEngineStarted ? 0xFF49302B : 0xFFB58A35,
+                () -> {
+                    if (aiEngineStarted) {
+                        aiEngineStarted = false;
+                        Toast.makeText(this, "AI Engine σε παύση · δεν στέλνονται εντολές.", Toast.LENGTH_LONG).show();
+                        render();
+                    } else startAiEngine();
+                });
+        agent.addView(aiToggle);
         root.addView(agent);
         addSpace(10);
 
@@ -400,6 +409,8 @@ public class MainActivity extends Activity {
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
         actionRow.addView(actionButton("SELL", RED, () -> openTrade("SELL")), weight());
         actions.addView(actionRow);
+        Button mt5Open = actionButton("ΠΡΟΒΟΛΗ ΑΝΟΙΧΤΩΝ ΘΕΣΕΩΝ VANTAGE DEMO", 0xFF292C34, this::showMt5Positions);
+        actions.addView(mt5Open);
         Button closeAll = actionButton("ΚΛΕΙΣΙΜΟ ΟΛΩΝ ΤΩΝ PAPER ΘΕΣΕΩΝ", 0xFF343943, () -> {
             if (!quoteFresh()) { Toast.makeText(this, "Waiting for fresh quote.", Toast.LENGTH_SHORT).show(); fetchPrice(); return; }
             new AlertDialog.Builder(this).setTitle("Να κλείσουν όλες οι εικονικές θέσεις;")

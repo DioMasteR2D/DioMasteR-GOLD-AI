@@ -1,36 +1,42 @@
 # DioMasteR GOLD AI
 
-Native Android application for XAUUSD paper trading. The app is no longer a WebView mock-up: the market screen, chart, buttons, position list, risk controls and trade history are built with native Android views.
+Native Android XAUUSD trading dashboard with a MetaApi Cloud connection to a Vantage MT5 DEMO account.
 
-## Current Android release
-- Native Android UI, custom gold launcher icon, minimum Android 6.0 (API 23).
-- Public XAU/USD spot reference feed from Gold-API.com, refreshed every 30 seconds while the app is active.
-- $10,000 virtual account; open positions, closed trades and pause state are stored locally on the device.
-- Manual paper BUY/SELL, individual close and close-all controls.
-- Automatic paper stop-loss / take-profit monitoring on received quotes.
-- Deterministic risk governor: 0.5% risk budget, max 5.0 oz per position, max 3 open positions, $200 daily loss guard and 5% peak-equity drawdown guard.
-- New entries fail closed when the quote is missing/stale, trading is paused or a risk limit is reached.
-- Unit tests cover risk sizing and the main entry guards.
+## Android release 2.5.0
+- Native Android interface, animated gold dashboard and indicative XAU/USD spot chart.
+- Paper trading remains available.
+- Optional authenticated MetaApi Cloud bridge connection for Vantage MT5 DEMO.
+- App BUY/SELL controls send manual broker orders only when the cloud bridge confirms a connected DEMO account and execution is enabled.
+- Orders require broker-valid volume, mandatory server-side Stop Loss and Take Profit, an allow-listed gold symbol, and a 0.25% equity risk cap (cloud bridge).
+- MT5 positions can be viewed and bot-owned positions can be closed.
+- No LIVE trading path exists. The bridge fails closed if the account is not explicitly identified as DEMO.
 
-## Reference architecture
-The design takes inspiration from the separation of concerns in [MooreSi/forex-gold](https://github.com/MooreSi/forex-gold): a deterministic risk governor before execution, a separate trade lifecycle manager, explicit pause/halt controls and a recorded trade ledger. This repository is an independent Android implementation; it does not copy the reference source code. The reference repository is licensed AGPL-3.0.
+## Cloud bridge
+The Linux-compatible service is in `cloud_bridge/`. It does not use the Windows-only MetaTrader5 Python package and does not require the user's PC or Windows VPS.
 
-## Important limitations — read before use
-- This is **paper trading only**. There are no real broker orders, no wallet and no live execution switch.
-- Gold-API.com provides an indicative spot reference, not the broker's executable XAUUSD CFD bid/ask, spread or commission. Paper fills use the received reference price and do not model spread, slippage, swaps or fees.
-- The Android app checks stops and targets while it is running and receiving fresh quotes. Android may suspend or kill an app in the background; this is not a guaranteed unattended stop-loss service.
-- Android 2.1.0 adds an HTTPS MT5 bridge connection check. It verifies the bridge token, terminal heartbeat and DEMO account mode; it does not send broker orders or import positions into the paper ledger.
-- The AI signal engine is not active. The app reports that honestly.
+Deploy it as a separate Render web service with root directory `cloud_bridge`, build command `pip install -r requirements.txt`, and start command `uvicorn main:app --host 0.0.0.0 --port $PORT`. A continuously running paid service is required for unattended availability; free instances may sleep.
 
-## MT5 Demo bridge — read-only companion added
-The repository now includes a Windows companion service in `bridge/`. It provides authenticated `/v1/status`, `/v1/quote/{symbol}` and `/v1/positions` read endpoints. Every private request re-checks the MT5 account and rejects LIVE or contest accounts. There is intentionally no order submission endpoint. The Android app accepts HTTPS bridge URLs only and verifies `account_mode=DEMO`, terminal heartbeat and `execution_enabled=false`.
+Set these secrets in Render, never in the APK or GitHub:
+- `METAAPI_TOKEN`
+- `METAAPI_ACCOUNT_ID`
+- `DIO_BRIDGE_TOKEN` (generate a long random secret)
+- Optional: `METAAPI_CLIENT_API` for the MetaApi region
+- `DIO_MT5_ALLOWED_SYMBOLS` exact Vantage symbol (e.g. XAUUSD or XAUUSDm)
+- `DIO_MT5_MAX_VOLUME` (default 0.01)
+- `DIO_MT5_MAX_RISK_FRACTION` (default 0.0025)
+- `DIO_MT5_DEMO_EXECUTION_ENABLED` (default false; enable only after MetaApi has confirmed the Vantage DEMO account and the quote/specification are verified)
 
-The bridge is a scaffold and still needs to be installed on a Windows PC/VPS with your MT5 DEMO terminal and broker-specific symbol. It has not been tested against a live terminal or deployed HTTPS tunnel.
+Configure the broker account in MetaApi using its secure end-user configuration link. Do not send broker passwords or MetaApi tokens in chat. The Android app receives only the Render HTTPS URL and the separate `DIO_BRIDGE_TOKEN`.
 
-## MT5 Demo bridge — deployment requirements
-MetaTrader 5's Python integration runs alongside a desktop MT5 terminal on Windows, not directly inside an Android APK. A proper connection requires a separate PC/VPS bridge, authenticated app-to-bridge transport, broker-specific bid/ask and candle data, account-mode verification (DEMO only), order reconciliation, heartbeat and a kill switch. The bridge must reject LIVE accounts and must not accept an order until the user explicitly approves the demo connection. The service is not yet deployed or tested against your broker.
+## Current scope and limitations
+- Manual BUY/SELL from the Android app is supported by the cloud bridge once deployment and MetaApi account configuration are complete.
+- Cloud auto-start endpoints deliberately report unsupported. The old Windows auto loop is not used by this cloud service. Automatic strategy execution will only be enabled after candle-based strategy logic, order reconciliation, duplicate-order protection, kill switch and broker-specific DEMO validation are complete.
+- The Android AI panel is a deterministic signal helper, not a trained machine-learning model; its current spot sampling is not a substitute for broker M5 OHLC candles.
+- MetaApi is a third-party paid cloud service. This repository change does not create a MetaApi subscription, provision the broker account, deploy Render, or place an order.
+- This build has not yet been verified against the user's Vantage account. Confirm the account's exact server and symbol before enabling execution.
 
-## Build and tests
-GitHub Actions runs `testDebugUnitTest` and `assembleDebug`, verifies the APK exists and uploads `DioMasteR-GOLD-AI-debug-APK`.
+## Legacy bridge
+The original `bridge/` folder remains for Windows MT5 terminal use. Do not deploy it to Linux Render; it imports the Windows terminal integration.
 
-APK output: `app/build/outputs/apk/debug/app-debug.apk`.
+## Build
+GitHub Actions runs Android unit tests and builds the debug APK artifact.

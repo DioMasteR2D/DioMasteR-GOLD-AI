@@ -51,6 +51,8 @@ async def demo_account():
     mode=str(info.get("type") or info.get("tradeMode") or "").upper()
     if mode not in ("ACCOUNT_TRADE_MODE_DEMO","DEMO"):
         raise HTTPException(403,"DEMO account not verified by MetaApi; all trading blocked")
+    if info.get("tradeAllowed") is False:
+        raise HTTPException(403,"Broker reports trading disabled for this DEMO account")
     state=await api("GET",basepath()+"/connection-state")
     connected=bool(state.get("connected") or state.get("connectedToBroker"))
     if not connected:
@@ -117,10 +119,15 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
     equity=float(info.get("equity",0))
     if equity<=0 or risk>equity*MAX_RISK_FRACTION:
         raise HTTPException(422,"Order exceeds configured 0.25% equity risk cap")
+    current=await api("GET",basepath()+"/positions")
+    current=current if isinstance(current,list) else current.get("positions",[])
+    bot_positions=[p for p in current if int(p.get("magic",0) or 0)==MAGIC or str(p.get("comment","")).startswith("DioMasteR DEMO")]
+    if len(bot_positions)>=3:
+        raise HTTPException(423,"Maximum of 3 open DioMasteR DEMO positions reached")
     body={"actionType":"ORDER_TYPE_BUY" if side=="BUY" else "ORDER_TYPE_SELL",
       "symbol":req.symbol,"volume":req.volume,"stopLoss":sl,"takeProfit":tp,
       "stopLossUnits":"ABSOLUTE_PRICE","takeProfitUnits":"ABSOLUTE_PRICE",
-      "comment":"DioMasteR DEMO "+req.client_order_id[-12:]}
+      "comment":"DioMasteR DEMO "+req.client_order_id[-12:],"clientId":req.client_order_id}
     result=await api("POST",basepath()+"/trade",body)
     if int(result.get("numericCode",0))!=10009:
         raise HTTPException(502,{"message":"MetaApi did not confirm order completion","result":result})
@@ -137,7 +144,8 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
     rows=rows if isinstance(rows,list) else rows.get("positions",[])
     p=next((x for x in rows if int(x.get("id") or x.get("ticket") or 0)==ticket),None)
     if p is None: raise HTTPException(404,"Position not found")
-    if int(p.get("magic",0) or 0)!=MAGIC: raise HTTPException(403,"Only DioMasteR bot positions can be closed")
+    if int(p.get("magic",0) or 0)!=MAGIC and not str(p.get("comment","")).startswith("DioMasteR DEMO"):
+        raise HTTPException(403,"Only DioMasteR bot positions can be closed")
     result=await api("POST",basepath()+"/trade",{"actionType":"POSITION_CLOSE_ID","positionId":str(ticket)})
     if int(result.get("numericCode",0))!=10009: raise HTTPException(502,{"message":"MetaApi did not confirm close","result":result})
     return {"ok":True,"account_mode":"DEMO","ticket":ticket,"result":result}

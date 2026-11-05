@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
         engine = new PaperTradingEngine(this);
         android.content.SharedPreferences mt5Prefs = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE);
-        mt5BaseUrl = mt5Prefs.getString("base", "");
+        mt5BaseUrl = mt5Prefs.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         mt5Token = mt5Prefs.getString("token", "");
         mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
         mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
@@ -469,7 +469,7 @@ public class MainActivity extends Activity {
         endpoint.setTextColor(Color.WHITE);
         endpoint.setHintTextColor(MUTED);
         endpoint.setHint("HTTPS διεύθυνση bridge, π.χ. https://...");
-        endpoint.setText(mt5BaseUrl);
+        endpoint.setText(mt5BaseUrl.isEmpty() ? "https://diomaster-gold-ai-metaapi-demo.onrender.com" : mt5BaseUrl);
         endpoint.setInputType( android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         form.addView(endpoint);
         EditText token = new EditText(this);
@@ -517,7 +517,7 @@ public class MainActivity extends Activity {
                     String line;
                     while ((line = reader.readLine()) != null) body.append(line);
                     reader.close();
-                    if (code < 200 || code >= 300) throw new IllegalStateException("Bridge HTTP " + code);
+                    if (code < 200 || code >= 300) throw new IllegalStateException("Bridge HTTP " + code + (body.length() > 0 ? " · " + body.toString() : ""));
                     JSONObject status = new JSONObject(body.toString());
                     if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected")) {
                         throw new IllegalStateException("Δεν επιβεβαιώθηκε ασφαλής σύνδεση DEMO.");

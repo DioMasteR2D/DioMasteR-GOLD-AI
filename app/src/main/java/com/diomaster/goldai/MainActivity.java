@@ -69,7 +69,6 @@ public class MainActivity extends Activity {
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
         render();
         fetchPrice();
-        if (mt5ExecutionEnabled && !mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) startAutoTradingOnLaunch();
         handler.postDelayed(refreshLoop, 30000L);
     }
 
@@ -238,7 +237,7 @@ public class MainActivity extends Activity {
         glow.setDuration(1100L); glow.setRepeatMode(android.view.animation.Animation.REVERSE); glow.setRepeatCount(android.view.animation.Animation.INFINITE);
         brand.startAnimation(glow);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mode = text(mt5ExecutionEnabled ? "MT5 DEMO · AUTO AI" : "PAPER MODE", 10, GREEN, true);
+        TextView mode = text(mt5ExecutionEnabled ? "MT5 DEMO · ORDERS ON" : "PAPER MODE", 10, GREEN, true);
         mode.setPadding(dp(10), dp(7), dp(10), dp(7));
         mode.setBackground(round(0xFF143325, 24, 0xFF286D50));
         header.addView(mode);
@@ -322,7 +321,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout actions = card();
-        addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · AI AUTO ΕΝΕΡΓΟΠΟΙΕΙΤΑΙ ΣΤΗΝ ΕΚΚΙΝΗΣΗ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
+        addLabel(actions, mt5ExecutionEnabled ? "VANTAGE MT5 DEMO · ΧΕΙΡΟΚΙΝΗΤΕΣ ΕΝΤΟΛΕΣ" : "PAPER TRADING · ΕΙΚΟΝΙΚΕΣ ΣΥΝΑΛΛΑΓΕΣ");
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.addView(actionButton("BUY", GREEN, () -> openTrade("BUY")), weight());
@@ -410,11 +409,11 @@ public class MainActivity extends Activity {
         addRow(connections, "Δεδομένα αγοράς", quoteFresh() ? "ΤΙΜΗ SPOT ONLINE" : "ΑΝΑΜΟΝΗ / ΠΑΛΙΑ ΤΙΜΗ", quoteFresh() ? GREEN : RED);
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
         addRow(connections, "Μηχανή σημάτων AI", aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ", aiSignal.ready ? GOLD : MUTED);
-        addRow(connections, "Αυτόματες εντολές Vantage", "API ACCESS PENDING · OFF", GOLD);
-        TextView bridgeNote = text("Ο AI Agent και το γράφημα λειτουργούν απευθείας στο Android. Η εφαρμογή MT5 Android δεν παρέχει δημόσιο API για τρίτες εφαρμογές ώστε να στέλνουν αυτόματα εντολές. Για αυτόματη εκτέλεση στον Vantage λογαριασμό απαιτείται επίσημη εξουσιοδοτημένη πρόσβαση API από τον broker. Μέχρι να επιβεβαιωθεί, εμφανίζουμε σήματα αλλά δεν στέλνουμε live εντολές. Η παλιά γέφυρα Windows παραμένει προαιρετική.", 10, MUTED, false);
+        addRow(connections, "Εντολές MT5 DEMO", mt5ExecutionEnabled ? "ΕΝΕΡΓΕΣ · ΜΟΝΟ ΜΕ ΕΠΙΒΕΒΑΙΩΣΗ DEMO" : "ΑΝΑΜΟΝΗ ΣΥΝΔΕΣΗΣ", mt5ExecutionEnabled ? GREEN : GOLD);
+        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω MetaApi Cloud προς τον Vantage MT5 DEMO, χωρίς δικό σου Windows VPS. Τα BUY/SELL στέλνουν εντολές μόνο όταν ο server επιβεβαιώνει DEMO, με υποχρεωτικά Stop Loss και Take Profit. Η αυτόματη στρατηγική cloud δεν έχει ενεργοποιηθεί ακόμη.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
-        Button bridgeInfo = actionButton("ΠΑΛΙΑ ΓΕΦΥΡΑ MT5 WINDOWS (ΠΡΟΑΙΡΕΤΙΚΗ)", 0xFF292C34, this::configureMt5Bridge);
+        Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ METAAPI CLOUD · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
         connections.addView(mt5Positions);
@@ -453,7 +452,7 @@ public class MainActivity extends Activity {
         token.setText(mt5Token);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(token);
-        TextView note = text("Απαιτείται HTTPS/VPN, ενεργό MT5 Windows/VPS και Vantage DEMO. Αν ο bridge επιτρέπει DEMO execution, τα BUY/SELL στέλνουν εντολές με SL/TP στον broker. LIVE λογαριασμοί απορρίπτονται.", 11, MUTED, false);
+        TextView note = text("Βάλε το HTTPS URL του cloud bridge και το DIO_BRIDGE_TOKEN από τα Render secrets. Τα MetaApi credentials δεν μπαίνουν στην εφαρμογή. Ο server απορρίπτει κάθε λογαριασμό που δεν επιβεβαιώνεται ως DEMO.", 11, MUTED, false);
         note.setPadding(0, pad, 0, 0);
         form.addView(note);
         AlertDialog dialog = new AlertDialog.Builder(this)

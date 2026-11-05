@@ -99,12 +99,12 @@ public class MainActivity extends Activity {
                 JSONArray allowed = status.optJSONArray("allowed_symbols");
                 String symbol = allowed != null && allowed.length() > 0 ? allowed.optString(0, "XAUUSD") : "XAUUSD";
                 mt5Symbol = symbol;
-                mt5ExecutionEnabled = false; // remain read-only until broker API is independently verified
+                mt5ExecutionEnabled = status.optBoolean("execution_enabled", false); // server-side DEMO gate is authoritative
                 message = "DEMO · " + status.optString("server", "Vantage") + " · #" +
                         status.optString("account_login") + " · READ ONLY";
                 connected = true;
                 getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
-                    .putString("symbol", symbol).putBoolean("execution_enabled", false)
+                     .putString("symbol", symbol).putBoolean("execution_enabled", mt5ExecutionEnabled)
                     .putString("status", message).apply();
             } catch (Exception e) {
                 message = "ΑΥΤΟΜΑΤΗ ΣΥΝΔΕΣΗ: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
@@ -506,18 +506,15 @@ public class MainActivity extends Activity {
         }
         LinearLayout aiButtons = new LinearLayout(this);
         aiButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button aiToggle = actionButton(aiEngineStarted ? "Ⅱ STOP AI" : "▶ START AI ENGINE", aiEngineStarted ? 0xFF49302B : 0xFF25D86F,
-                () -> {
-                    if (aiEngineStarted) {
-                        aiEngineStarted = false;
-                        Toast.makeText(this, "AI Engine σε παύση · δεν στέλνονται εντολές.", Toast.LENGTH_LONG).show();
-                        render();
-                    } else startAiEngine();
-                });
-        aiToggle.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
-        Button refreshAgent = actionButton("↻ ΑΝΑΛΥΣΗ", 0xFF292C34, this::fetchPrice);
-        refreshAgent.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        aiButtons.addView(aiToggle); aiButtons.addView(refreshAgent);
+        Button aiStart = actionButton("▶ START AI ENGINE", 0xFF25D86F, this::startAiEngine);
+        aiStart.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
+        Button aiStop = actionButton("Ⅱ STOP AI", 0xFF49302B, () -> {
+            aiEngineStarted=false;
+            Toast.makeText(this,"AI analysis paused.",Toast.LENGTH_SHORT).show();
+            render();
+        });
+        aiStop.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        aiButtons.addView(aiStart); aiButtons.addView(aiStop);
         agent.addView(aiButtons);
         root.addView(agent);
         addSpace(10);

@@ -12,13 +12,16 @@ TA_TOKEN=os.getenv("TICKERALL_API_KEY","").strip()
 TA_BASE=os.getenv("TICKERALL_API_BASE","https://api.tickerall.com").rstrip("/")
 ACCOUNT_ID=os.getenv("TICKERALL_ACCOUNT_ID","").strip()
 BROKER_SERVER=os.getenv("TICKERALL_SERVER","VantageMarkets-Demo").strip()
+BROKER_LOGIN=os.getenv("TICKERALL_BROKER_LOGIN","").strip()
+BROKER_PASSWORD=os.getenv("TICKERALL_BROKER_PASSWORD","")
+SESSION_ACCOUNT_ID=""
 BRIDGE_TOKEN=os.getenv("DIO_BRIDGE_TOKEN","")
 EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="true"
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
 MAX_BOT_POSITIONS=int(os.getenv("DIO_MT5_MAX_POSITIONS","10"))
-app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.1.0")
+app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 
 # Live bid/ask cache populated by TickerAll's realtime WebSocket.
 import asyncio, json, time
@@ -116,20 +119,51 @@ async def ta(method,path,body=None,idem=False):
     return r.json()
 
 async def account():
+    global SESSION_ACCOUNT_ID
     data=await ta("GET","/v1/accounts")
     rows=data if isinstance(data,list) else data.get("accounts",[])
-    if ACCOUNT_ID:
-        match=next((x for x in rows if str(x.get("id"))==ACCOUNT_ID),None)
+    wanted_id=ACCOUNT_ID or SESSION_ACCOUNT_ID
+    if wanted_id:
+        match=next((x for x in rows if str(x.get("id"))==wanted_id),None)
     else:
         candidates=[x for x in rows if str(x.get("broker","")).lower()=="mt5"
           and x.get("isDemo") is True
           and str(x.get("server","")).lower()==BROKER_SERVER.lower()]
+        if BROKER_LOGIN:
+            suffix=BROKER_LOGIN[-4:]
+            exact=[x for x in candidates if str(x.get("accountNumber","")).replace("*","").endswith(suffix)]
+            if len(exact)==1: candidates=exact
+            elif len(exact)>1: raise HTTPException(409,"Multiple Vantage DEMO sessions match configured login")
         if len(candidates)>1: raise HTTPException(409,"More than one matching Vantage DEMO account; set TICKERALL_ACCOUNT_ID")
         match=candidates[0] if candidates else None
-    if not match: raise HTTPException(503,"Vantage DEMO account not found in this TickerAll API key")
+
+    # TickerAll account IDs are created by POST /v1/sessions, not by the API key.
+    # If no matching session exists, create one using credentials stored only in Render env vars.
+    if not match:
+        if not BROKER_LOGIN or not BROKER_PASSWORD:
+            raise HTTPException(503,"Vantage DEMO session is missing. Set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
+        session=await ta("POST","/v1/sessions",{
+            "broker":"mt5","server":BROKER_SERVER,"account":BROKER_LOGIN,
+            "password":BROKER_PASSWORD,"terminalType":"MOBILE"
+        })
+        SESSION_ACCOUNT_ID=str(session.get("accountId") or "")
+        if not SESSION_ACCOUNT_ID:
+            raise HTTPException(502,"TickerAll session response did not include accountId")
+        if session.get("isDemo") is not True:
+            SESSION_ACCOUNT_ID=""
+            raise HTTPException(403,"TickerAll did not verify this broker login as DEMO; trading remains blocked")
+        data=await ta("GET","/v1/accounts")
+        rows=data if isinstance(data,list) else data.get("accounts",[])
+        match=next((x for x in rows if str(x.get("id"))==SESSION_ACCOUNT_ID),None)
+        if not match:
+            raise HTTPException(503,"TickerAll session created but account is not yet visible; retry shortly")
+
     if match.get("isDemo") is not True: raise HTTPException(403,"TickerAll did not verify this as DEMO")
     if str(match.get("broker","")).lower()!="mt5": raise HTTPException(403,"Only MT5 is allowed")
     if str(match.get("server","")).lower()!=BROKER_SERVER.lower(): raise HTTPException(403,"Unexpected broker server")
+    if BROKER_LOGIN and str(match.get("accountNumber","")).replace("*","") and not str(match.get("accountNumber","")).replace("*","").endswith(BROKER_LOGIN[-4:]):
+        raise HTTPException(403,"Connected Vantage DEMO login does not match configured login")
+    SESSION_ACCOUNT_ID=str(match.get("id") or SESSION_ACCOUNT_ID)
     return match
 
 async def account_detail():
@@ -155,7 +189,7 @@ def root_health():
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.0.0"}
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.2.0"}
 
 @app.get("/v1/status")
 async def status(authorization:Optional[str]=Header(default=None)):

@@ -15,7 +15,7 @@ public final class PaperTradingEngine {
     public static final double STOP_DISTANCE = 8.0;
     public static final double TARGET_DISTANCE = 16.0;
     public static final double MAX_OZ = 5.0;
-    public static final int MAX_POSITIONS = 3;
+    public static final int MAX_POSITIONS = 10;
     public static final double DAILY_LOSS_LIMIT = 200.0;
     public static final double MAX_DRAWDOWN = 0.05;
     private final SharedPreferences prefs;

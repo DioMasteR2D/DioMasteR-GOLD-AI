@@ -84,6 +84,7 @@ def choose_symbol(symbols):
     return next(iter(SYMBOLS), "XAUUSD")
 
 @app.get("/")
+@app.head("/")
 def root_health():
     return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.0.0"}
 

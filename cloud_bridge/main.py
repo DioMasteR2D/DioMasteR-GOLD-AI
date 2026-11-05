@@ -83,6 +83,10 @@ def choose_symbol(symbols):
         if "XAUUSD" in str(s).upper() or str(s).upper().startswith("GOLD"): return str(s)
     return next(iter(SYMBOLS), "XAUUSD")
 
+@app.get("/")
+def root_health():
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.0.0"}
+
 @app.get("/health")
 def health():
     return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.0.0"}

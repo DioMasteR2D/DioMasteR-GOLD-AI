@@ -15,7 +15,7 @@ public final class Mt5DemoClient {
     private final String token;
     public Mt5DemoClient(String base, String token) {
         this.base=base.replaceAll("/+$","");
-        this.token=token;
+        this.token=token==null?"":token.replaceAll("\\\\s+","");\n        if(this.token.indexOf("\\r")>=0 || this.token.indexOf("\\n")>=0) throw new IllegalArgumentException("Το bridge token περιέχει μη έγκυρους χαρακτήρες.");
     }
     private JSONObject request(String method,String path,JSONObject payload) throws Exception {
         HttpURLConnection c=(HttpURLConnection)new URL(base+path).openConnection();

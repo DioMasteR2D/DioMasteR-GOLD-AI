@@ -393,12 +393,14 @@ public class MainActivity extends Activity {
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         hero.addView(headerArt,new LinearLayout.LayoutParams(dp(58),dp(58)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brandTitle=text("Golden Dari",24,0xFFFFD66B,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView brandTitle=text("Golden DioMasteR2D",20,0xFFFFD66B,true); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
         TextView brandSub=text("DioMasteR2D",11,0xFFE0BD73,true); brandSub.setLetterSpacing(0.18f); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(9); hero.addView(brandText,brandLp);
         TextView statusPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
-        statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD)); hero.addView(statusPill);
+        statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD));
+        statusPill.setOnClickListener(v -> configureMt5Bridge());
+        hero.addView(statusPill);
         root.addView(hero,new LinearLayout.LayoutParams(-1,dp(76)));
         addSpace(10);
 
@@ -708,6 +710,28 @@ public class MainActivity extends Activity {
                         .show());
         connections.addView(reset);
         root.addView(connections);
+        addSpace(10);
+        LinearLayout bottomNav=new LinearLayout(this);
+        bottomNav.setOrientation(LinearLayout.HORIZONTAL);
+        bottomNav.setGravity(Gravity.CENTER);
+        bottomNav.setPadding(dp(3),dp(7),dp(3),dp(7));
+        bottomNav.setBackground(round(0xFF080A0E,18,0xFF806126));
+        String[] bottomLabels={"⌂\\nΑρχική","↗\\nΑγορές","▥\\nΓράφημα","◷\\nΙστορικό","♙\\nΠροφίλ"};
+        for(int i=0;i<bottomLabels.length;i++){
+            final int index=i;
+            TextView item=text(bottomLabels[i],10,i==0?GOLD:Color.WHITE,true);
+            item.setGravity(Gravity.CENTER);
+            item.setPadding(dp(2),dp(7),dp(2),dp(7));
+            item.setOnClickListener(v -> {
+                if(index==0){currentScroll.smoothScrollTo(0,0);}
+                else if(index==1){scrollToSection(marketSection);}
+                else if(index==2){scrollToSection(marketSection);}
+                else if(index==3){scrollToSection(historySection);}
+                else {scrollToSection(settingsSection);}
+            });
+            bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(54),1));
+        }
+        root.addView(bottomNav);
         addSpace(16);
         TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);

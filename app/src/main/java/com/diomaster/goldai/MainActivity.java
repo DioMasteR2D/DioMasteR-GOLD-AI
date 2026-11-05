@@ -3,6 +3,10 @@ package com.diomaster.goldai;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -284,12 +288,9 @@ public class MainActivity extends Activity {
                 new int[]{0xFF17120B,0xFF080A10,0xFF241805});
         heroBg.setCornerRadius(dp(18)); heroBg.setStroke(dp(1),0xFFB98B32);
         hero.setBackground(heroBg);
-        LinearLayout crest = new LinearLayout(this);
-        crest.setGravity(Gravity.CENTER); crest.setOrientation(LinearLayout.HORIZONTAL);
-        crest.addView(text("🦁",30,GOLD,true));
-        crest.addView(text("♛",25,GOLD,true));
-        crest.addView(text("🤖",30,0xFFE5E8EF,true));
-        hero.addView(crest);
+        MascotView mascots = new MascotView(this);
+        mascots.setLayoutParams(new LinearLayout.LayoutParams(-1,dp(104)));
+        hero.addView(mascots);
         TextView brand = text("DioMasteR",29,0xFFF4F4F5,true); hero.addView(brand);
         TextView goldTitle = text("GOLD AI  v2.0 PRO",26,0xFFFFC83D,true); hero.addView(goldTitle);
         TextView subtitle = text("AI TRADING SYSTEM  •  XAUUSD  •  MT5  •  AUTO",9,0xFFD7D9DF,true);
@@ -674,6 +675,66 @@ public class MainActivity extends Activity {
     private void scrollToSection(View section) {
         if (currentScroll == null || section == null) return;
         currentScroll.post(() -> currentScroll.smoothScrollTo(0, section.getTop() + root.getTop() - dp(8)));
+    }
+
+    // Custom vector-style gold lion and AI robot artwork; rendered natively at any screen density.
+    private final class MascotView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        MascotView(android.content.Context context) { super(context); }
+        private void stroke(Canvas c, Path path, int color, float width) {
+            p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(width); p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeJoin(Paint.Join.ROUND); p.setColor(color); c.drawPath(path,p);
+        }
+        private void fill(Canvas c, Path path, int color) { p.setStyle(Paint.Style.FILL); p.setColor(color); c.drawPath(path,p); }
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float sx=getWidth()/320f, sy=getHeight()/104f;
+            canvas.save(); canvas.scale(sx,sy);
+            int gold=0xFFFFC94D, pale=0xFFFFE6A0, dark=0xFF704512, cyan=0xFF43D9F2;
+            // Lion mane silhouette.
+            Path mane=new Path();
+            mane.moveTo(12,52); mane.lineTo(5,31); mane.lineTo(25,37); mane.lineTo(19,12);
+            mane.lineTo(43,27); mane.lineTo(51,4); mane.lineTo(66,26); mane.lineTo(84,8);
+            mane.lineTo(88,34); mane.lineTo(108,24); mane.lineTo(100,49); mane.lineTo(111,70);
+            mane.lineTo(88,72); mane.lineTo(78,96); mane.lineTo(60,82); mane.lineTo(39,98);
+            mane.lineTo(34,76); mane.lineTo(10,82); mane.lineTo(22,61); mane.close();
+            fill(canvas,mane,dark); stroke(canvas,mane,gold,2.1f);
+            Path face=new Path(); face.moveTo(36,37); face.lineTo(49,27); face.lineTo(72,29);
+            face.lineTo(88,43); face.lineTo(83,68); face.lineTo(63,84); face.lineTo(43,68); face.close();
+            fill(canvas,face,0xFF17120A); stroke(canvas,face,pale,1.6f);
+            Path brow=new Path(); brow.moveTo(42,46); brow.lineTo(55,42); brow.lineTo(61,48);
+            brow.moveTo(67,48); brow.lineTo(74,42); brow.lineTo(84,46); stroke(canvas,brow,gold,2.2f);
+            p.setStyle(Paint.Style.FILL); p.setColor(gold);
+            canvas.drawCircle(54,51,3,p); canvas.drawCircle(75,51,3,p);
+            Path muzzle=new Path(); muzzle.moveTo(53,61); muzzle.lineTo(64,57); muzzle.lineTo(76,61);
+            muzzle.lineTo(69,72); muzzle.lineTo(60,72); muzzle.close(); fill(canvas,muzzle,pale);
+            Path mouth=new Path(); mouth.moveTo(64,72); mouth.lineTo(64,78); mouth.moveTo(64,78); mouth.lineTo(56,81);
+            mouth.moveTo(64,78); mouth.lineTo(73,81); stroke(canvas,mouth,gold,1.5f);
+            // Central crown and brand flare.
+            Path crown=new Path(); crown.moveTo(137,25); crown.lineTo(145,9); crown.lineTo(158,21);
+            crown.lineTo(173,5); crown.lineTo(184,21); crown.lineTo(197,9); crown.lineTo(204,25);
+            crown.lineTo(198,39); crown.lineTo(143,39); crown.close(); fill(canvas,crown,gold); stroke(canvas,crown,pale,1.5f);
+            p.setStyle(Paint.Style.FILL); p.setColor(0xFFFFF0BD);
+            canvas.drawCircle(145,8,3,p); canvas.drawCircle(173,4,3,p); canvas.drawCircle(197,8,3,p);
+            // AI robot head.
+            Path head=new Path(); head.moveTo(232,29); head.lineTo(279,20); head.lineTo(306,38);
+            head.lineTo(310,73); head.lineTo(289,91); head.lineTo(248,87); head.lineTo(226,65); head.close();
+            fill(canvas,head,0xFF101A22); stroke(canvas,head,gold,2.2f);
+            Path visor=new Path(); visor.moveTo(238,42); visor.lineTo(278,31); visor.lineTo(298,43);
+            visor.lineTo(295,66); visor.lineTo(251,72); visor.lineTo(237,60); visor.close();
+            fill(canvas,visor,0xFF17303A); stroke(canvas,visor,cyan,1.5f);
+            p.setStyle(Paint.Style.FILL); p.setColor(cyan);
+            canvas.drawCircle(254,52,4,p); canvas.drawCircle(280,48,4,p);
+            Path jaw=new Path(); jaw.moveTo(250,76); jaw.lineTo(289,70); jaw.lineTo(281,84); jaw.lineTo(258,87); jaw.close();
+            fill(canvas,jaw,0xFF27343A); stroke(canvas,jaw,pale,1.1f);
+            Path antenna=new Path(); antenna.moveTo(273,20); antenna.lineTo(277,10); antenna.lineTo(288,8);
+            stroke(canvas,antenna,gold,2); p.setStyle(Paint.Style.FILL); p.setColor(cyan); canvas.drawCircle(290,8,3,p);
+            // Subtle circuit accents.
+            Path circuits=new Path(); circuits.moveTo(226,46); circuits.lineTo(216,40); circuits.lineTo(216,31);
+            circuits.moveTo(303,58); circuits.lineTo(316,58); circuits.moveTo(245,88); circuits.lineTo(239,96);
+            stroke(canvas,circuits,0xFFB98B32,1.2f);
+            canvas.restore();
+        }
     }
 
     private LinearLayout card() {

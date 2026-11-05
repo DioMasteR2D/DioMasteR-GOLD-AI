@@ -255,6 +255,36 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private double closeAt(int index) {
+        JSONObject b=brokerCandles.optJSONObject(index);
+        return b==null?0:b.optDouble("close",0);
+    }
+    private double calcEma(int period) {
+        if(brokerCandles.length()<period) return 0;
+        int start=Math.max(0,brokerCandles.length()-period*3);
+        double alpha=2.0/(period+1.0), value=closeAt(start);
+        for(int i=start+1;i<brokerCandles.length();i++) value=closeAt(i)*alpha+value*(1-alpha);
+        return value;
+    }
+    private double calcRsi14() {
+        int n=brokerCandles.length(); if(n<15)return 0;
+        double gains=0,losses=0;
+        for(int i=n-14;i<n;i++){double d=closeAt(i)-closeAt(i-1);if(d>0)gains+=d;else losses-=d;}
+        if(losses==0)return 100;
+        double rs=(gains/14.0)/(losses/14.0);return 100.0-(100.0/(1.0+rs));
+    }
+    private double calcMacd() { return calcEma(12)-calcEma(26); }
+    private double calcAtr14() {
+        int n=brokerCandles.length();if(n<15)return 0;double sum=0;
+        for(int i=n-14;i<n;i++){
+            JSONObject b=brokerCandles.optJSONObject(i);double prev=closeAt(i-1);
+            if(b==null)continue;
+            double high=b.optDouble("high",0),low=b.optDouble("low",0);
+            sum+=Math.max(high-low,Math.max(Math.abs(high-prev),Math.abs(low-prev)));
+        }
+        return sum/14.0;
+    }
+
     private void loadMt5AccountData() {
         if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || mt5Status == null || !mt5Status.startsWith("DEMO")) return;
         new Thread(() -> {
@@ -424,10 +454,13 @@ public class MainActivity extends Activity {
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
         indicators.setOrientation(LinearLayout.HORIZONTAL);
-        indicators.addView(metric("RSI (14)","—  Neutral",GREEN),weight());
-        indicators.addView(metric("MACD","—  Waiting",GOLD),weight());
-        indicators.addView(metric("ATR (14)","—",GREEN),weight());
-        indicators.addView(metric("Τάση EMA","—",GOLD),weight());
+        boolean haveOhlc=brokerChartActive && brokerCandles.length()>=22;
+        double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
+        double emaFast=calcEma(9), emaSlow=calcEma(21);
+        indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
+        indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
+        indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
+        indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
         TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 9 / EMA 21." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);

@@ -120,47 +120,67 @@ async def ta(method,path,body=None,idem=False):
 
 async def account():
     global SESSION_ACCOUNT_ID
-    data=await ta("GET","/v1/accounts")
-    rows=data if isinstance(data,list) else data.get("accounts",[])
-    wanted_id=ACCOUNT_ID or SESSION_ACCOUNT_ID
-    if wanted_id:
-        match=next((x for x in rows if str(x.get("id"))==wanted_id),None)
-    else:
-        candidates=[x for x in rows if str(x.get("broker","")).lower()=="mt5"
-          and x.get("isDemo") is True
-          and str(x.get("server","")).lower()==BROKER_SERVER.lower()]
-        if BROKER_LOGIN:
-            suffix=BROKER_LOGIN[-4:]
-            exact=[x for x in candidates if str(x.get("accountNumber","")).replace("*","").endswith(suffix)]
-            if len(exact)==1: candidates=exact
-            elif len(exact)>1: raise HTTPException(409,"Multiple Vantage DEMO sessions match configured login")
-        if len(candidates)>1: raise HTTPException(409,"More than one matching Vantage DEMO account; set TICKERALL_ACCOUNT_ID")
-        match=candidates[0] if candidates else None
 
-    # TickerAll account IDs are created by POST /v1/sessions, not by the API key.
-    # If no matching session exists, create one using credentials stored only in Render env vars.
+    # A session's accountId is authoritative. Reuse it directly; do not
+    # depend on /v1/accounts roster propagation after session creation.
+    known_id = ACCOUNT_ID or SESSION_ACCOUNT_ID
+    if known_id:
+        try:
+            match = await ta("GET", f"/v1/accounts/{known_id}")
+        except HTTPException as exc:
+            # A configured ID is operator-supplied and must never silently
+            # fall through to creating a different broker session.
+            if ACCOUNT_ID or exc.status_code != 404:
+                raise
+            # The in-memory session expired or was invalidated. Clear it and
+            # create one fresh session below, exactly once.
+            SESSION_ACCOUNT_ID = ""
+            match = None
+    else:
+        match = None
+
     if not match:
         if not BROKER_LOGIN or not BROKER_PASSWORD:
-            raise HTTPException(503,"Vantage DEMO session is missing. Set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
-        session=await ta("POST","/v1/sessions",{
-            "broker":"mt5","server":BROKER_SERVER,"account":BROKER_LOGIN,
-            "password":BROKER_PASSWORD
+            raise HTTPException(503,
+                "Vantage DEMO session is missing. Set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
+        session = await ta("POST", "/v1/sessions", {
+            "broker": "mt5",
+            "server": BROKER_SERVER,
+            "account": BROKER_LOGIN,
+            "password": BROKER_PASSWORD
         })
-        SESSION_ACCOUNT_ID=str(session.get("accountId") or "")
-        if not SESSION_ACCOUNT_ID:
-            raise HTTPException(502,"TickerAll session response did not include accountId")
-        # The session response is the authoritative source of accountId.
-        # Do not depend on the roster list being updated immediately after session creation.
-        match=await ta("GET",f"/v1/accounts/{SESSION_ACCOUNT_ID}")
-        if not isinstance(match,dict) or str(match.get("id"))!=SESSION_ACCOUNT_ID:
-            raise HTTPException(502,"TickerAll session created but account detail did not return the expected accountId")
 
-    if match.get("isDemo") is not True: raise HTTPException(403,"TickerAll did not verify this as DEMO")
-    if str(match.get("broker","")).lower()!="mt5": raise HTTPException(403,"Only MT5 is allowed")
-    if str(match.get("server","")).lower()!=BROKER_SERVER.lower(): raise HTTPException(403,"Unexpected broker server")
-    if BROKER_LOGIN and str(match.get("accountNumber","")).replace("*","") and not str(match.get("accountNumber","")).replace("*","").endswith(BROKER_LOGIN[-4:]):
-        raise HTTPException(403,"Connected Vantage DEMO login does not match configured login")
-    SESSION_ACCOUNT_ID=str(match.get("id") or SESSION_ACCOUNT_ID)
+        # Accept the documented top-level accountId and common wrapped
+        # response envelopes, while logging only response keys (never values).
+        payload = session if isinstance(session, dict) else {}
+        nested = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        account_id = (payload.get("accountId") or nested.get("accountId")
+                      or data.get("accountId") or "")
+        if not account_id:
+            logger.error("TickerAll session response missing accountId; top_level_keys=%s nested_keys=%s data_keys=%s",
+                         sorted(payload.keys()), sorted(nested.keys()), sorted(data.keys()))
+            raise HTTPException(502, "TickerAll session response did not include accountId")
+        SESSION_ACCOUNT_ID = str(account_id)
+        logger.info("TickerAll MT5 DEMO session created; accountId received (value withheld)")
+
+        # Use exactly the accountId returned by POST /v1/sessions.
+        match = await ta("GET", f"/v1/accounts/{SESSION_ACCOUNT_ID}")
+        if not isinstance(match, dict) or str(match.get("id")) != SESSION_ACCOUNT_ID:
+            logger.error("TickerAll account detail mismatch; requested accountId (withheld), response_keys=%s",
+                         sorted(match.keys()) if isinstance(match, dict) else type(match).__name__)
+            raise HTTPException(502, "TickerAll session was created but account detail did not match its returned accountId")
+
+    if match.get("isDemo") is not True:
+        raise HTTPException(403, "TickerAll did not verify this as DEMO")
+    if str(match.get("broker", "")).lower() != "mt5":
+        raise HTTPException(403, "Only MT5 is allowed")
+    if str(match.get("server", "")).lower() != BROKER_SERVER.lower():
+        raise HTTPException(403, "Unexpected broker server")
+    account_number = str(match.get("accountNumber", "")).replace("*", "")
+    if BROKER_LOGIN and account_number and not account_number.endswith(BROKER_LOGIN[-4:]):
+        raise HTTPException(403, "Connected Vantage DEMO login does not match configured login")
+    SESSION_ACCOUNT_ID = str(match.get("id") or SESSION_ACCOUNT_ID)
     return match
 
 async def account_detail():

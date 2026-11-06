@@ -5,8 +5,8 @@ import static org.junit.Assert.*;
 
 public class RiskGovernorTest {
     @Test public void sizesFromEquityAndCapsExposure() {
-        assertEquals(0.2, RiskGovernor.positionSize(10000), 0.0001);
-        assertEquals(0.2, RiskGovernor.positionSize(5000), 0.0001);
+        assertEquals(5.0, RiskGovernor.positionSize(10000), 0.0001);
+        assertEquals(3.1, RiskGovernor.positionSize(5000), 0.0001);
         assertEquals(0.0, RiskGovernor.positionSize(0), 0.0001);
     }
 

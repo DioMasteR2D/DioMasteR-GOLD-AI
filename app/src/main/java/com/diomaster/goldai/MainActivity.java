@@ -67,6 +67,24 @@ public class MainActivity extends Activity {
     private long lastAutoSignalBar = 0L;
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
+    private final JSONArray agentActivityLog = new JSONArray();
+
+    private void logAgentActivity(String agent, String action, String reason) {
+        try {
+            JSONObject event = new JSONObject();
+            event.put("at", System.currentTimeMillis());
+            event.put("agent", agent);
+            event.put("action", action);
+            event.put("reason", reason == null ? "" : reason);
+            synchronized (agentActivityLog) {
+                JSONArray next = new JSONArray();
+                next.put(event);
+                for (int i = 0; i < agentActivityLog.length() && i < 39; i++) next.put(agentActivityLog.opt(i));
+                while (agentActivityLog.length() > 0) agentActivityLog.remove(0);
+                for (int i = 0; i < next.length(); i++) agentActivityLog.put(next.opt(i));
+            }
+        } catch (Exception ignored) { }
+    }
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
@@ -209,6 +227,8 @@ public class MainActivity extends Activity {
                         price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
+                        logAgentActivity("MARKET FEED", "BLOCKED",
+                                e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
                         render();
                     });
                 }

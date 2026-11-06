@@ -430,8 +430,8 @@ public class MainActivity extends Activity {
         TextView goldTitle=text("GOLD AI",25,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
         TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
-        boolean mt5ConnectedHeader = mt5Status != null && mt5Status.startsWith("DEMO");
-        TextView statusPill=text(mt5ConnectedHeader?"DEMO":"OFFLINE",10,mt5ConnectedHeader?0xFF071B12:0xFFFFE5A3,true);
+        boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
+        TextView statusPill=text(mt5Connected?"DEMO":"OFFLINE",10,mt5ConnectedHeader?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
         statusPill.setBackground(round(mt5ConnectedHeader?GREEN:0xFF302515,18,mt5ConnectedHeader?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
@@ -456,7 +456,6 @@ public class MainActivity extends Activity {
         TextView connTitle = text(mt5Connected ? "✓  ΣΥΝΔΕΣΗ MT5 DEMO: ΕΠΙΒΕΒΑΙΩΜΕΝΗ" : "⚠  MT5 DEMO: ΕΚΤΟΣ ΣΥΝΔΕΣΗΣ",16,mt5Connected?0xFF70F5B4:RED,true);
         connection.addView(connTitle);
         connection.addView(text(mt5Connected ? "MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD" : (mt5Status == null ? "Δεν έχει γίνει σύνδεση" : mt5Status),10,mt5Connected?0xFFE0E8E4:0xFFFFB6A8,false));
-        boolean mt5Connected=mt5Status!=null && mt5Status.startsWith("DEMO");
         addRow(connection,"Bridge  "+(mt5Connected?"✓":"×"),"Λογαριασμός  "+(mt5Connected?"✓":"—"),mt5Connected?GREEN:RED);
         addRow(connection,"Τιμές  "+(brokerChartActive?"✓":"—"),"Εντολές  "+(mt5ExecutionEnabled?"DEMO ON":"READ ONLY"),brokerChartActive?GREEN:GOLD);
         root.addView(connection);

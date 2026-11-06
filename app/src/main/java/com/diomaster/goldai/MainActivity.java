@@ -430,24 +430,13 @@ public class MainActivity extends Activity {
         TextView goldTitle=text("GOLD AI",25,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
         TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
-        TextView statusPill=text(mt5Status.startsWith("DEMO")?"DEMO":"OFFLINE",10,mt5Status.startsWith("DEMO")?0xFF071B12:0xFFFFE5A3,true);
+        boolean mt5ConnectedHeader = mt5Status != null && mt5Status.startsWith("DEMO");
+        TextView statusPill=text(mt5ConnectedHeader?"DEMO":"OFFLINE",10,mt5ConnectedHeader?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
-        statusPill.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF302515,18,mt5Status.startsWith("DEMO")?GREEN:GOLD));
+        statusPill.setBackground(round(mt5ConnectedHeader?GREEN:0xFF302515,18,mt5ConnectedHeader?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
         root.addView(hero,new LinearLayout.LayoutParams(-1,dp(108)));
-        addSpace(10);
-
-        LinearLayout account=card();
-        account.setBackground(round(0xFF100D08,18,0xFFE3AD43));
-        addLabel(account,"ΛΟΓΑΡΙΑΣΜΟΣ MT5");
-        LinearLayout accountLine=new LinearLayout(this); accountLine.setOrientation(LinearLayout.HORIZONTAL); accountLine.setGravity(Gravity.CENTER_VERTICAL);
-        TextView accountNo=text(mt5Status.startsWith("DEMO")&&!mt5Login.isEmpty()?"#"+mt5Login:"Δεν έχει συνδεθεί λογαριασμός",15,Color.WHITE,true);
-        accountLine.addView(accountNo,new LinearLayout.LayoutParams(0,-2,1));
-        TextView demoTag=text(mt5Status.startsWith("DEMO")?"DEMO":"ΑΝΑΜΟΝΗ",11,Color.WHITE,true); demoTag.setPadding(dp(10),dp(6),dp(10),dp(6)); demoTag.setBackground(round(mt5Status.startsWith("DEMO")?GREEN:0xFF39302A,15,GOLD)); accountLine.addView(demoTag); account.addView(accountLine);
-        addRow(account,"Υπόλοιπο",mt5Status.startsWith("DEMO")?String.format(Locale.US,"%s %,.2f",mt5Currency,mt5Balance):"—",GREEN);
-        addRow(account,"Καθαρή αξία",mt5Status.startsWith("DEMO")?String.format(Locale.US,"%s %,.2f",mt5Currency,mt5Equity):"—",GOLD);
-        root.addView(account);
         addSpace(10);
 
         LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
@@ -464,9 +453,9 @@ public class MainActivity extends Activity {
                 new int[]{0xFF062B20,0xFF061B18,0xFF092B22});
         connBg.setCornerRadius(dp(18)); connBg.setStroke(dp(2), mt5Status.startsWith("DEMO") ? 0xFF19E78A : 0xFFB98B32);
         connection.setBackground(connBg);
-        TextView connTitle = text(mt5Status.startsWith("DEMO") ? "✓  ΣΥΝΔΕΣΗ: ΕΝΕΡΓΗ (Αυτόματα)" : "◉  ΣΥΝΔΕΣΗ MT5 DEMO",17,mt5Status.startsWith("DEMO")?0xFF70F5B4:GOLD,true);
+        TextView connTitle = text(mt5Connected ? "✓  ΣΥΝΔΕΣΗ MT5 DEMO: ΕΠΙΒΕΒΑΙΩΜΕΝΗ" : "⚠  MT5 DEMO: ΕΚΤΟΣ ΣΥΝΔΕΣΗΣ",16,mt5Connected?0xFF70F5B4:RED,true);
         connection.addView(connTitle);
-        connection.addView(text("MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD",11,0xFFE0E8E4,false));
+        connection.addView(text(mt5Connected ? "MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD" : (mt5Status == null ? "Δεν έχει γίνει σύνδεση" : mt5Status),10,mt5Connected?0xFFE0E8E4:0xFFFFB6A8,false));
         boolean mt5Connected=mt5Status!=null && mt5Status.startsWith("DEMO");
         addRow(connection,"Bridge  "+(mt5Connected?"✓":"×"),"Λογαριασμός  "+(mt5Connected?"✓":"—"),mt5Connected?GREEN:RED);
         addRow(connection,"Τιμές  "+(brokerChartActive?"✓":"—"),"Εντολές  "+(mt5ExecutionEnabled?"DEMO ON":"READ ONLY"),brokerChartActive?GREEN:GOLD);
@@ -475,7 +464,7 @@ public class MainActivity extends Activity {
 
         LinearLayout market = card();
         marketSection = market;
-        addLabel(market, brokerChartActive ? "XAUUSD · VANTAGE MT5 DEMO OHLC" : "XAUUSD · SPOT PRICE SNAPSHOTS");
+        addLabel(market, brokerChartActive ? "XAUUSD  ·  GOLD  ·  VANTAGE MT5 DEMO OHLC" : "XAUUSD  ·  GOLD  ·  ΕΝΔΕΙΚΤΙΚΗ SPOT ΤΙΜΗ");
         TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
@@ -523,7 +512,7 @@ public class MainActivity extends Activity {
 
         LinearLayout agent = card();
         agentSection = agent;
-        addLabel(agent, "DIOMASTER AI AGENT · LIVE MARKET ANALYSIS");
+        addLabel(agent, "✦  DIOMASTER AI SIGNAL  ·  MARKET ANALYSIS");
         int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
         String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
         TextView signal = text(signalTitle, 25, signalColor, true);
@@ -591,7 +580,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout risk = card();
-        addLabel(risk, "ΔΙΑΧΕΙΡΙΣΗ ΚΙΝΔΥΝΟΥ · 10 ΘΕΣΕΙΣ · PAPER");
+        addLabel(risk, "♢  ΔΙΑΧΕΙΡΙΣΗ ΚΙΝΔΥΝΟΥ (AUTO)  ·  PAPER");
         LinearLayout riskRow1=new LinearLayout(this); riskRow1.setOrientation(LinearLayout.HORIZONTAL);
         riskRow1.addView(metric("Ρίσκο / θέση","0.5%",GOLD),weight());
         riskRow1.addView(metric("Stop Loss","$8",RED),weight());
@@ -711,6 +700,23 @@ public class MainActivity extends Activity {
             history.addView(reloadHistory);
         }
         root.addView(history);
+        addSpace(10);
+
+        LinearLayout activity = card();
+        addLabel(activity, "✦  AI ACTIVITY LOG  ·  ΖΩΝΤΑΝΕΣ ΕΝΕΡΓΕΙΕΣ");
+        synchronized (agentActivityLog) {
+            if (agentActivityLog.length() == 0) {
+                activity.addView(text("Αναμονή για νέα δεδομένα αγοράς και ενέργειες του AI Agent.",11,MUTED,false));
+            } else {
+                for (int i=0; i<Math.min(6,agentActivityLog.length()); i++) {
+                    JSONObject event=agentActivityLog.optJSONObject(i);
+                    if(event==null) continue;
+                    String when=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date(event.optLong("at")));
+                    addRow(activity,when+"  "+event.optString("agent")+" · "+event.optString("action"),event.optString("reason"),"BLOCKED".equals(event.optString("action"))?RED:GREEN);
+                }
+            }
+        }
+        root.addView(activity);
         addSpace(10);
 
         LinearLayout audit = card();

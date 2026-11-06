@@ -601,7 +601,8 @@ public class MainActivity extends Activity {
         riskRow2.addView(metric("Μέγ. μέγεθος","0.25 oz*",GOLD),weight());
         riskRow2.addView(metric("Ημερ. όριο","$200",GOLD),weight());
         riskRow2.addView(metric("Μέγ. ημερήσια ζημιά","5%",RED),weight());
-        risk.addView(riskRow2);\n        risk.addView(text("*Ενδεικτικό ανώτατο μέγεθος με stop $8 και όριο ρίσκου $2· το τελικό μέγεθος υπολογίζεται από τον Risk Governor.",9,MUTED,false));
+        risk.addView(riskRow2);
+        risk.addView(text("*Ενδεικτικό ανώτατο μέγεθος με stop $8 και όριο ρίσκου $2· το τελικό μέγεθος υπολογίζεται από τον Risk Governor.",9,MUTED,false));
         addRow(risk,"Νέες PAPER συναλλαγές",snap.optBoolean("paused")?"ΣΕ ΠΑΥΣΗ":"ΕΝΕΡΓΕΣ");
         TextView riskNote = text("Κάθε νέα εικονική συναλλαγή περνά από τον ίδιο αυτόματο έλεγχο κινδύνου. Παλιές ή ανύπαρκτες τιμές μπλοκάρουν τις νέες εισόδους.", 10, MUTED, false);
         riskNote.setPadding(0, dp(8), 0, 0);

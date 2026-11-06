@@ -32,7 +32,13 @@ _stream_task=None
 STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
 async def live_tick_stream():
+    # Reconnect indefinitely with bounded exponential backoff. A clean server
+    # close must also retry (the old async-for path could reconnect too fast).
+    retry_delay = 3
+    max_retry_delay = 60
     while True:
+        connected = False
+        symbol = None
         try:
             STREAM_DIAGNOSTIC["state"]="checking_demo_account"
             row=await account()
@@ -42,7 +48,15 @@ async def live_tick_stream():
             STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None})
             logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s",symbol)
             url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
-            async with websockets.connect(url,ping_interval=20,ping_timeout=20,close_timeout=5) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=15,
+                ping_timeout=15,
+                close_timeout=10,
+                open_timeout=20,
+                max_queue=256
+            ) as ws:
+                connected = True
                 STREAM_DIAGNOSTIC.update({"state":"connected_subscribing","connected_at":time.time()})
                 logger.info("TickerAll WebSocket connected; sending tick subscription for %s",symbol)
                 await ws.send(json.dumps({"type":"subscribe","channels":[
@@ -65,16 +79,23 @@ async def live_tick_stream():
                               "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
                               "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
                             STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
-                            logger.info("TickerAll live DEMO tick received for %s",symbol)
+                            retry_delay = 3
                         else:
                             logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
+            # The server may close cleanly without raising. Treat that as a
+            # disconnect, invalidate the cached quote and reconnect slowly.
+            raise ConnectionError("TickerAll WebSocket closed the stream")
         except asyncio.CancelledError:
             STREAM_DIAGNOSTIC["state"]="stopped"
             raise
         except Exception as exc:
+            if symbol:
+                LIVE_TICKS.pop(symbol, None)
             STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":f"{type(exc).__name__}: {str(exc)[:300]}"})
-            logger.exception("TickerAll live stream failed; retrying in 5 seconds")
-            await asyncio.sleep(5)
+            logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
+                           connected, retry_delay, f"{type(exc).__name__}: {str(exc)[:200]}")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(max_retry_delay, retry_delay * 2)
 
 @app.on_event("startup")
 async def start_live_stream():

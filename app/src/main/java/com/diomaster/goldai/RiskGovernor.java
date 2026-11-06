@@ -4,10 +4,10 @@ package com.diomaster.goldai;
 public final class RiskGovernor {
     private RiskGovernor() {}
 
-    public static final double RISK_PERCENT = 0.005;
+    public static final double RISK_PER_POSITION_USD = 2.0;
     public static final double STOP_DISTANCE = 8.0;
     public static final double MAX_OZ = 5.0;
-    public static final int MAX_POSITIONS = 3;
+    public static final int MAX_POSITIONS = 10;
     public static final double DAILY_LOSS_LIMIT = 200.0;
     public static final double MAX_DRAWDOWN = 0.05;
 
@@ -24,7 +24,7 @@ public final class RiskGovernor {
 
     public static double positionSize(double equity) {
         if (equity <= 0) return 0.0;
-        double riskCash = equity * RISK_PERCENT;
+        double riskCash = Math.min(RISK_PER_POSITION_USD, equity * 0.0025);
         double sized = Math.floor((riskCash / STOP_DISTANCE) * 10.0) / 10.0;
         return Math.min(MAX_OZ, Math.max(0.0, sized));
     }

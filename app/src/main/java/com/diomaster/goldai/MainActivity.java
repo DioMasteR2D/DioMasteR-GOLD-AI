@@ -429,7 +429,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(24));
+        root.setPadding(dp(14), dp(12), dp(14), dp(24));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -466,7 +466,7 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(108)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(112)));
         addSpace(10);
 
         LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
@@ -1136,31 +1136,35 @@ public class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(14), dp(14), dp(14), dp(14));
-        GradientDrawable shell = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF1B1308, 0xFF09090B, 0xFF17100A});
-        shell.setCornerRadius(dp(18));
-        shell.setStroke(dp(2), 0xFFC18A20);
+        box.setPadding(dp(16), dp(16), dp(16), dp(16));
+        GradientDrawable shell = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF171719, 0xFF0D0D0F, 0xFF141311});
+        shell.setCornerRadius(dp(20));
+        shell.setStroke(dp(1), 0xFF6E5425);
         box.setBackground(shell);
-         return box;
+        box.setElevation(dp(3));
+        return box;
     }
 
     private LinearLayout metric(String label, String value, int color) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(12), dp(12), dp(12), dp(12));
-        box.setBackground(goldShell(0xFF121014,0xFF65450F));
-        box.addView(text(label, 9, MUTED, true));
+        box.setPadding(dp(12), dp(13), dp(12), dp(13));
+        box.setBackground(goldShell(0xFF111113,0xFF493918));
+        box.setElevation(dp(2));
+        TextView title = text(label, 9, 0xFFB8AA8E, true);
+        title.setLetterSpacing(0.045f);
+        box.addView(title);
         TextView v = text(value, 17, color, true);
-        v.setPadding(0, dp(5), 0, 0);
+        v.setPadding(0, dp(7), 0, 0);
         box.addView(v);
         return box;
     }
 
     private void addLabel(LinearLayout box, String value) {
-        TextView t = text(value, 11, GOLD, true);
-        t.setPadding(0, 0, 0, dp(10));
+        TextView t = text(value, 11, 0xFFFFD36A, true);
+        t.setLetterSpacing(0.055f);
+        t.setPadding(0, 0, 0, dp(13));
         box.addView(t);
     }
 
@@ -1180,23 +1184,25 @@ public class MainActivity extends Activity {
 
     private void addDivider(LinearLayout box) {
         View line = new View(this);
-        line.setBackgroundColor(0xFF292C34);
+        line.setBackgroundColor(0xFF292621);
         box.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
     }
 
     private Button actionButton(String label, int color, Runnable action) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(12);
+        b.setTextSize(11);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        b.setTextColor(color == GREEN || color == GOLD ? Color.BLACK : Color.WHITE);
+        b.setLetterSpacing(0.035f);
+        b.setTextColor(color == GREEN || color == GOLD ? 0xFF100D07 : Color.WHITE);
         b.setAllCaps(false);
-        b.setMinHeight(dp(46));
-        b.setPadding(dp(8), dp(6), dp(8), dp(6));
-        b.setBackground(round(color, 11, color));
+        b.setMinHeight(dp(48));
+        b.setPadding(dp(10), dp(7), dp(10), dp(7));
+        b.setBackground(round(color, 14, color == GREEN || color == GOLD ? color : 0xFF5C4A2B));
+        b.setElevation(dp(2));
         b.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(dp(3), dp(5), dp(3), dp(3));
+        lp.setMargins(dp(4), dp(6), dp(4), dp(4));
         b.setLayoutParams(lp);
         return b;
     }
@@ -1212,9 +1218,9 @@ public class MainActivity extends Activity {
 
     private GradientDrawable goldShell(int color, int stroke) {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF241806, color, 0xFF100B06});
-        d.setCornerRadius(dp(16));
-        d.setStroke(dp(2), stroke);
+                new int[]{0xFF1B1710, color, 0xFF0D0D0F});
+        d.setCornerRadius(dp(18));
+        d.setStroke(dp(1), stroke);
         return d;
     }
 

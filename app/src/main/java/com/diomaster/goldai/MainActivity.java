@@ -409,14 +409,21 @@ public class MainActivity extends Activity {
         root.setPadding(dp(16), dp(12), dp(16), dp(24));
         root.setBackgroundColor(BG);
 
-        int previousScrollY = currentScroll == null ? 0 : currentScroll.getScrollY();
-        ScrollView scroll = new ScrollView(this);
-        currentScroll = scroll;
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
-        scroll.addView(root);
-        setContentView(scroll);
-        scroll.post(() -> scroll.scrollTo(0, previousScrollY));
+        // Keep the existing ScrollView attached to the Activity during data refreshes.
+        // Replacing the whole window on every market tick caused visible flashing and lag.
+        final boolean firstRender = currentScroll == null;
+        final int previousScrollY = firstRender ? 0 : currentScroll.getScrollY();
+        final ScrollView scroll;
+        if (firstRender) {
+            scroll = new ScrollView(this);
+            scroll.setFillViewport(true);
+            scroll.setBackgroundColor(BG);
+            currentScroll = scroll;
+            scroll.addView(root);
+            setContentView(scroll);
+        } else {
+            scroll = currentScroll;
+        }
 
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
@@ -784,6 +791,14 @@ public class MainActivity extends Activity {
         TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
+
+        // Build the next layout offscreen, then swap its content in one UI pass.
+        // The window and scroll container stay mounted, preventing full-screen redraws.
+        if (!firstRender) {
+            scroll.removeAllViews();
+            scroll.addView(root);
+            scroll.scrollTo(0, previousScrollY);
+        }
     }
 
 

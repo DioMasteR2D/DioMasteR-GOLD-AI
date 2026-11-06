@@ -431,9 +431,9 @@ public class MainActivity extends Activity {
         TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
-        TextView statusPill=text(mt5Connected?"DEMO":"OFFLINE",10,mt5ConnectedHeader?0xFF071B12:0xFFFFE5A3,true);
+        TextView statusPill=text(mt5Connected?"DEMO":"OFFLINE",10,mt5Connected?0xFF071B12:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER); statusPill.setPadding(dp(11),dp(8),dp(11),dp(8));
-        statusPill.setBackground(round(mt5ConnectedHeader?GREEN:0xFF302515,18,mt5ConnectedHeader?GREEN:GOLD));
+        statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
         root.addView(hero,new LinearLayout.LayoutParams(-1,dp(108)));

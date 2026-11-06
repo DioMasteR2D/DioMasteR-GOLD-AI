@@ -227,6 +227,7 @@ public class MainActivity extends Activity {
                         price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
+                        logAgentActivity("MARKET FEED", "BLOCKED", e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
                         logAgentActivity("MARKET FEED", "BLOCKED",
                                 e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
                         render();

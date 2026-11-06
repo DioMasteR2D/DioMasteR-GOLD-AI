@@ -10,21 +10,27 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: METAAPI_TOKEN
+      - key: TICKERALL_API_KEY
         sync: false
-      - key: METAAPI_ACCOUNT_ID
+      - key: TICKERALL_API_BASE
+        value: https://api.tickerall.com
+      - key: TICKERALL_ACCOUNT_ID
+        sync: false
+      - key: TICKERALL_SERVER
+        sync: false
+      - key: TICKERALL_BROKER_LOGIN
+        sync: false
+      - key: TICKERALL_BROKER_PASSWORD
         sync: false
       - key: DIO_BRIDGE_TOKEN
         generateValue: true
-      - key: METAAPI_CLIENT_API
-        value: https://mt-client-api-v1.new-york.agiliumtrade.ai
       - key: DIO_MT5_ALLOWED_SYMBOLS
         value: XAUUSD
       - key: DIO_MT5_MAX_VOLUME
         value: "0.01"
       - key: DIO_MT5_MAX_RISK_FRACTION
         value: "0.0025"
-      - key: DIO_MT5_MAGIC
-        value: "26051105"
+      - key: DIO_MT5_MAX_POSITIONS
+        value: "10"
       - key: DIO_MT5_DEMO_EXECUTION_ENABLED
         value: "false"

@@ -429,7 +429,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(12), dp(14), dp(24));
+        root.setPadding(dp(16), dp(12), dp(16), dp(24));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -466,17 +466,11 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(112)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(122)));
         addSpace(10);
 
-        LinearLayout nav=new LinearLayout(this); nav.setOrientation(LinearLayout.HORIZONTAL); nav.setGravity(Gravity.CENTER);
-        nav.setBackground(goldShell(0xFF100D08,0xFF5B3A08));
-        String[] navLabels={"⌂\nΑρχική","▥\nChart","♧\nAI Agent","⇄\nΣυναλλαγές","◷\nΙστορικό","⚙\nΡυθμίσεις"};
-        Runnable[] navActions={()->currentScroll.smoothScrollTo(0,0),()->scrollToSection(marketSection),()->scrollToSection(agentSection),()->scrollToSection(tradesSection),()->scrollToSection(historySection),()->scrollToSection(settingsSection)};
-        for(int i=0;i<navLabels.length;i++){ final int ix=i; Button tab=new Button(this); tab.setText(navLabels[i]); tab.setTextSize(9); tab.setAllCaps(false); tab.setGravity(Gravity.CENTER); tab.setTextColor(i==0?GOLD:Color.WHITE); tab.setPadding(dp(1),dp(5),dp(1),dp(5)); tab.setMinWidth(0); tab.setMinimumWidth(0); tab.setBackgroundColor(Color.TRANSPARENT); tab.setOnClickListener(v->navActions[ix].run()); nav.addView(tab,new LinearLayout.LayoutParams(0,dp(62),1)); }
-        root.addView(nav);
-        addSpace(10);
-
+        // Primary navigation is intentionally kept at the bottom of the dashboard.
+        addSpace(8);
 
         LinearLayout connection = card();
         GradientDrawable connBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -494,7 +488,7 @@ public class MainActivity extends Activity {
         LinearLayout market = card();
         marketSection = market;
         addLabel(market, brokerChartActive ? "XAUUSD  ·  GOLD  ·  VANTAGE MT5 DEMO OHLC" : "XAUUSD  ·  GOLD  ·  ΕΝΔΕΙΚΤΙΚΗ SPOT ΤΙΜΗ");
-        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 34, GOLD, true);
+        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 40, GOLD, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
         market.addView(feed);
@@ -524,7 +518,7 @@ public class MainActivity extends Activity {
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(220)));
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(270)));
         if (brokerChartActive) chart.setCandles(brokerCandles);
         else for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
@@ -799,7 +793,7 @@ public class MainActivity extends Activity {
         bottomNav.setGravity(Gravity.CENTER);
         bottomNav.setPadding(dp(3),dp(7),dp(3),dp(7));
         bottomNav.setBackground(goldShell(0xFF080707,0xFF9B6B17));
-        String[] bottomLabels={"⌂\\nΑρχική","↗\\nΑγορές","▥\\nΓράφημα","◷\\nΙστορικό","♙\\nΠροφίλ"};
+        String[] bottomLabels={"⌂\nΑρχική","↗\nΑγορές","▥\nΓράφημα","◷\nΙστορικό","⚙\nΡυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
             TextView item=text(bottomLabels[i],10,i==0?GOLD:Color.WHITE,true);

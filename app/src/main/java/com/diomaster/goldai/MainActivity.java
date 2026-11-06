@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
+    private boolean activityResumed = false;
+    private int fetchSequence = 0;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
     private String mt5Status = "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ";
     private String mt5BaseUrl = "";
@@ -88,8 +90,8 @@ public class MainActivity extends Activity {
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
-            fetchPrice();
-            handler.postDelayed(this, 30000L);
+            if (activityResumed) fetchPrice();
+            if (activityResumed) handler.postDelayed(this, 30000L);
         }
     };
 
@@ -109,8 +111,6 @@ public class MainActivity extends Activity {
         mt5Balance = Double.longBitsToDouble(mt5Prefs.getLong("balance_bits", Double.doubleToRawLongBits(0.0)));
         mt5Equity = Double.longBitsToDouble(mt5Prefs.getLong("equity_bits", Double.doubleToRawLongBits(0.0)));
         render();
-        fetchPrice();
-        handler.postDelayed(refreshLoop, 30000L);
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) autoConnectMt5();
     }
 
@@ -157,10 +157,22 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        fetchPrice();
+        activityResumed = true;
+        handler.removeCallbacks(refreshLoop);
+        fetchPrice(true);
+        handler.postDelayed(refreshLoop, 30000L);
+        if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()
+                && (mt5Status == null || !mt5Status.startsWith("DEMO"))) autoConnectMt5();
+    }
+
+    @Override protected void onPause() {
+        activityResumed = false;
+        handler.removeCallbacks(refreshLoop);
+        super.onPause();
     }
 
     @Override protected void onDestroy() {
+        activityResumed = false;
         handler.removeCallbacks(refreshLoop);
         super.onDestroy();
     }
@@ -182,16 +194,21 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void fetchPrice() {
-        if (fetching) return;
+    private void fetchPrice() { fetchPrice(false); }
+
+    private void fetchPrice(boolean force) {
+        if (!activityResumed && !force) return;
+        if (fetching && !force) return;
         fetching = true;
+        final int requestId = ++fetchSequence;
+        final String requestTimeframe = selectedTimeframe;
         if (mt5BaseUrl != null && !mt5BaseUrl.isEmpty() && mt5Token != null && !mt5Token.isEmpty()
                 && mt5Status != null && mt5Status.startsWith("DEMO")) {
             new Thread(() -> {
                 try {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
                     JSONObject quote = client.quote(mt5Symbol);
-                    JSONObject candleData = client.candles(mt5Symbol, selectedTimeframe, 48);
+                    JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
                     JSONArray rows = candleData.optJSONArray("candles");
                     if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
                     String quoteSource = quote.optString("quote_source", "");
@@ -207,6 +224,7 @@ public class MainActivity extends Activity {
                     final JSONArray bars = rows;
                     final long receivedAt = stamp;
                     runOnUiThread(() -> {
+                        if (requestId != fetchSequence || !activityResumed) return;
                         fetching = false; price = latest; quoteAt = receivedAt;
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
@@ -214,7 +232,7 @@ public class MainActivity extends Activity {
                             JSONObject bar=bars.optJSONObject(i);
                             if(bar!=null && bar.optDouble("close",0)>0) chartPrices.add(bar.optDouble("close"));
                         }
-                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + selectedTimeframe + " · " +
+                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + requestTimeframe + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
                         engine.onQuote(latest);
@@ -223,6 +241,7 @@ public class MainActivity extends Activity {
                     });
                 } catch (Exception e) {
                     runOnUiThread(() -> {
+                        if (requestId != fetchSequence || !activityResumed) return;
                         fetching=false; brokerChartActive=false;
                         price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
@@ -239,6 +258,7 @@ public class MainActivity extends Activity {
         new Thread(() -> priceClient.fetch(new GoldPriceClient.Callback() {
             @Override public void onPrice(double value, long receivedAt) {
                 runOnUiThread(() -> {
+                    if (requestId != fetchSequence || !activityResumed) return;
                     fetching = false; price = value; quoteAt = receivedAt; brokerChartActive=false;
                     brokerCandles = new JSONArray();
                     feedMessage = "Ενδεικτική spot τιμή · όχι broker tick · " +
@@ -248,7 +268,10 @@ public class MainActivity extends Activity {
                 });
             }
             @Override public void onError(String message) {
-                runOnUiThread(() -> { fetching=false; feedMessage="Αδυναμία λήψης τιμής: "+message; render(); });
+                runOnUiThread(() -> {
+                    if (requestId != fetchSequence || !activityResumed) return;
+                    fetching=false; feedMessage="Αδυναμία λήψης τιμής: "+message; render();
+                });
             }
         })).start();
     }
@@ -484,7 +507,12 @@ public class MainActivity extends Activity {
             TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
             chip.setGravity(Gravity.CENTER); chip.setPadding(dp(7),dp(8),dp(7),dp(8));
             chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
-            chip.setOnClickListener(v->{selectedTimeframe=tf;fetchPrice();});
+            chip.setOnClickListener(v->{
+                if (!tf.equals(selectedTimeframe)) {
+                    selectedTimeframe=tf;
+                    fetchPrice(true);
+                }
+            });
             periods.addView(chip,new LinearLayout.LayoutParams(0,-2,1));
         }
         market.addView(periods);
@@ -1115,13 +1143,7 @@ public class MainActivity extends Activity {
         shell.setCornerRadius(dp(18));
         shell.setStroke(dp(2), 0xFFC18A20);
         box.setBackground(shell);
-        android.view.animation.AlphaAnimation shimmer =
-                new android.view.animation.AlphaAnimation(0.965f, 1.0f);
-        shimmer.setDuration(2200L);
-        shimmer.setRepeatMode(android.view.animation.Animation.REVERSE);
-        shimmer.setRepeatCount(android.view.animation.Animation.INFINITE);
-        box.startAnimation(shimmer);
-        return box;
+         return box;
     }
 
     private LinearLayout metric(String label, String value, int color) {

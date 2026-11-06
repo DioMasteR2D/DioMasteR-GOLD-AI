@@ -5,8 +5,8 @@ import static org.junit.Assert.*;
 
 public class RiskGovernorTest {
     @Test public void sizesFromEquityAndCapsExposure() {
-        assertEquals(5.0, RiskGovernor.positionSize(10000), 0.0001);
-        assertEquals(3.1, RiskGovernor.positionSize(5000), 0.0001);
+        assertEquals(0.2, RiskGovernor.positionSize(10000), 0.0001);
+        assertEquals(0.2, RiskGovernor.positionSize(5000), 0.0001);
         assertEquals(0.0, RiskGovernor.positionSize(0), 0.0001);
     }
 
@@ -16,7 +16,7 @@ public class RiskGovernorTest {
     }
 
     @Test public void enforcesPositionAndLossLimits() {
-        assertEquals("Έφτασες το μέγιστο αριθμό ανοιχτών θέσεων", RiskGovernor.refusal(true, false, 3, 10000, 10000, 0, 0));
+        assertEquals("Έφτασες το μέγιστο αριθμό ανοιχτών θέσεων", RiskGovernor.refusal(true, false, 10, 10000, 10000, 0, 0));
         assertEquals("Ενεργοποιήθηκε το ημερήσιο όριο ζημιάς", RiskGovernor.refusal(true, false, 0, 9800, 10000, -190, -10));
         assertEquals("Ενεργοποιήθηκε το όριο μέγιστης πτώσης κεφαλαίου", RiskGovernor.refusal(true, false, 0, 9499, 10000, 0, 0));
         assertEquals("", RiskGovernor.refusal(true, false, 1, 10000, 10000, 0, 0));

@@ -984,7 +984,19 @@ public class MainActivity extends Activity {
                     while ((line = reader.readLine()) != null) body.append(line);
                     reader.close();
                     if (code < 200 || code >= 300) throw new IllegalStateException("Bridge HTTP " + code + (body.length() > 0 ? " · " + body.toString() : ""));
-                    JSONObject status = new JSONObject(body.toString());
+                    String rawStatus = body.toString().trim();
+                    if (rawStatus.isEmpty()) throw new IllegalStateException("Bridge HTTP " + code + ": κενή απάντηση.");
+                    if (rawStatus.startsWith("<") || rawStatus.regionMatches(true, 0, "<!DOCTYPE", 0, 9)
+                            || rawStatus.regionMatches(true, 0, "<html", 0, 5)) {
+                        throw new IllegalStateException("Το Render επέστρεψε HTML αντί για JSON (HTTP " + code
+                                + "). Έλεγξε το Base URL και το route /v1/status.");
+                    }
+                    JSONObject status;
+                    try {
+                        status = new JSONObject(rawStatus);
+                    } catch (Exception parseError) {
+                        throw new IllegalStateException("Μη έγκυρη απάντηση JSON από το Render (HTTP " + code + ").");
+                    }
                     if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected")) {
                         throw new IllegalStateException("Δεν επιβεβαιώθηκε ασφαλής σύνδεση DEMO.");
                     }

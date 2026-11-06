@@ -408,22 +408,10 @@ public class MainActivity extends Activity {
             .setNegativeButton("Άκυρο",null)
             .setPositiveButton("Κλείσιμο",(d,w)->new Thread(()->{
                 String msg;
-                try {
-                    Mt5DemoClient client=new Mt5DemoClient(mt5BaseUrl,mt5Token);
-                    JSONObject r=client.close(ticket);
-                    if(!r.optBoolean("ok")) throw new IllegalStateException("Ο broker δεν επιβεβαίωσε το κλείσιμο.");
-                    JSONObject verify=client.positions();
-                    JSONArray remaining=verify.optJSONArray("positions");
-                    boolean stillOpen=false;
-                    if(remaining!=null) for(int i=0;i<remaining.length();i++) {
-                        JSONObject p=remaining.optJSONObject(i);
-                        if(p!=null && p.optLong("ticket")==ticket) { stillOpen=true; break; }
-                    }
-                    if(stillOpen) throw new IllegalStateException("Η θέση εξακολουθεί να εμφανίζεται ανοιχτή στον broker.");
-                    msg="ΕΠΙΒΕΒΑΙΩΘΗΚΕ ΚΛΕΙΣΙΜΟ · ticket #"+ticket+" · deal #"+r.optLong("deal");
-                } catch(Exception e) { msg="Δεν επιβεβαιώθηκε το κλείσιμο: "+e.getMessage(); }
+                try { JSONObject r=new Mt5DemoClient(mt5BaseUrl,mt5Token).close(ticket); msg="Εντολή κλεισίματος στάλθηκε · deal #"+r.optLong("deal"); }
+                catch(Exception e) { msg="Δεν έκλεισε: "+e.getMessage(); }
                 final String done=msg;
-                runOnUiThread(()->{ Toast.makeText(this,done,Toast.LENGTH_LONG).show(); loadMt5AccountData(); });
+                runOnUiThread(()->Toast.makeText(this,done,Toast.LENGTH_LONG).show());
             }).start()).show();
     }
 
@@ -936,41 +924,15 @@ public class MainActivity extends Activity {
                 }
                 JSONObject posResponse = client.positions();
                 JSONArray positions = posResponse.optJSONArray("positions");
-                JSONObject managedPosition = null;
+                int botOpen = 0;
                 if (positions != null) {
                     for (int i = 0; i < positions.length(); i++) {
                         JSONObject p = positions.optJSONObject(i);
-                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")
-                                && mt5Symbol.equals(p.optString("symbol"))) {
-                            managedPosition = p;
-                            break;
-                        }
+                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")) botOpen++;
                     }
                 }
-                if (managedPosition != null) {
-                    // Mark this candle as handled whether we hold or close, preventing
-                    // a duplicate close/re-entry attempt on the same signal candle.
-                    submitted = true;
-                    String openSide = managedPosition.optString("side",
-                            managedPosition.optInt("type") == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
-                    if (!side.equals(openSide)) {
-                        long ticket = managedPosition.optLong("ticket");
-                        JSONObject closed = client.close(ticket);
-                        if (!closed.optBoolean("ok"))
-                            throw new IllegalStateException("Ο broker δεν επιβεβαίωσε αυτόματο κλείσιμο της θέσης #" + ticket);
-                        JSONObject afterClose = client.positions();
-                        JSONArray stillOpenRows = afterClose.optJSONArray("positions");
-                        boolean stillOpen = false;
-                        if (stillOpenRows != null) for (int i = 0; i < stillOpenRows.length(); i++) {
-                            JSONObject p = stillOpenRows.optJSONObject(i);
-                            if (p != null && p.optLong("ticket") == ticket) { stillOpen = true; break; }
-                        }
-                        if (stillOpen) throw new IllegalStateException("Η θέση #" + ticket + " παραμένει ανοιχτή μετά την εντολή close.");
-                        resultMessage = "AUTO EXIT ΕΠΙΒΕΒΑΙΩΘΗΚΕ · έκλεισε " + openSide + " θέση #" + ticket
-                                + " λόγω αντίθετου επιβεβαιωμένου σήματος " + side;
-                    } else {
-                        resultMessage = "ΔΙΑΤΗΡΗΣΗ ΘΕΣΗΣ · " + openSide + " · αναμονή SL/TP ή αντίθετου επιβεβαιωμένου σήματος";
-                    }
+                if (botOpen > 0) {
+                    resultMessage = "Αναμονή · υπάρχει ήδη ανοιχτή θέση DioMasteR στο MT5 DEMO";
                 } else {
                     JSONObject q = client.quote(mt5Symbol);
                     double ref = q.optDouble("bid", 0);

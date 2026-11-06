@@ -948,6 +948,9 @@ public class MainActivity extends Activity {
                     }
                 }
                 if (managedPosition != null) {
+                    // Mark this candle as handled whether we hold or close, preventing
+                    // a duplicate close/re-entry attempt on the same signal candle.
+                    submitted = true;
                     String openSide = managedPosition.optString("side",
                             managedPosition.optInt("type") == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
                     if (!side.equals(openSide)) {

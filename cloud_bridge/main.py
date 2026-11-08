@@ -275,13 +275,20 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     rows=data.get("candles",[])
     if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
     clean=[]
+    invalid_rows=0
+    first_keys=sorted(rows[0].keys()) if rows and isinstance(rows[0],dict) else []
+    first_types={k:type(v).__name__ for k,v in rows[0].items()} if rows and isinstance(rows[0],dict) else {}
     for bar in rows:
         try:
             clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),
               "high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),
               "tick_volume":float(bar.get("tickVolume") or 0),"spread":float(bar.get("spread") or 0)})
         except (KeyError,TypeError,ValueError):
-            continue
+            invalid_rows+=1
+    # Diagnostic metadata only: never log prices, account identifiers, or API credentials.
+    logger.info("TickerAll candles diagnostic: symbol=%s timeframe=%s hours=%s raw_count=%s valid_count=%s invalid_count=%s first_keys=%s first_types=%s coverage=%s truncated=%s served=%s",
+      symbol,timeframe,hours,len(rows),len(clean),invalid_rows,first_keys,first_types,
+      data.get("coverage"),bool(data.get("truncated",False)),data.get("served"))
     return {"account_mode":"DEMO","symbol":symbol,"timeframe":timeframe,
       "candles":clean,"count":len(clean),"coverage":data.get("coverage"),
       "truncated":bool(data.get("truncated",False)),"served":data.get("served")}

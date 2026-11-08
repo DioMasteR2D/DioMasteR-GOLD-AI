@@ -286,9 +286,10 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
         except (KeyError,TypeError,ValueError):
             invalid_rows+=1
     # Diagnostic metadata only: never log prices, account identifiers, or API credentials.
-    diagnostic = ("TickerAll candles diagnostic: symbol=%s timeframe=%s hours=%s raw_count=%s valid_count=%s invalid_count=%s first_keys=%s first_types=%s coverage=%s truncated=%s served=%s" %
+    diagnostic = ("TickerAll candles diagnostic: symbol=%s timeframe=%s hours=%s raw_count=%s valid_count=%s invalid_count=%s first_keys=%s first_types=%s coverage=%s truncated=%s served=%s stop_reason=%s note=%s response_keys=%s" %
       (symbol,timeframe,hours,len(rows),len(clean),invalid_rows,first_keys,first_types,
-       data.get("coverage"),bool(data.get("truncated",False)),data.get("served")))
+       data.get("coverage"),bool(data.get("truncated",False)),data.get("served"),
+       data.get("stopReason"),str(data.get("note") or "")[:180],sorted(data.keys())))
     print(diagnostic, flush=True)
     logger.info(diagnostic)
     return {"account_mode":"DEMO","symbol":symbol,"timeframe":timeframe,

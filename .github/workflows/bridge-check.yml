@@ -1,8 +1,11 @@
-name: Check MT5 bridge
+name: Check MT5 and cloud bridge
 on:
   push:
     branches: [main]
-    paths: ['bridge/**', '.github/workflows/bridge-check.yml']
+    paths:
+      - 'bridge/**'
+      - 'cloud_bridge/**'
+      - '.github/workflows/bridge-check.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -14,5 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Compile bridge syntax
+      - name: Compile MT5 bridge syntax
         run: python -m py_compile bridge/bridge.py
+      - name: Compile cloud bridge syntax
+        run: python -m py_compile cloud_bridge/main.py

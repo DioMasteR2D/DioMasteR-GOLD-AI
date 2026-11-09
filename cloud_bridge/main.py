@@ -28,6 +28,36 @@ import asyncio, json, time
 import websockets
 
 LIVE_TICKS={}
+LIVE_M1_BARS={}
+LIVE_M1_CURRENT={}
+
+def record_live_m1_tick(symbol, stamp, bid, ask):
+    """Build genuine M1 OHLC bars from broker ticks; never synthesize prices."""
+    minute=int(stamp)//60*60
+    price=(float(bid)+float(ask))/2.0
+    current=LIVE_M1_CURRENT.get(symbol)
+    if current is None or current["timestamp"] != minute:
+        if current is not None:
+            bars=LIVE_M1_BARS.setdefault(symbol, [])
+            bars.append(current)
+            del bars[:-300]
+        current={"timestamp":float(minute),"open":price,"high":price,
+                 "low":price,"close":price,"tick_volume":1.0,"spread":float(ask)-float(bid)}
+        LIVE_M1_CURRENT[symbol]=current
+    else:
+        current["high"]=max(current["high"],price)
+        current["low"]=min(current["low"],price)
+        current["close"]=price
+        current["tick_volume"]+=1.0
+        current["spread"]=float(ask)-float(bid)
+
+def live_m1_candles(symbol, limit=120):
+    rows=list(LIVE_M1_BARS.get(symbol, []))
+    current=LIVE_M1_CURRENT.get(symbol)
+    if current is not None:
+        rows.append(dict(current))
+    return rows[-limit:]
+
 _stream_task=None
 STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
@@ -78,6 +108,7 @@ async def live_tick_stream():
                             LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
                               "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
                               "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
+                            record_live_m1_tick(symbol,ts,bid,ask)
                             STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
                             retry_delay = 3
                         else:
@@ -278,6 +309,8 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
     clean=[]
     invalid_rows=0
+    effective_timeframe=timeframe
+    source="tickerall_history"
     first_keys=sorted(rows[0].keys()) if rows and isinstance(rows[0],dict) else []
     first_types={k:type(v).__name__ for k,v in rows[0].items()} if rows and isinstance(rows[0],dict) else {}
     for bar in rows:
@@ -294,8 +327,17 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
        data.get("stopReason"),str(data.get("note") or "")[:180],sorted(data.keys())))
     print(diagnostic, flush=True)
     logger.info(diagnostic)
-    return {"account_mode":"DEMO","symbol":symbol,"timeframe":timeframe,
-      "candles":clean,"count":len(clean),"coverage":data.get("coverage"),
+    # If broker history is empty, draw only from real TickerAll live ticks.
+    # The fallback is explicitly labelled M1; it never fabricates historical bars.
+    if len(clean)<2:
+        live_rows=live_m1_candles(symbol,120)
+        if len(live_rows)>=2:
+            clean=live_rows
+            effective_timeframe="M1"
+            source="tickerall_live_ticks"
+    return {"account_mode":"DEMO","symbol":symbol,"timeframe":effective_timeframe,
+      "requested_timeframe":timeframe,"effective_timeframe":effective_timeframe,
+      "source":source,"candles":clean,"count":len(clean),"coverage":data.get("coverage"),
       "truncated":bool(data.get("truncated",False)),"served":data.get("served")}
 
 @app.get("/v1/history")

@@ -6,18 +6,27 @@ on:
       - 'bridge/**'
       - 'cloud_bridge/**'
       - '.github/workflows/bridge-check.yml'
+  pull_request:
+    paths:
+      - 'bridge/**'
+      - 'cloud_bridge/**'
+      - '.github/workflows/bridge-check.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  syntax:
+  syntax-and-candle-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install bridge dependencies
+        run: pip install -r cloud_bridge/requirements.txt
       - name: Compile MT5 bridge syntax
         run: python -m py_compile bridge/bridge.py
       - name: Compile cloud bridge syntax
         run: python -m py_compile cloud_bridge/main.py
+      - name: Test live M1 candle aggregation
+        run: python -m unittest discover -s cloud_bridge -p 'test_*.py' -v

@@ -897,6 +897,12 @@ public class MainActivity extends Activity {
     private void setAutoDiagnostic(String message) {
         if (message == null || message.equals(autoExecutionMessage)) return;
         autoExecutionMessage = message;
+        // Keep a local audit trail of each distinct decision/blocker without changing strategy.
+        logAgentActivity("AI DECISION", "DIAGNOSTIC",
+                selectedTimeframe + " · candles=" + chartPrices.size()
+                        + " · quoteAge=" + (quoteAt > 0 ? Math.max(0L, (System.currentTimeMillis() - quoteAt) / 1000L) + "s" : "n/a")
+                        + " · " + message
+                        + " · " + (aiSignal == null ? "" : aiSignal.reason));
         render();
     }
 
@@ -905,12 +911,12 @@ public class MainActivity extends Activity {
         if (!aiEngineStarted) return;
         if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
         if (!brokerChartActive) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · δεν έχουν φορτωθεί broker OHLC candles"); return; }
-        if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 120 δευτ."); return; }
+        if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 15 δευτ."); return; }
         if (!mt5ExecutionEnabled) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · ο server δεν επιτρέπει DEMO εντολές"); return; }
-        if (bars == null || bars.length() < 2) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · ανεπαρκή OHLC candles"); return; }
-        if (!aiSignal.ready) { setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · " + aiSignal.reason); return; }
+        if (bars == null || bars.length() < 2) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · ανεπαρκή OHLC candles · timeframe=" + selectedTimeframe); return; }
+        if (!aiSignal.ready) { setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.reason); return; }
         if (!("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))) {
-            setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · " + aiSignal.side + " · " + aiSignal.reason);
+            setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.side + " · " + aiSignal.reason);
             return;
         }
         if (aiSignal.stopLoss <= 0 || aiSignal.takeProfit <= 0) {

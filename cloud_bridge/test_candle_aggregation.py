@@ -40,12 +40,14 @@ class AggregateLiveM1CandlesTests(unittest.TestCase):
         self.assertEqual(result[0]["low"], 98.0)
         self.assertEqual(result[0]["tick_volume"], 15.0)
 
-    def test_rejects_bucket_with_missing_minute(self):
+    def test_rejects_bucket_with_missing_minute_but_keeps_next_complete_bucket(self):
         start = (1_800_000_000 // 300) * 300
         rows = [bar(start + minute * 60, 100 + minute) for minute in range(10)]
         del rows[2]
         main.LIVE_M1_BARS["XAUUSD"] = rows
-        self.assertEqual(main.aggregate_live_m1_candles("XAUUSD", "M5"), [])
+        result = main.aggregate_live_m1_candles("XAUUSD", "M5")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["timestamp"], float(start + 300))
 
     def test_excludes_still_forming_current_m1_bar(self):
         start = (1_800_000_000 // 300) * 300

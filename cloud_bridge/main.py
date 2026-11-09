@@ -15,6 +15,8 @@ BROKER_SERVER=os.getenv("TICKERALL_SERVER","VantageMarkets-Demo").strip()
 BROKER_LOGIN=os.getenv("TICKERALL_BROKER_LOGIN","").strip()
 BROKER_PASSWORD=os.getenv("TICKERALL_BROKER_PASSWORD","")
 SESSION_ACCOUNT_ID=""
+SESSION_RECONNECT_LOCK=None
+SESSION_LAST_RECONNECT_AT=0.0
 BRIDGE_TOKEN=os.getenv("DIO_BRIDGE_TOKEN","")
 EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="true"
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
@@ -71,7 +73,7 @@ async def live_tick_stream():
         symbol = None
         try:
             STREAM_DIAGNOSTIC["state"]="checking_demo_account"
-            row=await account()
+            row,_=await account_detail()
             symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
             symbols=symbols_data.get("symbols",[])
             symbol=choose_symbol(symbols)
@@ -160,8 +162,22 @@ async def ta(method,path,body=None,idem=False):
     headers={"Authorization":"Bearer "+TA_TOKEN,"Accept":"application/json"}
     if body is not None: headers["Content-Type"]="application/json"
     if idem: headers["Idempotency-Key"]=str(uuid.uuid4())
-    async with httpx.AsyncClient(timeout=25) as client:
-        r=await client.request(method,TA_BASE+path,headers=headers,json=body)
+    # Retry only idempotent GETs on transient gateway/rate-limit responses.
+    # Never retry order/session POSTs automatically.
+    attempts=3 if method.upper()=="GET" else 1
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+        for attempt in range(attempts):
+            try:
+                r=await client.request(method,TA_BASE+path,headers=headers,json=body)
+            except (httpx.TimeoutException,httpx.NetworkError):
+                if method.upper()!="GET" or attempt+1>=attempts:
+                    raise
+                await asyncio.sleep(0.4*(attempt+1))
+                continue
+            if r.status_code in (502,503,504,429) and method.upper()=="GET" and attempt+1<attempts:
+                await asyncio.sleep(0.4*(attempt+1))
+                continue
+            break
     if r.status_code>=400:
         try:
             data=r.json(); detail=data.get("message") or data.get("error") or str(data)
@@ -170,77 +186,99 @@ async def ta(method,path,body=None,idem=False):
     if not r.content: return {}
     return r.json()
 
+async def create_demo_session(reason):
+    global SESSION_ACCOUNT_ID, SESSION_LAST_RECONNECT_AT, SESSION_RECONNECT_LOCK
+    if not BROKER_LOGIN or not BROKER_PASSWORD:
+        raise HTTPException(503,
+            "Vantage DEMO auto-reconnect unavailable: set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
+    if SESSION_RECONNECT_LOCK is None:
+        SESSION_RECONNECT_LOCK=asyncio.Lock()
+    async with SESSION_RECONNECT_LOCK:
+        # Avoid creating duplicate sessions when status, quote and stream calls
+        # all detect the same outage at nearly the same time.
+        if SESSION_ACCOUNT_ID and time.time()-SESSION_LAST_RECONNECT_AT < 30:
+            try:
+                current=await ta("GET",f"/v1/accounts/{SESSION_ACCOUNT_ID}")
+                if (current.get("isDemo") is True and
+                    str(current.get("status","")).lower() in ("online","connected")):
+                    return current
+            except Exception:
+                pass
+            raise HTTPException(503,"Vantage DEMO reconnect is cooling down; retrying shortly.")
+        logger.warning("TickerAll DEMO session recovery started; reason=%s",str(reason)[:160])
+        session=await ta("POST","/v1/sessions",{
+            "broker":"mt5","server":BROKER_SERVER,
+            "account":BROKER_LOGIN,"password":BROKER_PASSWORD
+        })
+        payload=session if isinstance(session,dict) else {}
+        nested=payload.get("session") if isinstance(payload.get("session"),dict) else {}
+        data=payload.get("data") if isinstance(payload.get("data"),dict) else {}
+        account_id=(payload.get("accountId") or nested.get("accountId") or data.get("accountId") or "")
+        if not account_id:
+            logger.error("TickerAll recovery session missing accountId; response_keys=%s",
+                         sorted(payload.keys()))
+            raise HTTPException(502,"TickerAll recovery did not return accountId")
+        detail=await ta("GET",f"/v1/accounts/{account_id}")
+        if str(detail.get("id"))!=str(account_id):
+            raise HTTPException(502,"TickerAll recovery account detail mismatch")
+        if detail.get("isDemo") is not True:
+            raise HTTPException(403,"Recovered TickerAll account is not verified DEMO; trading blocked")
+        if str(detail.get("broker","")).lower()!="mt5":
+            raise HTTPException(403,"Recovered account is not MT5")
+        if str(detail.get("server","")).lower()!=BROKER_SERVER.lower():
+            raise HTTPException(403,"Recovered account server does not match configured Vantage DEMO server")
+        account_number=str(detail.get("accountNumber","")).replace("*","")
+        if BROKER_LOGIN and account_number and not account_number.endswith(BROKER_LOGIN[-4:]):
+            raise HTTPException(403,"Recovered Vantage DEMO login does not match configured login")
+        SESSION_ACCOUNT_ID=str(account_id)
+        SESSION_LAST_RECONNECT_AT=time.time()
+        logger.info("TickerAll Vantage MT5 DEMO session recovered and verified; account id withheld")
+        if str(detail.get("status","")).lower() not in ("online","connected"):
+            raise HTTPException(503,"TickerAll created a DEMO session but broker status is not online yet")
+        return detail
+
 async def account():
     global SESSION_ACCOUNT_ID
-
-    # A session's accountId is authoritative. Reuse it directly; do not
-    # depend on /v1/accounts roster propagation after session creation.
-    known_id = ACCOUNT_ID or SESSION_ACCOUNT_ID
+    # Prefer the most recently verified session over a stale configured ID.
+    known_id=SESSION_ACCOUNT_ID or ACCOUNT_ID
+    match=None
     if known_id:
         try:
-            match = await ta("GET", f"/v1/accounts/{known_id}")
+            match=await ta("GET",f"/v1/accounts/{known_id}")
         except HTTPException as exc:
-            # A configured ID is operator-supplied and must never silently
-            # fall through to creating a different broker session.
-            if ACCOUNT_ID or exc.status_code != 404:
-                raise
-            # The in-memory session expired or was invalidated. Clear it and
-            # create one fresh session below, exactly once.
-            SESSION_ACCOUNT_ID = ""
-            match = None
-    else:
-        match = None
-
+            # A 409 explicitly means the broker account is no longer connected.
+            # Re-authenticate only with the configured credentials, then verify
+            # DEMO, MT5, server and login before accepting the new account id.
+            if exc.status_code!=409:
+                if ACCOUNT_ID or exc.status_code!=404:
+                    raise
+                SESSION_ACCOUNT_ID=""
+            else:
+                match=await create_demo_session(f"account lookup returned HTTP {exc.status_code}")
     if not match:
-        if not BROKER_LOGIN or not BROKER_PASSWORD:
-            raise HTTPException(503,
-                "Vantage DEMO session is missing. Set TICKERALL_BROKER_LOGIN and TICKERALL_BROKER_PASSWORD in Render Environment.")
-        session = await ta("POST", "/v1/sessions", {
-            "broker": "mt5",
-            "server": BROKER_SERVER,
-            "account": BROKER_LOGIN,
-            "password": BROKER_PASSWORD
-        })
-
-        # Accept the documented top-level accountId and common wrapped
-        # response envelopes, while logging only response keys (never values).
-        payload = session if isinstance(session, dict) else {}
-        nested = payload.get("session") if isinstance(payload.get("session"), dict) else {}
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        account_id = (payload.get("accountId") or nested.get("accountId")
-                      or data.get("accountId") or "")
-        if not account_id:
-            logger.error("TickerAll session response missing accountId; top_level_keys=%s nested_keys=%s data_keys=%s",
-                         sorted(payload.keys()), sorted(nested.keys()), sorted(data.keys()))
-            raise HTTPException(502, "TickerAll session response did not include accountId")
-        SESSION_ACCOUNT_ID = str(account_id)
-        logger.info("TickerAll MT5 DEMO session created; accountId received (value withheld)")
-
-        # Use exactly the accountId returned by POST /v1/sessions.
-        match = await ta("GET", f"/v1/accounts/{SESSION_ACCOUNT_ID}")
-        if not isinstance(match, dict) or str(match.get("id")) != SESSION_ACCOUNT_ID:
-            logger.error("TickerAll account detail mismatch; requested accountId (withheld), response_keys=%s",
-                         sorted(match.keys()) if isinstance(match, dict) else type(match).__name__)
-            raise HTTPException(502, "TickerAll session was created but account detail did not match its returned accountId")
-
+        match=await create_demo_session("no active TickerAll session")
     if match.get("isDemo") is not True:
-        raise HTTPException(403, "TickerAll did not verify this as DEMO")
-    if str(match.get("broker", "")).lower() != "mt5":
-        raise HTTPException(403, "Only MT5 is allowed")
-    if str(match.get("server", "")).lower() != BROKER_SERVER.lower():
-        raise HTTPException(403, "Unexpected broker server")
-    account_number = str(match.get("accountNumber", "")).replace("*", "")
+        raise HTTPException(403,"TickerAll did not verify this as DEMO")
+    if str(match.get("broker","")).lower()!="mt5":
+        raise HTTPException(403,"Only MT5 is allowed")
+    if str(match.get("server","")).lower()!=BROKER_SERVER.lower():
+        raise HTTPException(403,"Unexpected broker server")
+    account_number=str(match.get("accountNumber","")).replace("*","")
     if BROKER_LOGIN and account_number and not account_number.endswith(BROKER_LOGIN[-4:]):
-        raise HTTPException(403, "Connected Vantage DEMO login does not match configured login")
-    SESSION_ACCOUNT_ID = str(match.get("id") or SESSION_ACCOUNT_ID)
+        raise HTTPException(403,"Connected Vantage DEMO login does not match configured login")
+    SESSION_ACCOUNT_ID=str(match.get("id") or SESSION_ACCOUNT_ID)
     return match
 
 async def account_detail():
     row=await account()
     detail=await ta("GET",f"/v1/accounts/{row['id']}")
-    if detail.get("isDemo") is not True: raise HTTPException(403,"DEMO verification failed; trading blocked")
-    online=str(detail.get("status","")).lower() in ("online","connected")
-    if not online: raise HTTPException(503,"Vantage DEMO connection is offline/cold; reconnect it in TickerAll")
+    if detail.get("isDemo") is not True:
+        raise HTTPException(403,"DEMO verification failed; trading blocked")
+    if str(detail.get("status","")).lower() not in ("online","connected"):
+        detail=await create_demo_session("account status offline/cold")
+        row=detail
+    if str(detail.get("status","")).lower() not in ("online","connected"):
+        raise HTTPException(503,"Vantage DEMO connection is still offline; new entries blocked")
     return row,detail
 
 def choose_symbol(symbols):
@@ -254,11 +292,11 @@ def choose_symbol(symbols):
 @app.get("/")
 @app.head("/")
 def root_health():
-    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.1.0"}
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","health":"/health","bridge_version":"2.3.0"}
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.2.0"}
+    return {"ok":True,"service":"diomaster-tickerall-demo-bridge","bridge_version":"2.3.0"}
 
 @app.get("/v1/status")
 async def status(authorization:Optional[str]=Header(default=None)):

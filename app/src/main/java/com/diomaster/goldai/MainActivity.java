@@ -639,11 +639,11 @@ public class MainActivity extends Activity {
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ AUTO TRADE\\n(DEMO)" : "▶ AUTO TRADE\\n(DEMO)", GREEN, this::startAiEngine);
+        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ AUTO TRADE\n(DEMO)" : "▶ AUTO TRADE\n(DEMO)", GREEN, this::startAiEngine);
         autoTrade.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        Button agentDetails = actionButton("♙ AI AGENT\\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
+        Button agentDetails = actionButton("♙ AI AGENT\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
         agentDetails.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
+        Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
         analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
         quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
         root.addView(quickActions);
@@ -1026,7 +1026,7 @@ public class MainActivity extends Activity {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\r\\n\\t ]+", "");
+        return cleaned.replaceAll("[\\r\n\\t ]+", "");
     }
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);

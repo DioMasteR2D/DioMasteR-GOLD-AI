@@ -271,12 +271,9 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     if hours<1 or hours>8760: raise HTTPException(422,"hours must be between 1 and 8760")
     symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
     if symbol not in symbols_data.get("symbols",[]): raise HTTPException(404,"Broker-native symbol not found")
-    # Use TickerAll's exact date-range mode instead of a rolling hours request.
-    window_to=datetime.now(timezone.utc)
-    window_from=window_to-timedelta(hours=hours)
-    from_iso=window_from.isoformat(timespec="seconds").replace("+00:00","Z")
-    to_iso=window_to.isoformat(timespec="seconds").replace("+00:00","Z")
-    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&from={from_iso}&to={to_iso}")
+    # Use TickerAll's broker-relative look-back mode. Its candle timestamps are
+    # in broker server time, so avoid constructing UTC date bounds in this bridge.
+    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
     rows=data.get("candles",[])
     if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
     clean=[]

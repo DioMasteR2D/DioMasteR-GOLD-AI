@@ -601,59 +601,52 @@ public class MainActivity extends Activity {
         root.addView(market);
         addSpace(10);
 
+        LinearLayout aiPanels = new LinearLayout(this);
+        aiPanels.setOrientation(LinearLayout.HORIZONTAL);
+        aiPanels.setGravity(Gravity.TOP);
         LinearLayout agent = card();
         agentSection = agent;
-        addLabel(agent, "🎯  ΤΡΕΧΟΝ ΣΗΜΑ AI  ·  MARKET ANALYSIS");
+        agent.setPadding(dp(12),dp(12),dp(12),dp(12));
+        addLabel(agent, "◎  ΤΡΕΧΟΝ ΣΗΜΑ AI");
         int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
-        String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
-        TextView signal = text(signalTitle, 29, signalColor, true);
+        String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY" : "SELL".equals(aiSignal.side) ? "▼ SELL" : "Ⅱ HOLD";
+        TextView signal = text(signalTitle, 27, signalColor, true);
         signal.setGravity(Gravity.CENTER);
-        signal.setPadding(dp(8), dp(12), dp(8), dp(12));
-        signal.setBackground(round("BUY".equals(aiSignal.side) ? 0xFF063B20 : "SELL".equals(aiSignal.side) ? 0xFF410D14 : 0xFF062B18, 18, signalColor));
-        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
-            android.view.animation.AlphaAnimation pulse = new android.view.animation.AlphaAnimation(0.55f, 1.0f);
-            pulse.setDuration(850L); pulse.setRepeatMode(android.view.animation.Animation.REVERSE);
-            pulse.setRepeatCount(android.view.animation.Animation.INFINITE); signal.startAnimation(pulse);
-        }
+        signal.setPadding(dp(5), dp(15), dp(5), dp(15));
+        signal.setBackground(round("BUY".equals(aiSignal.side) ? 0xFF063B20 : "SELL".equals(aiSignal.side) ? 0xFF410D14 : 0xFF062B18, 28, signalColor));
         agent.addView(signal);
-        LinearLayout signalRow = new LinearLayout(this);
-        signalRow.setOrientation(LinearLayout.HORIZONTAL);
-        TextView setup = text(aiSignal.ready && !"HOLD".equals(aiSignal.side) ? aiSignal.side+" SETUP" : "WAITING FOR SETUP",13,0xFFFFFFFF,true);
-        setup.setGravity(Gravity.CENTER); setup.setPadding(dp(12),dp(10),dp(12),dp(10));
-        setup.setBackground(round(aiSignal.ready && "BUY".equals(aiSignal.side)?0xFF087C43:0xFF22262E,12,0xFF24D978));
-        signalRow.addView(setup,new LinearLayout.LayoutParams(0,-2,1));
-        TextView probability=text(aiSignal.ready?aiSignal.confidence+"%":"—",23,GREEN,true);
-        probability.setGravity(Gravity.CENTER); signalRow.addView(probability,new LinearLayout.LayoutParams(dp(84),-2));
-        agent.addView(signalRow);
-        TextView confidence = text(!aiSignal.ready ? "Ο Agent περιμένει επαρκή δεδομένα" : "HOLD".equals(aiSignal.side) ? "Δεν υπάρχει επιβεβαιωμένο setup" : "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%", 11, MUTED, true);
-        confidence.setPadding(0, dp(4), 0, dp(8));
+        TextView confidence = text(aiSignal.ready ? "Επιβεβαίωση " + aiSignal.confidence + "%" : "Αναμονή δεδομένων", 11, MUTED, true);
+        confidence.setGravity(Gravity.CENTER);
         agent.addView(confidence);
-        TextView reason = text(aiSignal.reason, 12, 0xFFE2E4E8, false);
+        TextView reason = text(aiSignal.reason, 10, 0xFFE2E4E8, false);
+        reason.setPadding(0,dp(6),0,0);
         agent.addView(reason);
-        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
-            addDivider(agent);
-            addRow(agent, "Ενδεικτική είσοδος", money(aiSignal.entry), GOLD);
-            addRow(agent, "Stop Loss", money(aiSignal.stopLoss), RED);
-            addRow(agent, "Take Profit", money(aiSignal.takeProfit), GREEN);
-            addRow(agent, "Risk / Reward", "1 : 1.8", GOLD);
-        } else {
-            TextView waiting = text("Οι ενδείξεις είναι αναλυτικά σήματα, όχι εντολές broker. Το liquidity sweep / FVG απαιτεί επιβεβαιωμένα OHLC candles. Δεν ανοίγει συναλλαγή αυτόματα.", 10, MUTED, false);
-            waiting.setPadding(0, dp(8), 0, 0);
-            agent.addView(waiting);
-        }
-        LinearLayout aiButtons = new LinearLayout(this);
-        aiButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button aiStart = actionButton("▶ START AI ENGINE", GOLD, this::startAiEngine);
-        aiStart.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
-        Button aiStop = actionButton("Ⅱ STOP AI", 0xFF49302B, () -> {
-            aiEngineStarted=false;
-            Toast.makeText(this,"AI analysis paused.",Toast.LENGTH_SHORT).show();
-            render();
-        });
-        aiStop.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        aiButtons.addView(aiStart); aiButtons.addView(aiStop);
-        agent.addView(aiButtons);
-        root.addView(agent);
+        LinearLayout evaluation = card();
+        evaluation.setPadding(dp(12),dp(12),dp(12),dp(12));
+        addLabel(evaluation, "♧  ΑΞΙΟΛΟΓΗΣΗ AI");
+        addRow(evaluation,"Δεδομένα τιμής",quoteFresh()?"Επαρκή / LIVE":"Αναμονή",quoteFresh()?GREEN:RED);
+        addRow(evaluation,"Κεριά broker",brokerChartActive?brokerCandles.length()+" OHLC":"Μη συνδεδεμένα",brokerChartActive?GREEN:GOLD);
+        addRow(evaluation,"Κατάσταση σήματος",aiSignal.ready?aiSignal.side:"WAIT",aiSignal.ready?signalColor:GOLD);
+        addRow(evaluation,"AI Engine",aiEngineStarted?"Ενεργός":"Σε αναμονή",aiEngineStarted?GREEN:GOLD);
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0,-2,1);
+        half.setMargins(dp(2),0,dp(4),0);
+        aiPanels.addView(agent,half);
+        LinearLayout.LayoutParams half2 = new LinearLayout.LayoutParams(0,-2,1);
+        half2.setMargins(dp(4),0,dp(2),0);
+        aiPanels.addView(evaluation,half2);
+        root.addView(aiPanels);
+        addSpace(8);
+
+        LinearLayout quickActions = new LinearLayout(this);
+        quickActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ AUTO TRADE\\n(DEMO)" : "▶ AUTO TRADE\\n(DEMO)", GREEN, this::startAiEngine);
+        autoTrade.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        Button agentDetails = actionButton("♙ AI AGENT\\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
+        agentDetails.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
+        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
+        root.addView(quickActions);
         addSpace(10);
 
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);

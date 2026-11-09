@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
     private PaperTradingEngine engine;
     private LinearLayout root;
     private ScrollView currentScroll;
-    private LinearLayout marketSection, agentSection, tradesSection, historySection, settingsSection;
+    private LinearLayout appShell, bottomNavigation, marketSection, agentSection, tradesSection, positionsSection, historySection, settingsSection;
+    private int selectedBottomTab = 0;
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
@@ -453,7 +454,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(24));
+        root.setPadding(dp(10), dp(8), dp(10), dp(18));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -462,12 +463,16 @@ public class MainActivity extends Activity {
         final int previousScrollY = firstRender ? 0 : currentScroll.getScrollY();
         final ScrollView scroll;
         if (firstRender) {
+            appShell = new LinearLayout(this);
+            appShell.setOrientation(LinearLayout.VERTICAL);
+            appShell.setBackgroundColor(BG);
             scroll = new ScrollView(this);
             scroll.setFillViewport(true);
             scroll.setBackgroundColor(BG);
             currentScroll = scroll;
             scroll.addView(root);
-            setContentView(scroll);
+            appShell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+            setContentView(appShell);
         } else {
             scroll = currentScroll;
         }
@@ -475,13 +480,15 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(10),dp(8),dp(10),dp(8));
+        hero.setPadding(dp(8),dp(6),dp(8),dp(6));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
-        MascotView headerArt=new MascotView(this);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(82)));
+        ImageView headerArt=new ImageView(this);
+        headerArt.setImageResource(R.drawable.lion_crown_header);
+        headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(120),dp(104)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
-        TextView brandTitle=text("DioMasteR2D",19,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView goldTitle=text("GOLD AI",25,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
+        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView goldTitle=text("GOLD AI",29,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
         TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
@@ -490,11 +497,27 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(122)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(142)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
-        addSpace(8);
+        addSpace(7);
+        LinearLayout statusStrip = new LinearLayout(this);
+        statusStrip.setOrientation(LinearLayout.HORIZONTAL);
+        statusStrip.setGravity(Gravity.CENTER);
+        String[] statusLabels = {"● LIVE", "☁ Render", "✦ AI Agent", "▤ MT5 DEMO"};
+        int[] statusColors = {quoteFresh() ? GREEN : RED, 0xFFE8E8EA, aiEngineStarted ? GREEN : GOLD, mt5Connected ? GREEN : RED};
+        for (int i=0;i<statusLabels.length;i++) {
+            TextView pill = text(statusLabels[i], 9, statusColors[i], true);
+            pill.setGravity(Gravity.CENTER);
+            pill.setPadding(dp(3), dp(9), dp(3), dp(9));
+            pill.setBackground(goldShell(0xFF090909, 0xFF74541B));
+            LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(0, -2, 1);
+            pl.setMargins(dp(2), 0, dp(2), 0);
+            statusStrip.addView(pill, pl);
+        }
+        root.addView(statusStrip);
+        addSpace(7);
 
         LinearLayout connection = card();
         GradientDrawable connBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -506,20 +529,43 @@ public class MainActivity extends Activity {
         connection.addView(text(mt5Connected ? "MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD" : (mt5Status == null ? "Δεν έχει γίνει σύνδεση" : mt5Status),10,mt5Connected?0xFFE0E8E4:0xFFFFB6A8,false));
         addRow(connection,"Bridge  "+(mt5Connected?"✓":"×"),"Λογαριασμός  "+(mt5Connected?"✓":"—"),mt5Connected?GREEN:RED);
         addRow(connection,"Τιμές  "+(brokerChartActive?"✓":"—"),"Εντολές  "+(mt5ExecutionEnabled?"DEMO ON":"READ ONLY"),brokerChartActive?GREEN:GOLD);
-        root.addView(connection);
-        addSpace(10);
+        // Detailed bridge diagnostics remain available in Settings; keep the home screen compact.
+        addSpace(5);
 
         LinearLayout market = card();
         marketSection = market;
-        addLabel(market, brokerChartActive ? "XAUUSD  ·  GOLD  ·  VANTAGE MT5 DEMO OHLC" : "XAUUSD  ·  GOLD  ·  ΕΝΔΕΙΚΤΙΚΗ SPOT ΤΙΜΗ");
-        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 40, GOLD, true);
-        market.addView(priceText);
-        TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
+        LinearLayout instrument = new LinearLayout(this);
+        instrument.setOrientation(LinearLayout.HORIZONTAL);
+        instrument.setGravity(Gravity.CENTER_VERTICAL);
+        instrument.setPadding(dp(10),dp(9),dp(10),dp(9));
+        instrument.setBackground(goldShell(0xFF090909,0xFFFFC83D));
+        TextView goldIcon = text("◆",30,GOLD,true);
+        goldIcon.setPadding(dp(4),0,dp(10),0);
+        instrument.addView(goldIcon);
+        LinearLayout instrumentName = new LinearLayout(this);
+        instrumentName.setOrientation(LinearLayout.VERTICAL);
+        instrumentName.addView(text("XAUUSD",21,Color.WHITE,true));
+        instrumentName.addView(text("Gold / US Dollar",11,MUTED,false));
+        instrument.addView(instrumentName,new LinearLayout.LayoutParams(0,-2,1));
+        TextView priceText = text(price > 0 ? String.format(Locale.US, "%,.2f", price) : "—", 29, GREEN, true);
+        priceText.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+        instrument.addView(priceText);
+        market.addView(instrument);
+        TextView feed = text((quoteFresh() ? "● LIVE  " : "● ") + feedMessage, 10, quoteFresh() ? GREEN : RED, false);
+        feed.setPadding(dp(4),dp(5),0,dp(7));
         market.addView(feed);
+        LinearLayout accountStrip = new LinearLayout(this);
+        accountStrip.setOrientation(LinearLayout.HORIZONTAL);
+        accountStrip.addView(metric("ΥΠΟΛΟΙΠΟ", mt5Connected ? money(mt5Balance) : "—", GOLD), weight());
+        accountStrip.addView(metric("EQUITY", mt5Connected ? money(mt5Equity) : "—", GOLD), weight());
+        JSONObject accountSnap = engine.snapshot(quoteFresh() ? price : 0);
+        accountStrip.addView(metric("P/L", PaperTradingEngine.money(accountSnap.optDouble("floating")), accountSnap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        market.addView(accountStrip);
+        addSpace(5);
         LinearLayout periods = new LinearLayout(this);
         periods.setOrientation(LinearLayout.HORIZONTAL);
         periods.setGravity(Gravity.CENTER);
-        String[] frames={"M1","M5","M15","M30","H1","H4","D1"};
+        String[] frames={"M1","M5","M15","M30","H1","H4"};
         for(String frame:frames) {
             final String tf=frame;
             TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
@@ -536,13 +582,13 @@ public class MainActivity extends Activity {
         market.addView(periods);
         LinearLayout chartLegend=new LinearLayout(this);
         chartLegend.setOrientation(LinearLayout.HORIZONTAL);
-        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
-        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
+        chartLegend.addView(text("● EMA 6",10,0xFF28B8FF,true));
+        TextView ema21Legend=text("● EMA 15",10,GOLD,true);
         ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(270)));
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(250)));
         if (brokerChartActive) chart.setCandles(brokerCandles);
         else for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
@@ -550,68 +596,64 @@ public class MainActivity extends Activity {
         indicators.setOrientation(LinearLayout.HORIZONTAL);
         boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
-        double emaFast=calcEma(9), emaSlow=calcEma(21);
+        double emaFast=calcEma(6), emaSlow=calcEma(15);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
         indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 9 / EMA 21." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);
         addSpace(10);
 
+        LinearLayout aiPanels = new LinearLayout(this);
+        aiPanels.setOrientation(LinearLayout.HORIZONTAL);
+        aiPanels.setGravity(Gravity.TOP);
         LinearLayout agent = card();
         agentSection = agent;
-        addLabel(agent, "✦  DIOMASTER AI SIGNAL  ·  MARKET ANALYSIS");
+        agent.setPadding(dp(12),dp(12),dp(12),dp(12));
+        addLabel(agent, "◎  ΤΡΕΧΟΝ ΣΗΜΑ AI");
         int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
-        String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
-        TextView signal = text(signalTitle, 25, signalColor, true);
-        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
-            android.view.animation.AlphaAnimation pulse = new android.view.animation.AlphaAnimation(0.55f, 1.0f);
-            pulse.setDuration(850L); pulse.setRepeatMode(android.view.animation.Animation.REVERSE);
-            pulse.setRepeatCount(android.view.animation.Animation.INFINITE); signal.startAnimation(pulse);
-        }
+        String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY" : "SELL".equals(aiSignal.side) ? "▼ SELL" : "Ⅱ HOLD";
+        TextView signal = text(signalTitle, 27, signalColor, true);
+        signal.setGravity(Gravity.CENTER);
+        signal.setPadding(dp(5), dp(15), dp(5), dp(15));
+        signal.setBackground(round("BUY".equals(aiSignal.side) ? 0xFF063B20 : "SELL".equals(aiSignal.side) ? 0xFF410D14 : 0xFF062B18, 28, signalColor));
         agent.addView(signal);
-        LinearLayout signalRow = new LinearLayout(this);
-        signalRow.setOrientation(LinearLayout.HORIZONTAL);
-        TextView setup = text(aiSignal.ready && !"HOLD".equals(aiSignal.side) ? aiSignal.side+" SETUP" : "WAITING FOR SETUP",13,0xFFFFFFFF,true);
-        setup.setGravity(Gravity.CENTER); setup.setPadding(dp(12),dp(10),dp(12),dp(10));
-        setup.setBackground(round(aiSignal.ready && "BUY".equals(aiSignal.side)?0xFF087C43:0xFF22262E,12,0xFF24D978));
-        signalRow.addView(setup,new LinearLayout.LayoutParams(0,-2,1));
-        TextView probability=text(aiSignal.ready?aiSignal.confidence+"%":"—",23,GREEN,true);
-        probability.setGravity(Gravity.CENTER); signalRow.addView(probability,new LinearLayout.LayoutParams(dp(84),-2));
-        agent.addView(signalRow);
-        TextView confidence = text(!aiSignal.ready ? "Ο Agent περιμένει επαρκή δεδομένα" : "HOLD".equals(aiSignal.side) ? "Δεν υπάρχει επιβεβαιωμένο setup" : "Βαθμός επιβεβαίωσης κανόνων: " + aiSignal.confidence + "%", 11, MUTED, true);
-        confidence.setPadding(0, dp(4), 0, dp(8));
+        TextView confidence = text(aiSignal.ready ? "Επιβεβαίωση " + aiSignal.confidence + "%" : "Αναμονή δεδομένων", 11, MUTED, true);
+        confidence.setGravity(Gravity.CENTER);
         agent.addView(confidence);
-        TextView reason = text(aiSignal.reason, 12, 0xFFE2E4E8, false);
+        TextView reason = text(aiSignal.reason, 10, 0xFFE2E4E8, false);
+        reason.setPadding(0,dp(6),0,0);
         agent.addView(reason);
-        if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
-            addDivider(agent);
-            addRow(agent, "Ενδεικτική είσοδος", money(aiSignal.entry), GOLD);
-            addRow(agent, "Stop Loss", money(aiSignal.stopLoss), RED);
-            addRow(agent, "Take Profit", money(aiSignal.takeProfit), GREEN);
-            addRow(agent, "Risk / Reward", "1 : 1.8", GOLD);
-        } else {
-            TextView waiting = text("Οι ενδείξεις είναι αναλυτικά σήματα, όχι εντολές broker. Το liquidity sweep / FVG απαιτεί επιβεβαιωμένα OHLC candles. Δεν ανοίγει συναλλαγή αυτόματα.", 10, MUTED, false);
-            waiting.setPadding(0, dp(8), 0, 0);
-            agent.addView(waiting);
-        }
-        LinearLayout aiButtons = new LinearLayout(this);
-        aiButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button aiStart = actionButton("▶ START AI ENGINE", GOLD, this::startAiEngine);
-        aiStart.setLayoutParams(new LinearLayout.LayoutParams(0,-2,2));
-        Button aiStop = actionButton("Ⅱ STOP AI", 0xFF49302B, () -> {
-            aiEngineStarted=false;
-            Toast.makeText(this,"AI analysis paused.",Toast.LENGTH_SHORT).show();
-            render();
-        });
-        aiStop.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        aiButtons.addView(aiStart); aiButtons.addView(aiStop);
-        agent.addView(aiButtons);
-        root.addView(agent);
+        LinearLayout evaluation = card();
+        evaluation.setPadding(dp(12),dp(12),dp(12),dp(12));
+        addLabel(evaluation, "♧  ΑΞΙΟΛΟΓΗΣΗ AI");
+        addRow(evaluation,"Δεδομένα τιμής",quoteFresh()?"Επαρκή / LIVE":"Αναμονή",quoteFresh()?GREEN:RED);
+        addRow(evaluation,"Κεριά broker",brokerChartActive?brokerCandles.length()+" OHLC":"Μη συνδεδεμένα",brokerChartActive?GREEN:GOLD);
+        addRow(evaluation,"Κατάσταση σήματος",aiSignal.ready?aiSignal.side:"WAIT",aiSignal.ready?signalColor:GOLD);
+        addRow(evaluation,"AI Engine",aiEngineStarted?"Ενεργός":"Σε αναμονή",aiEngineStarted?GREEN:GOLD);
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0,-2,1);
+        half.setMargins(dp(2),0,dp(4),0);
+        aiPanels.addView(agent,half);
+        LinearLayout.LayoutParams half2 = new LinearLayout.LayoutParams(0,-2,1);
+        half2.setMargins(dp(4),0,dp(2),0);
+        aiPanels.addView(evaluation,half2);
+        root.addView(aiPanels);
+        addSpace(8);
+
+        LinearLayout quickActions = new LinearLayout(this);
+        quickActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ AUTO TRADE\n(DEMO)" : "▶ AUTO TRADE\n(DEMO)", GREEN, this::startAiEngine);
+        autoTrade.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        Button agentDetails = actionButton("♙ AI AGENT\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
+        agentDetails.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
+        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
+        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
+        root.addView(quickActions);
         addSpace(10);
 
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
@@ -677,6 +719,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout positions = card();
+        positionsSection = positions;
         addLabel(positions, "PAPER ΘΕΣΕΙΣ · ΤΟ MT5 ΕΜΦΑΝΙΖΕΤΑΙ ΣΤΗΝ ΞΕΧΩΡΙΣΤΗ ΛΙΣΤΑ");
         JSONArray open = snap.optJSONArray("positions");
         if (open == null || open.length() == 0) positions.addView(text("Δεν υπάρχουν ανοιχτές εικονικές θέσεις.", 12, MUTED, false));
@@ -815,26 +858,35 @@ public class MainActivity extends Activity {
         LinearLayout bottomNav=new LinearLayout(this);
         bottomNav.setOrientation(LinearLayout.HORIZONTAL);
         bottomNav.setGravity(Gravity.CENTER);
-        bottomNav.setPadding(dp(3),dp(7),dp(3),dp(7));
-        bottomNav.setBackground(goldShell(0xFF080707,0xFF9B6B17));
-        String[] bottomLabels={"⌂\nΑρχική","↗\nΑγορές","▥\nΓράφημα","◷\nΙστορικό","⚙\nΡυθμίσεις"};
+        bottomNav.setPadding(dp(5),dp(5),dp(5),dp(5));
+        bottomNav.setBackground(goldShell(0xFF080707,0xFFFFC83D));
+        String[] bottomLabels={"⌂\nΑρχική","▤\nΘέσεις","◷\nΙστορικό","⚙\nΡυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
-            TextView item=text(bottomLabels[i],10,i==0?GOLD:Color.WHITE,true);
+            boolean active=index==selectedBottomTab;
+            TextView item=text(bottomLabels[i],11,active?GOLD:0xFFE5E0D5,true);
             item.setGravity(Gravity.CENTER);
-            item.setPadding(dp(2),dp(7),dp(2),dp(7));
+            item.setPadding(dp(2),dp(8),dp(2),dp(8));
+            item.setBackground(active?round(0xFF30220A,16,0xFFFFC83D):round(0xFF090909,16,0xFF302A20));
             item.setOnClickListener(v -> {
+                selectedBottomTab=index;
+                for(int j=0;j<bottomNav.getChildCount();j++){
+                    TextView tab=(TextView)bottomNav.getChildAt(j);
+                    boolean chosen=j==selectedBottomTab;
+                    tab.setTextColor(chosen?GOLD:0xFFE5E0D5);
+                    tab.setBackground(chosen?round(0xFF30220A,16,0xFFFFC83D):round(0xFF090909,16,0xFF302A20));
+                }
                 if(index==0){currentScroll.smoothScrollTo(0,0);}
-                else if(index==1){scrollToSection(marketSection);}
-                else if(index==2){scrollToSection(marketSection);}
-                else if(index==3){scrollToSection(historySection);}
+                else if(index==1){scrollToSection(positionsSection);}
+                else if(index==2){scrollToSection(historySection);}
                 else {scrollToSection(settingsSection);}
             });
-            bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(54),1));
+            bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(58),1));
         }
-        root.addView(bottomNav);
-        addSpace(16);
-        TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
+        if(bottomNavigation!=null) appShell.removeView(bottomNavigation);
+        bottomNavigation=bottomNav;
+        appShell.addView(bottomNavigation,new LinearLayout.LayoutParams(-1,dp(68)));
+        TextView footer = text("DioMasteR GOLD AI · v2.0 · XAUUSD · MT5 DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
 
@@ -927,7 +979,8 @@ public class MainActivity extends Activity {
         if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
         long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
-        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη ελεγχθεί"); return; }
+        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
+
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;
@@ -946,17 +999,63 @@ public class MainActivity extends Activity {
                         || !status.optBoolean("execution_enabled")) {
                     throw new IllegalStateException("DEMO execution/σύνδεση δεν επιβεβαιώθηκε ξανά.");
                 }
+
+                // Reverse only bot-owned positions on this symbol; never touch manual trades.
                 JSONObject posResponse = client.positions();
                 JSONArray positions = posResponse.optJSONArray("positions");
-                int botOpen = 0;
+                int sameSide = 0;
+                int closedOpposite = 0;
                 if (positions != null) {
                     for (int i = 0; i < positions.length(); i++) {
                         JSONObject p = positions.optJSONObject(i);
-                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")) botOpen++;
+                        if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
+                                || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
+                        String openSide = p.optString("side",
+                                p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
+                        if (side.equals(openSide)) {
+                            sameSide++;
+                        } else if (("BUY".equals(openSide) || "SELL".equals(openSide))
+                                && p.optLong("ticket", 0) > 0) {
+                            JSONObject closeResult = client.close(p.optLong("ticket"));
+                            if (!closeResult.optBoolean("ok")) {
+                                throw new IllegalStateException("Δεν επιβεβαιώθηκε κλείσιμο αντίθετης θέσης #" + p.optLong("ticket"));
+                            }
+                            closedOpposite++;
+                        }
                     }
                 }
-                if (botOpen > 0) {
-                    resultMessage = "Αναμονή · υπάρχει ήδη ανοιχτή θέση DioMasteR στο MT5 DEMO";
+
+                // Confirm broker-side closure before allowing the reversal order.
+                if (closedOpposite > 0) {
+                    JSONObject verify = client.positions();
+                    JSONArray remaining = verify.optJSONArray("positions");
+                    if (remaining != null) {
+                        for (int i = 0; i < remaining.length(); i++) {
+                            JSONObject p = remaining.optJSONObject(i);
+                            if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
+                                    || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
+                            String openSide = p.optString("side",
+                                    p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
+                            if (!side.equals(openSide)) {
+                                throw new IllegalStateException("Η αντίθετη θέση #" + p.optLong("ticket") + " παραμένει ανοιχτή· δεν στάλθηκε νέα εντολή.");
+                            }
+                        }
+                    }
+                }
+
+                // Allow up to the bridge's configured ten bot positions, one new order per candle.
+                JSONObject refreshed = client.positions();
+                JSONArray current = refreshed.optJSONArray("positions");
+                int botOpen = 0;
+                if (current != null) {
+                    for (int i = 0; i < current.length(); i++) {
+                        JSONObject p = current.optJSONObject(i);
+                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")
+                                && mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) botOpen++;
+                    }
+                }
+                if (botOpen >= 10) {
+                    resultMessage = "ΑΝΑΜΟΝΗ · συμπληρώθηκαν οι 10 ανοιχτές θέσεις DioMasteR στο " + mt5Symbol;
                 } else {
                     JSONObject q = client.quote(mt5Symbol);
                     double ref = q.optDouble("bid", 0);
@@ -968,7 +1067,9 @@ public class MainActivity extends Activity {
                         throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
                     JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
                     submitted = true;
-                    resultMessage = "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · ticket #" + order.optLong("order");
+                    resultMessage = (closedOpposite > 0 ? "ΑΝΤΙΣΤΡΟΦΗ · έκλεισαν " + closedOpposite + " αντίθετες θέσεις · " : "")
+                            + "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · "
+                            + (sameSide > 0 ? "πρόσθετη θέση · " : "") + "ticket #" + order.optLong("order");
                 }
             } catch (Exception e) {
                 resultMessage = "Η εντολή DEMO μπλοκαρίστηκε: " + (e.getMessage() == null ? "άγνωστο σφάλμα" : e.getMessage());
@@ -979,6 +1080,7 @@ public class MainActivity extends Activity {
                 autoOrderInFlight = false;
                 if (sent) lastAutoSignalBar = signalBar;
                 autoExecutionMessage = message;
+                logAgentActivity("AUTO EXECUTION", sent ? "ORDER_SENT" : "WAIT_OR_BLOCKED", message);
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 loadMt5AccountData();
                 render();
@@ -986,12 +1088,11 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-
     private String cleanBridgeToken(String value) {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\r\\n\\t ]+", "");
+        return cleaned.replaceAll("[\\r\n\\t ]+", "");
     }
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);

@@ -71,12 +71,12 @@ public final class GoldChartView extends View {
             c.drawRect(x-body*.45f,h-3-vh,x+body*.45f,h-3,p);
         }
         // EMA overlays.
-        Path e9=new Path(),e21=new Path();
+        Path e6=new Path(),e15=new Path();
         for(int i=0;i<n;i++){
             float x=(i+.5f)*step;
-            float y9=(float)(bottom-(ema(i,9)-min)/range*chartH);
-            float y21=(float)(bottom-(ema(i,21)-min)/range*chartH);
-            if(i==0){e9.moveTo(x,y9);e21.moveTo(x,y21);}else{e9.lineTo(x,y9);e21.lineTo(x,y21);}
+            float y6=(float)(bottom-(ema(i,6)-min)/range*chartH);
+            float y15=(float)(bottom-(ema(i,15)-min)/range*chartH);
+            if(i==0){e6.moveTo(x,y6);e15.moveTo(x,y15);}else{e6.lineTo(x,y6);e15.lineTo(x,y15);}
         }
         // Candlestick wicks and bodies.
         for(int i=0;i<n;i++){
@@ -92,8 +92,8 @@ public final class GoldChartView extends View {
             float bh=Math.max(2f,Math.abs(yc-yo));
             c.drawRect(x-body/2,Math.min(yo,yc),x+body/2,Math.min(yo,yc)+bh,p);
         }
-        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);p.setColor(BLUE);c.drawPath(e9,p);
-        p.setStrokeWidth(2.2f);p.setColor(GOLD);c.drawPath(e21,p);
+        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);p.setColor(BLUE);c.drawPath(e6,p);
+        p.setStrokeWidth(2.2f);p.setColor(GOLD);c.drawPath(e15,p);
         Bar last=bars.get(n-1);float ly=(float)(bottom-(last.c-min)/range*chartH);
         p.setStyle(Paint.Style.FILL);p.setColor(GOLD);c.drawCircle(w-3,ly,3.5f,p);
     }

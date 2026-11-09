@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private ScrollView currentScroll;
     private LinearLayout appShell, bottomNavigation, marketSection, agentSection, tradesSection, positionsSection, historySection, settingsSection;
     private int selectedBottomTab = 0;
+    private int homePageEnd = 0, positionsPageStart = 0, positionsPageEnd = 0, historyPageStart = 0, historyPageEnd = 0, settingsPageStart = 0;
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
@@ -655,7 +656,9 @@ public class MainActivity extends Activity {
         quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
         root.addView(quickActions);
         addSpace(10);
+        homePageEnd = root.getChildCount();
 
+        positionsPageStart = root.getChildCount();
         JSONObject snap = engine.snapshot(quoteFresh() ? price : 0);
         LinearLayout metrics = new LinearLayout(this);
         metrics.setOrientation(LinearLayout.VERTICAL);
@@ -763,7 +766,9 @@ public class MainActivity extends Activity {
         }
         root.addView(positions);
         addSpace(10);
+        positionsPageEnd = root.getChildCount();
 
+        historyPageStart = root.getChildCount();
         LinearLayout history = card();
         historySection = history;
         addLabel(history, "ΙΣΤΟΡΙΚΟ ΚΛΕΙΣΜΕΝΩΝ ΣΥΝΑΛΛΑΓΩΝ");
@@ -828,7 +833,9 @@ public class MainActivity extends Activity {
         }
         root.addView(audit);
         addSpace(10);
+        historyPageEnd = root.getChildCount();
 
+        settingsPageStart = root.getChildCount();
         LinearLayout connections = card();
         settingsSection = connections;
         addLabel(connections, "ΣΥΝΔΕΣΕΙΣ & ΚΑΤΑΣΤΑΣΗ ΣΥΣΤΗΜΑΤΟΣ");
@@ -876,16 +883,15 @@ public class MainActivity extends Activity {
                     tab.setTextColor(chosen?GOLD:0xFFE5E0D5);
                     tab.setBackground(chosen?round(0xFF30220A,16,0xFFFFC83D):round(0xFF090909,16,0xFF302A20));
                 }
-                if(index==0){currentScroll.smoothScrollTo(0,0);}
-                else if(index==1){scrollToSection(positionsSection);}
-                else if(index==2){scrollToSection(historySection);}
-                else {scrollToSection(settingsSection);}
+                applySelectedPage();
+                currentScroll.scrollTo(0,0);
             });
             bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(58),1));
         }
         if(bottomNavigation!=null) appShell.removeView(bottomNavigation);
         bottomNavigation=bottomNav;
         appShell.addView(bottomNavigation,new LinearLayout.LayoutParams(-1,dp(68)));
+        applySelectedPage();
         TextView footer = text("DioMasteR GOLD AI · v2.0 · XAUUSD · MT5 DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
@@ -899,6 +905,19 @@ public class MainActivity extends Activity {
         }
     }
 
+
+    private void applySelectedPage() {
+        if (root == null) return;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            boolean visible;
+            if (selectedBottomTab == 0) visible = i < homePageEnd;
+            else if (selectedBottomTab == 1) visible = i >= positionsPageStart && i < positionsPageEnd;
+            else if (selectedBottomTab == 2) visible = i >= historyPageStart && i < historyPageEnd;
+            else visible = i >= settingsPageStart;
+            root.getChildAt(i).setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+        if (currentScroll != null) currentScroll.scrollTo(0,0);
+    }
 
     // Local execution loop: strategy stays in GoldAiAgent; broker execution is DEMO-only.
     private void startAiEngine() {

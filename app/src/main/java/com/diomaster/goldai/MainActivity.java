@@ -110,8 +110,29 @@ public class MainActivity extends Activity {
         mt5Currency = mt5Prefs.getString("currency", "USD");
         mt5Balance = Double.longBitsToDouble(mt5Prefs.getLong("balance_bits", Double.doubleToRawLongBits(0.0)));
         mt5Equity = Double.longBitsToDouble(mt5Prefs.getLong("equity_bits", Double.doubleToRawLongBits(0.0)));
+        startBackgroundMonitor();
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7302);
+        }
         render();
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) autoConnectMt5();
+    }
+
+
+    private void startBackgroundMonitor() {
+        if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
+        android.content.Intent monitor = new android.content.Intent(this, GoldBackgroundService.class);
+        monitor.putExtra("base", mt5BaseUrl);
+        monitor.putExtra("token", mt5Token);
+        monitor.putExtra("symbol", mt5Symbol);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(monitor);
+            else startService(monitor);
+        } catch (Exception e) {
+            logAgentActivity("BACKGROUND MONITOR", "BLOCKED",
+                    e.getMessage() == null ? "Δεν ξεκίνησε η υπηρεσία παρασκηνίου" : e.getMessage());
+        }
     }
 
     // Reconnects to the saved DEMO bridge on every app launch; never places orders.

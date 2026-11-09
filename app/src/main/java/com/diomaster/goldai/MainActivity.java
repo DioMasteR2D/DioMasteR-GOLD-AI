@@ -477,8 +477,10 @@ public class MainActivity extends Activity {
         hero.setGravity(Gravity.CENTER_VERTICAL);
         hero.setPadding(dp(8),dp(6),dp(8),dp(6));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
-        MascotView headerArt=new MascotView(this);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(104),dp(92)));
+        ImageView headerArt=new ImageView(this);
+        headerArt.setImageResource(R.drawable.lion_crown_header);
+        headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(118),dp(104)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
         TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
         TextView goldTitle=text("GOLD AI",29,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);

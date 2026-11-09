@@ -121,6 +121,23 @@ async def live_tick_stream():
         except asyncio.CancelledError:
             STREAM_DIAGNOSTIC["state"]="stopped"
             raise
+        except HTTPException as exc:
+            if symbol:
+                LIVE_TICKS.pop(symbol, None)
+            recovery_error = None
+            if exc.status_code == 409:
+                try:
+                    await create_demo_session("TickerAll WebSocket rejected account with HTTP 409")
+                except Exception as recovery_exc:
+                    recovery_error = str(recovery_exc)[:200]
+            message = "HTTPException " + str(exc.status_code) + ": " + str(exc.detail)[:220]
+            if recovery_error:
+                message += " | recovery: " + recovery_error
+            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":message})
+            logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
+                           connected, retry_delay, message)
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(max_retry_delay, retry_delay * 2)
         except Exception as exc:
             if symbol:
                 LIVE_TICKS.pop(symbol, None)

@@ -120,6 +120,7 @@ public final class GoldBackgroundService extends Service {
             }
             prefs.edit().putString("open_positions", current.toString()).apply();
             initialized = true;
+            getSharedPreferences("diomaster_background_monitor", MODE_PRIVATE).edit().putBoolean("offline", false).apply();
             updateForeground("Συνδεδεμένο · " + symbol + " · " + positions.length() + " ανοιχτές θέσεις · LIVE TickerAll");
             getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
                     .putString("status", "DEMO · TickerAll LIVE").apply();
@@ -133,7 +134,6 @@ public final class GoldBackgroundService extends Service {
         } finally {
             polling = false;
         }
-        getSharedPreferences("diomaster_background_monitor", MODE_PRIVATE).edit().putBoolean("offline", false).apply();
     }
 
     private JSONObject findHistory(JSONArray rows, String ticket) {

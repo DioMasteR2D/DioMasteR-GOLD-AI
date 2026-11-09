@@ -72,6 +72,21 @@ public class MainActivity extends Activity {
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
     private final JSONArray agentActivityLog = new JSONArray();
+    private static final String AUDIT_PREFS = "diomaster_ai_audit";
+    private static final String AUDIT_EVENTS_KEY = "events";
+    private static final int MAX_AUDIT_EVENTS = 300;
+
+    private void restoreAgentActivity() {
+        try {
+            String saved = getSharedPreferences(AUDIT_PREFS, MODE_PRIVATE).getString(AUDIT_EVENTS_KEY, "[]");
+            JSONArray restored = new JSONArray(saved);
+            synchronized (agentActivityLog) {
+                while (agentActivityLog.length() > 0) agentActivityLog.remove(0);
+                int start = Math.max(0, restored.length() - MAX_AUDIT_EVENTS);
+                for (int i = start; i < restored.length(); i++) agentActivityLog.put(restored.opt(i));
+            }
+        } catch (Exception ignored) { }
+    }
 
     private void logAgentActivity(String agent, String action, String reason) {
         try {
@@ -83,9 +98,12 @@ public class MainActivity extends Activity {
             synchronized (agentActivityLog) {
                 JSONArray next = new JSONArray();
                 next.put(event);
-                for (int i = 0; i < agentActivityLog.length() && i < 39; i++) next.put(agentActivityLog.opt(i));
+                int keep = Math.min(agentActivityLog.length(), MAX_AUDIT_EVENTS - 1);
+                for (int i = 0; i < keep; i++) next.put(agentActivityLog.opt(i));
                 while (agentActivityLog.length() > 0) agentActivityLog.remove(0);
                 for (int i = 0; i < next.length(); i++) agentActivityLog.put(next.opt(i));
+                getSharedPreferences(AUDIT_PREFS, MODE_PRIVATE).edit()
+                        .putString(AUDIT_EVENTS_KEY, agentActivityLog.toString()).apply();
             }
         } catch (Exception ignored) { }
     }
@@ -102,6 +120,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         engine = new PaperTradingEngine(this);
+        restoreAgentActivity();
         android.content.SharedPreferences mt5Prefs = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE);
         mt5BaseUrl = mt5Prefs.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         mt5Token = cleanBridgeToken(mt5Prefs.getString("token", ""));

@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
     private PaperTradingEngine engine;
     private LinearLayout root;
     private ScrollView currentScroll;
-    private LinearLayout marketSection, agentSection, tradesSection, historySection, settingsSection;
+    private LinearLayout appShell, bottomNavigation, marketSection, agentSection, tradesSection, positionsSection, historySection, settingsSection;
+    private int selectedBottomTab = 0;
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
@@ -462,12 +463,16 @@ public class MainActivity extends Activity {
         final int previousScrollY = firstRender ? 0 : currentScroll.getScrollY();
         final ScrollView scroll;
         if (firstRender) {
+            appShell = new LinearLayout(this);
+            appShell.setOrientation(LinearLayout.VERTICAL);
+            appShell.setBackgroundColor(BG);
             scroll = new ScrollView(this);
             scroll.setFillViewport(true);
             scroll.setBackgroundColor(BG);
             currentScroll = scroll;
             scroll.addView(root);
-            setContentView(scroll);
+            appShell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+            setContentView(appShell);
         } else {
             scroll = currentScroll;
         }
@@ -714,6 +719,7 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout positions = card();
+        positionsSection = positions;
         addLabel(positions, "PAPER ΘΕΣΕΙΣ · ΤΟ MT5 ΕΜΦΑΝΙΖΕΤΑΙ ΣΤΗΝ ΞΕΧΩΡΙΣΤΗ ΛΙΣΤΑ");
         JSONArray open = snap.optJSONArray("positions");
         if (open == null || open.length() == 0) positions.addView(text("Δεν υπάρχουν ανοιχτές εικονικές θέσεις.", 12, MUTED, false));
@@ -852,25 +858,34 @@ public class MainActivity extends Activity {
         LinearLayout bottomNav=new LinearLayout(this);
         bottomNav.setOrientation(LinearLayout.HORIZONTAL);
         bottomNav.setGravity(Gravity.CENTER);
-        bottomNav.setPadding(dp(3),dp(7),dp(3),dp(7));
-        bottomNav.setBackground(goldShell(0xFF080707,0xFF9B6B17));
-        String[] bottomLabels={"⌂\nΑρχική","↗\nΑγορές","▥\nΓράφημα","◷\nΙστορικό","⚙\nΡυθμίσεις"};
+        bottomNav.setPadding(dp(5),dp(5),dp(5),dp(5));
+        bottomNav.setBackground(goldShell(0xFF080707,0xFFFFC83D));
+        String[] bottomLabels={"⌂\nΑρχική","▤\nΘέσεις","◷\nΙστορικό","⚙\nΡυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
-            TextView item=text(bottomLabels[i],10,i==0?GOLD:Color.WHITE,true);
+            boolean active=index==selectedBottomTab;
+            TextView item=text(bottomLabels[i],11,active?GOLD:0xFFE5E0D5,true);
             item.setGravity(Gravity.CENTER);
-            item.setPadding(dp(2),dp(7),dp(2),dp(7));
+            item.setPadding(dp(2),dp(8),dp(2),dp(8));
+            item.setBackground(active?round(0xFF30220A,16,0xFFFFC83D):round(0xFF090909,16,0xFF302A20));
             item.setOnClickListener(v -> {
+                selectedBottomTab=index;
+                for(int j=0;j<bottomNav.getChildCount();j++){
+                    TextView tab=(TextView)bottomNav.getChildAt(j);
+                    boolean chosen=j==selectedBottomTab;
+                    tab.setTextColor(chosen?GOLD:0xFFE5E0D5);
+                    tab.setBackground(chosen?round(0xFF30220A,16,0xFFFFC83D):round(0xFF090909,16,0xFF302A20));
+                }
                 if(index==0){currentScroll.smoothScrollTo(0,0);}
-                else if(index==1){scrollToSection(marketSection);}
-                else if(index==2){scrollToSection(marketSection);}
-                else if(index==3){scrollToSection(historySection);}
+                else if(index==1){scrollToSection(positionsSection);}
+                else if(index==2){scrollToSection(historySection);}
                 else {scrollToSection(settingsSection);}
             });
-            bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(54),1));
+            bottomNav.addView(item,new LinearLayout.LayoutParams(0,dp(58),1));
         }
-        root.addView(bottomNav);
-        addSpace(16);
+        if(bottomNavigation!=null) appShell.removeView(bottomNavigation);
+        bottomNavigation=bottomNav;
+        appShell.addView(bottomNavigation,new LinearLayout.LayoutParams(-1,dp(68)));
         TextView footer = text("DioMasteR GOLD AI · v2.0 · XAUUSD · MT5 DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);

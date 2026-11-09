@@ -590,8 +590,7 @@ public class MainActivity extends Activity {
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
         chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(250)));
-        if (brokerChartActive) chart.setCandles(brokerCandles);
-        else for (double p : chartPrices) chart.addPrice(p);
+        chart.setCandles(brokerChartActive ? brokerCandles : new JSONArray());
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
         indicators.setOrientation(LinearLayout.HORIZONTAL);
@@ -1338,12 +1337,19 @@ public class MainActivity extends Activity {
         b.setTextSize(11);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         b.setLetterSpacing(0.035f);
-        b.setTextColor(color == GREEN || color == GOLD ? 0xFF100D07 : Color.WHITE);
+        b.setTextColor(Color.WHITE);
         b.setAllCaps(false);
-        b.setMinHeight(dp(48));
-        b.setPadding(dp(10), dp(7), dp(10), dp(7));
-        b.setBackground(round(color, 14, color == GREEN || color == GOLD ? color : 0xFF5C4A2B));
-        b.setElevation(dp(2));
+        b.setMinHeight(dp(50));
+        b.setPadding(dp(10), dp(8), dp(10), dp(8));
+        int deep = color == GREEN ? 0xFF06351D : color == GOLD ? 0xFF352407 :
+                color == 0xFFB12BEE ? 0xFF260B38 : color == 0xFF168CFF ? 0xFF071D3B : 0xFF171719;
+        GradientDrawable face = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{deep, 0xFF08090B, deep});
+        face.setCornerRadius(dp(17));
+        face.setStroke(dp(2), color);
+        b.setBackground(face);
+        b.setShadowLayer(dp(9), 0, 0, color);
+        b.setElevation(dp(5));
         b.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(dp(4), dp(6), dp(4), dp(4));

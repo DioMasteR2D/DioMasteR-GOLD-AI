@@ -53,7 +53,7 @@ public final class GoldChartView extends View {
         float w=getWidth(),h=getHeight();
         for(int i=1;i<=4;i++) canvas.drawLine(0,h*i/5f,w,h*i/5f,grid);
         if(bars.size()>=2) drawBars(canvas,w,h);
-        else drawFallback(canvas,w,h);
+        else drawWaiting(canvas,w,h);
     }
     private void drawBars(Canvas c,float w,float h) {
         int n=bars.size(); double min=Double.MAX_VALUE,max=-Double.MAX_VALUE,maxVol=1;
@@ -97,17 +97,16 @@ public final class GoldChartView extends View {
         Bar last=bars.get(n-1);float ly=(float)(bottom-(last.c-min)/range*chartH);
         p.setStyle(Paint.Style.FILL);p.setColor(GOLD);c.drawCircle(w-3,ly,3.5f,p);
     }
-    private void drawFallback(Canvas c,float w,float h) {
-        if(fallback.size()<2)return;
-        double min=Double.MAX_VALUE,max=-Double.MAX_VALUE;
-        for(double v:fallback){min=Math.min(min,v);max=Math.max(max,v);}
-        double range=Math.max(.01,max-min);Path path=new Path();
-        for(int i=0;i<fallback.size();i++){
-            float x=w*i/(fallback.size()-1f);
-            float y=(float)(h-8-((fallback.get(i)-min)/range)*(h-16));
-            if(i==0)path.moveTo(x,y);else path.lineTo(x,y);
-        }
-        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);p.setColor(GOLD);p.setShadowLayer(8,0,0,0x88D7AD54);
-        c.drawPath(path,p);p.clearShadowLayer();
+    private void drawWaiting(Canvas c,float w,float h) {
+        p.setStyle(Paint.Style.FILL);
+        p.setTextAlign(Paint.Align.CENTER);
+        p.setTextSize(13f);
+        p.setColor(0xFFB9A77F);
+        c.drawText("ΑΝΑΜΟΝΗ ΠΡΑΓΜΑΤΙΚΩΝ MT5 OHLC CANDLES", w/2f, h/2f, p);
+        p.setTextSize(10f);
+        p.setColor(0xFF77716A);
+        c.drawText("Σύνδεσε το Vantage MT5 DEMO για γράφημα κεριών", w/2f, h/2f+dp(22), p);
+        p.setTextAlign(Paint.Align.LEFT);
     }
+    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
 }

@@ -294,6 +294,51 @@ async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
         raise HTTPException(503,f"STALE_LIVE_TICK: last broker tick is {int(age)} seconds old")
     return {k:v for k,v in tick.items() if k!="received_at"}
 
+# Per-symbol/timeframe candle cache. Serve cached OHLC immediately and refresh
+# in the background so switching timeframes does not block the Android UI.
+CANDLE_CACHE={}
+CANDLE_REFRESH_TASKS={}
+CANDLE_CACHE_TTL={"M1":15,"M5":20,"M15":30,"M30":45,"H1":60,"H4":90,"D1":120,"W1":180,"MN1":300}
+
+async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
+    try:
+        data=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+        rows=data.get("candles",[])
+        if not isinstance(rows,list):
+            raise ValueError("TickerAll candle payload is invalid")
+        clean=[]
+        invalid_rows=0
+        first_keys=sorted(rows[0].keys()) if rows and isinstance(rows[0],dict) else []
+        first_types={k:type(v).__name__ for k,v in rows[0].items()} if rows and isinstance(rows[0],dict) else {}
+        for bar in rows:
+            try:
+                clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),
+                  "high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),
+                  "tick_volume":float(bar.get("tickVolume") or 0),"spread":float(bar.get("spread") or 0)})
+            except (KeyError,TypeError,ValueError):
+                invalid_rows+=1
+        diagnostic = ("TickerAll candles diagnostic: symbol=%s timeframe=%s hours=%s raw_count=%s valid_count=%s invalid_count=%s first_keys=%s first_types=%s coverage=%s truncated=%s served=%s stop_reason=%s note=%s response_keys=%s" %
+          (symbol,timeframe,hours,len(rows),len(clean),invalid_rows,first_keys,first_types,
+           data.get("coverage"),bool(data.get("truncated",False)),data.get("served"),
+           data.get("stopReason"),str(data.get("note") or "")[:180],sorted(data.keys())))
+        print(diagnostic,flush=True)
+        logger.info(diagnostic)
+        # Keep only valid real broker OHLC. Empty/partial failures never erase a
+        # previously good cache.
+        if len(clean)>=2:
+            CANDLE_CACHE[key]={"candles":clean,"fetched_at":time.time(),
+              "coverage":data.get("coverage"),"truncated":bool(data.get("truncated",False)),
+              "served":data.get("served")}
+        elif key not in CANDLE_CACHE:
+            CANDLE_CACHE[key]={"candles":clean,"fetched_at":time.time(),
+              "coverage":data.get("coverage"),"truncated":bool(data.get("truncated",False)),
+              "served":data.get("served")}
+    except Exception as exc:
+        logger.warning("TickerAll candle refresh failed: symbol=%s timeframe=%s error=%s",
+                       symbol,timeframe,str(exc)[:200])
+    finally:
+        CANDLE_REFRESH_TASKS.pop(key,None)
+
 @app.get("/v1/candles/{symbol}")
 async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Optional[str]=Header(default=None)):
     auth(authorization); row,_=await account_detail()
@@ -302,33 +347,29 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     if hours<1 or hours>8760: raise HTTPException(422,"hours must be between 1 and 8760")
     symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
     if symbol not in symbols_data.get("symbols",[]): raise HTTPException(404,"Broker-native symbol not found")
-    # Use TickerAll's broker-relative look-back mode. Its candle timestamps are
-    # in broker server time, so avoid constructing UTC date bounds in this bridge.
-    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
-    rows=data.get("candles",[])
-    if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
-    clean=[]
-    invalid_rows=0
-    effective_timeframe=timeframe
-    source="tickerall_history"
-    first_keys=sorted(rows[0].keys()) if rows and isinstance(rows[0],dict) else []
-    first_types={k:type(v).__name__ for k,v in rows[0].items()} if rows and isinstance(rows[0],dict) else {}
-    for bar in rows:
+
+    key=(symbol,timeframe,hours)
+    cached=CANDLE_CACHE.get(key)
+    age=(time.time()-cached["fetched_at"]) if cached else None
+    ttl=CANDLE_CACHE_TTL.get(timeframe,60)
+    task=CANDLE_REFRESH_TASKS.get(key)
+    if task is None and (cached is None or age>=ttl):
+        task=asyncio.create_task(refresh_candle_cache(key,row["id"],symbol,timeframe,hours))
+        CANDLE_REFRESH_TASKS[key]=task
+
+    # First load waits briefly for genuine TickerAll OHLC. Later timeframe
+    # switches return cached bars immediately while a refresh runs.
+    if cached is None and task is not None:
         try:
-            clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),
-              "high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),
-              "tick_volume":float(bar.get("tickVolume") or 0),"spread":float(bar.get("spread") or 0)})
-        except (KeyError,TypeError,ValueError):
-            invalid_rows+=1
-    # Diagnostic metadata only: never log prices, account identifiers, or API credentials.
-    diagnostic = ("TickerAll candles diagnostic: symbol=%s timeframe=%s hours=%s raw_count=%s valid_count=%s invalid_count=%s first_keys=%s first_types=%s coverage=%s truncated=%s served=%s stop_reason=%s note=%s response_keys=%s" %
-      (symbol,timeframe,hours,len(rows),len(clean),invalid_rows,first_keys,first_types,
-       data.get("coverage"),bool(data.get("truncated",False)),data.get("served"),
-       data.get("stopReason"),str(data.get("note") or "")[:180],sorted(data.keys())))
-    print(diagnostic, flush=True)
-    logger.info(diagnostic)
-    # If broker history is empty, draw only from real TickerAll live ticks.
-    # The fallback is explicitly labelled M1; it never fabricates historical bars.
+            await asyncio.wait_for(asyncio.shield(task),timeout=10)
+        except asyncio.TimeoutError:
+            pass
+        cached=CANDLE_CACHE.get(key)
+
+    clean=list(cached.get("candles",[])) if cached else []
+    effective_timeframe=timeframe
+    source="tickerall_history_cache" if cached else "tickerall_history_pending"
+    # If historical OHLC is unavailable, use only genuine live tick-built M1.
     if len(clean)<2:
         live_rows=live_m1_candles(symbol,120)
         if len(live_rows)>=2:
@@ -337,8 +378,12 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
             source="tickerall_live_ticks"
     return {"account_mode":"DEMO","symbol":symbol,"timeframe":effective_timeframe,
       "requested_timeframe":timeframe,"effective_timeframe":effective_timeframe,
-      "source":source,"candles":clean,"count":len(clean),"coverage":data.get("coverage"),
-      "truncated":bool(data.get("truncated",False)),"served":data.get("served")}
+      "source":source,"candles":clean,"count":len(clean),
+      "coverage":cached.get("coverage") if cached else None,
+      "truncated":cached.get("truncated",False) if cached else False,
+      "served":cached.get("served") if cached else None,
+      "cache_age_seconds":round(age,1) if age is not None else None,
+      "refreshing":key in CANDLE_REFRESH_TASKS}
 
 @app.get("/v1/history")
 async def history(symbol:Optional[str]=None,limit:int=50,authorization:Optional[str]=Header(default=None)):

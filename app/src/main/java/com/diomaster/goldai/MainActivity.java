@@ -490,7 +490,7 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(132)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(142)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
@@ -522,15 +522,30 @@ public class MainActivity extends Activity {
         connection.addView(text(mt5Connected ? "MT5 Demo  •  VantageMarkets-Demo  •  XAUUSD" : (mt5Status == null ? "Δεν έχει γίνει σύνδεση" : mt5Status),10,mt5Connected?0xFFE0E8E4:0xFFFFB6A8,false));
         addRow(connection,"Bridge  "+(mt5Connected?"✓":"×"),"Λογαριασμός  "+(mt5Connected?"✓":"—"),mt5Connected?GREEN:RED);
         addRow(connection,"Τιμές  "+(brokerChartActive?"✓":"—"),"Εντολές  "+(mt5ExecutionEnabled?"DEMO ON":"READ ONLY"),brokerChartActive?GREEN:GOLD);
-        root.addView(connection);
-        addSpace(10);
+        // Detailed bridge diagnostics remain available in Settings; keep the home screen compact.
+        addSpace(5);
 
         LinearLayout market = card();
         marketSection = market;
-        addLabel(market, brokerChartActive ? "XAUUSD  ·  GOLD  ·  VANTAGE MT5 DEMO OHLC" : "XAUUSD  ·  GOLD  ·  ΕΝΔΕΙΚΤΙΚΗ SPOT ΤΙΜΗ");
-        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 36, GREEN, true);
-        market.addView(priceText);
-        TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
+        LinearLayout instrument = new LinearLayout(this);
+        instrument.setOrientation(LinearLayout.HORIZONTAL);
+        instrument.setGravity(Gravity.CENTER_VERTICAL);
+        instrument.setPadding(dp(10),dp(9),dp(10),dp(9));
+        instrument.setBackground(goldShell(0xFF090909,0xFFFFC83D));
+        TextView goldIcon = text("◆",30,GOLD,true);
+        goldIcon.setPadding(dp(4),0,dp(10),0);
+        instrument.addView(goldIcon);
+        LinearLayout instrumentName = new LinearLayout(this);
+        instrumentName.setOrientation(LinearLayout.VERTICAL);
+        instrumentName.addView(text("XAUUSD",21,Color.WHITE,true));
+        instrumentName.addView(text("Gold / US Dollar",11,MUTED,false));
+        instrument.addView(instrumentName,new LinearLayout.LayoutParams(0,-2,1));
+        TextView priceText = text(price > 0 ? String.format(Locale.US, "%,.2f", price) : "—", 29, GREEN, true);
+        priceText.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+        instrument.addView(priceText);
+        market.addView(instrument);
+        TextView feed = text((quoteFresh() ? "● LIVE  " : "● ") + feedMessage, 10, quoteFresh() ? GREEN : RED, false);
+        feed.setPadding(dp(4),dp(5),0,dp(7));
         market.addView(feed);
         LinearLayout accountStrip = new LinearLayout(this);
         accountStrip.setOrientation(LinearLayout.HORIZONTAL);
@@ -543,7 +558,7 @@ public class MainActivity extends Activity {
         LinearLayout periods = new LinearLayout(this);
         periods.setOrientation(LinearLayout.HORIZONTAL);
         periods.setGravity(Gravity.CENTER);
-        String[] frames={"M1","M5","M15","M30","H1","H4","D1"};
+        String[] frames={"M1","M5","M15","M30","H1","H4"};
         for(String frame:frames) {
             final String tf=frame;
             TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
@@ -566,7 +581,7 @@ public class MainActivity extends Activity {
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(300)));
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(250)));
         if (brokerChartActive) chart.setCandles(brokerCandles);
         else for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
@@ -861,7 +876,7 @@ public class MainActivity extends Activity {
         }
         root.addView(bottomNav);
         addSpace(16);
-        TextView footer = text("DioMasteR GOLD AI · Native Android · Μόνο DEMO", 10, MUTED, false);
+        TextView footer = text("DioMasteR GOLD AI · v2.0 · XAUUSD · MT5 DEMO", 10, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer);
 

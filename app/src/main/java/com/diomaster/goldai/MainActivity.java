@@ -575,8 +575,8 @@ public class MainActivity extends Activity {
         market.addView(periods);
         LinearLayout chartLegend=new LinearLayout(this);
         chartLegend.setOrientation(LinearLayout.HORIZONTAL);
-        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
-        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
+        chartLegend.addView(text("● EMA 6",10,0xFF28B8FF,true));
+        TextView ema21Legend=text("● EMA 15",10,GOLD,true);
         ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
         market.addView(chartLegend);
         addSpace(5);
@@ -589,13 +589,13 @@ public class MainActivity extends Activity {
         indicators.setOrientation(LinearLayout.HORIZONTAL);
         boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
-        double emaFast=calcEma(9), emaSlow=calcEma(21);
+        double emaFast=calcEma(6), emaSlow=calcEma(15);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
         indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 9 / EMA 21." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);

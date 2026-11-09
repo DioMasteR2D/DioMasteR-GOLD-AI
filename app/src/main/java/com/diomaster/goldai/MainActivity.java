@@ -964,7 +964,8 @@ public class MainActivity extends Activity {
         if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
         long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
-        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη ελεγχθεί"); return; }
+        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
+
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;
@@ -983,17 +984,63 @@ public class MainActivity extends Activity {
                         || !status.optBoolean("execution_enabled")) {
                     throw new IllegalStateException("DEMO execution/σύνδεση δεν επιβεβαιώθηκε ξανά.");
                 }
+
+                // Reverse only bot-owned positions on this symbol; never touch manual trades.
                 JSONObject posResponse = client.positions();
                 JSONArray positions = posResponse.optJSONArray("positions");
-                int botOpen = 0;
+                int sameSide = 0;
+                int closedOpposite = 0;
                 if (positions != null) {
                     for (int i = 0; i < positions.length(); i++) {
                         JSONObject p = positions.optJSONObject(i);
-                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")) botOpen++;
+                        if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
+                                || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
+                        String openSide = p.optString("side",
+                                p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
+                        if (side.equals(openSide)) {
+                            sameSide++;
+                        } else if (("BUY".equals(openSide) || "SELL".equals(openSide))
+                                && p.optLong("ticket", 0) > 0) {
+                            JSONObject closeResult = client.close(p.optLong("ticket"));
+                            if (!closeResult.optBoolean("ok")) {
+                                throw new IllegalStateException("Δεν επιβεβαιώθηκε κλείσιμο αντίθετης θέσης #" + p.optLong("ticket"));
+                            }
+                            closedOpposite++;
+                        }
                     }
                 }
-                if (botOpen > 0) {
-                    resultMessage = "Αναμονή · υπάρχει ήδη ανοιχτή θέση DioMasteR στο MT5 DEMO";
+
+                // Confirm broker-side closure before allowing the reversal order.
+                if (closedOpposite > 0) {
+                    JSONObject verify = client.positions();
+                    JSONArray remaining = verify.optJSONArray("positions");
+                    if (remaining != null) {
+                        for (int i = 0; i < remaining.length(); i++) {
+                            JSONObject p = remaining.optJSONObject(i);
+                            if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
+                                    || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
+                            String openSide = p.optString("side",
+                                    p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
+                            if (!side.equals(openSide)) {
+                                throw new IllegalStateException("Η αντίθετη θέση #" + p.optLong("ticket") + " παραμένει ανοιχτή· δεν στάλθηκε νέα εντολή.");
+                            }
+                        }
+                    }
+                }
+
+                // Allow up to the bridge's configured ten bot positions, one new order per candle.
+                JSONObject refreshed = client.positions();
+                JSONArray current = refreshed.optJSONArray("positions");
+                int botOpen = 0;
+                if (current != null) {
+                    for (int i = 0; i < current.length(); i++) {
+                        JSONObject p = current.optJSONObject(i);
+                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")
+                                && mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) botOpen++;
+                    }
+                }
+                if (botOpen >= 10) {
+                    resultMessage = "ΑΝΑΜΟΝΗ · συμπληρώθηκαν οι 10 ανοιχτές θέσεις DioMasteR στο " + mt5Symbol;
                 } else {
                     JSONObject q = client.quote(mt5Symbol);
                     double ref = q.optDouble("bid", 0);
@@ -1005,7 +1052,9 @@ public class MainActivity extends Activity {
                         throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
                     JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
                     submitted = true;
-                    resultMessage = "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · ticket #" + order.optLong("order");
+                    resultMessage = (closedOpposite > 0 ? "ΑΝΤΙΣΤΡΟΦΗ · έκλεισαν " + closedOpposite + " αντίθετες θέσεις · " : "")
+                            + "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · "
+                            + (sameSide > 0 ? "πρόσθετη θέση · " : "") + "ticket #" + order.optLong("order");
                 }
             } catch (Exception e) {
                 resultMessage = "Η εντολή DEMO μπλοκαρίστηκε: " + (e.getMessage() == null ? "άγνωστο σφάλμα" : e.getMessage());
@@ -1016,13 +1065,13 @@ public class MainActivity extends Activity {
                 autoOrderInFlight = false;
                 if (sent) lastAutoSignalBar = signalBar;
                 autoExecutionMessage = message;
+                logAgentActivity("AUTO EXECUTION", sent ? "ORDER_SENT" : "WAIT_OR_BLOCKED", message);
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 loadMt5AccountData();
                 render();
             });
         }).start();
     }
-
 
     private String cleanBridgeToken(String value) {
         if (value == null) return "";

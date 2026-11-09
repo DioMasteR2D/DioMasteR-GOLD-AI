@@ -453,7 +453,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(24));
+        root.setPadding(dp(10), dp(8), dp(10), dp(18));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -475,13 +475,13 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(10),dp(8),dp(10),dp(8));
+        hero.setPadding(dp(8),dp(6),dp(8),dp(6));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
         MascotView headerArt=new MascotView(this);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(82)));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(104),dp(92)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
-        TextView brandTitle=text("DioMasteR2D",19,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView goldTitle=text("GOLD AI",25,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
+        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView goldTitle=text("GOLD AI",29,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
         TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
@@ -490,11 +490,27 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(122)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(132)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
-        addSpace(8);
+        addSpace(7);
+        LinearLayout statusStrip = new LinearLayout(this);
+        statusStrip.setOrientation(LinearLayout.HORIZONTAL);
+        statusStrip.setGravity(Gravity.CENTER);
+        String[] statusLabels = {"● LIVE", "☁ Render", "✦ AI Agent", "▤ MT5 DEMO"};
+        int[] statusColors = {quoteFresh() ? GREEN : RED, 0xFFE8E8EA, aiEngineStarted ? GREEN : GOLD, mt5Connected ? GREEN : RED};
+        for (int i=0;i<statusLabels.length;i++) {
+            TextView pill = text(statusLabels[i], 9, statusColors[i], true);
+            pill.setGravity(Gravity.CENTER);
+            pill.setPadding(dp(3), dp(9), dp(3), dp(9));
+            pill.setBackground(goldShell(0xFF090909, 0xFF74541B));
+            LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(0, -2, 1);
+            pl.setMargins(dp(2), 0, dp(2), 0);
+            statusStrip.addView(pill, pl);
+        }
+        root.addView(statusStrip);
+        addSpace(7);
 
         LinearLayout connection = card();
         GradientDrawable connBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -512,10 +528,18 @@ public class MainActivity extends Activity {
         LinearLayout market = card();
         marketSection = market;
         addLabel(market, brokerChartActive ? "XAUUSD  ·  GOLD  ·  VANTAGE MT5 DEMO OHLC" : "XAUUSD  ·  GOLD  ·  ΕΝΔΕΙΚΤΙΚΗ SPOT ΤΙΜΗ");
-        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 40, GOLD, true);
+        TextView priceText = text(price > 0 ? "$" + String.format(Locale.US, "%,.2f", price) : "—", 36, GREEN, true);
         market.addView(priceText);
         TextView feed = text((quoteFresh() ? "● " : "● ") + feedMessage, 11, quoteFresh() ? GREEN : RED, false);
         market.addView(feed);
+        LinearLayout accountStrip = new LinearLayout(this);
+        accountStrip.setOrientation(LinearLayout.HORIZONTAL);
+        accountStrip.addView(metric("ΥΠΟΛΟΙΠΟ", mt5Connected ? money(mt5Balance) : "—", GOLD), weight());
+        accountStrip.addView(metric("EQUITY", mt5Connected ? money(mt5Equity) : "—", GOLD), weight());
+        JSONObject accountSnap = engine.snapshot(quoteFresh() ? price : 0);
+        accountStrip.addView(metric("P/L", PaperTradingEngine.money(accountSnap.optDouble("floating")), accountSnap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        market.addView(accountStrip);
+        addSpace(5);
         LinearLayout periods = new LinearLayout(this);
         periods.setOrientation(LinearLayout.HORIZONTAL);
         periods.setGravity(Gravity.CENTER);
@@ -542,7 +566,7 @@ public class MainActivity extends Activity {
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(270)));
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(300)));
         if (brokerChartActive) chart.setCandles(brokerCandles);
         else for (double p : chartPrices) chart.addPrice(p);
         market.addView(chart);
@@ -564,10 +588,13 @@ public class MainActivity extends Activity {
 
         LinearLayout agent = card();
         agentSection = agent;
-        addLabel(agent, "✦  DIOMASTER AI SIGNAL  ·  MARKET ANALYSIS");
+        addLabel(agent, "🎯  ΤΡΕΧΟΝ ΣΗΜΑ AI  ·  MARKET ANALYSIS");
         int signalColor = "BUY".equals(aiSignal.side) ? GREEN : "SELL".equals(aiSignal.side) ? RED : GOLD;
         String signalTitle = "BUY".equals(aiSignal.side) ? "▲ BUY SIGNAL" : "SELL".equals(aiSignal.side) ? "▼ SELL SIGNAL" : "HOLD · WAIT";
-        TextView signal = text(signalTitle, 25, signalColor, true);
+        TextView signal = text(signalTitle, 29, signalColor, true);
+        signal.setGravity(Gravity.CENTER);
+        signal.setPadding(dp(8), dp(12), dp(8), dp(12));
+        signal.setBackground(round("BUY".equals(aiSignal.side) ? 0xFF063B20 : "SELL".equals(aiSignal.side) ? 0xFF410D14 : 0xFF062B18, 18, signalColor));
         if (aiSignal.ready && !"HOLD".equals(aiSignal.side)) {
             android.view.animation.AlphaAnimation pulse = new android.view.animation.AlphaAnimation(0.55f, 1.0f);
             pulse.setDuration(850L); pulse.setRepeatMode(android.view.animation.Animation.REVERSE);

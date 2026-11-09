@@ -60,6 +60,37 @@ def live_m1_candles(symbol, limit=120):
         rows.append(dict(current))
     return rows[-limit:]
 
+def aggregate_live_m1_candles(symbol, timeframe, limit=120):
+    """Aggregate only complete, contiguous, closed tick-built M1 bars."""
+    minutes={"M5":5,"M15":15,"M30":30,"H1":60}.get(timeframe)
+    if not minutes:
+        return []
+    rows=list(LIVE_M1_BARS.get(symbol, []))  # excludes the still-forming M1 bar
+    if len(rows)<minutes:
+        return []
+    grouped={}
+    for bar in rows:
+        stamp=int(float(bar.get("timestamp",0)))
+        bucket=(stamp//(minutes*60))*(minutes*60)
+        grouped.setdefault(bucket,[]).append(bar)
+    result=[]
+    for bucket in sorted(grouped):
+        group=sorted(grouped[bucket],key=lambda x:float(x.get("timestamp",0)))
+        stamps=[int(float(x.get("timestamp",0))) for x in group]
+        expected=[bucket+i*60 for i in range(minutes)]
+        if stamps!=expected:
+            continue
+        result.append({
+            "timestamp":float(bucket),
+            "open":float(group[0]["open"]),
+            "high":max(float(x["high"]) for x in group),
+            "low":min(float(x["low"]) for x in group),
+            "close":float(group[-1]["close"]),
+            "tick_volume":sum(float(x.get("tick_volume",0)) for x in group),
+            "spread":max(float(x.get("spread",0)) for x in group),
+        })
+    return result[-limit:]
+
 _stream_task=None
 STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
@@ -424,16 +455,28 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     clean=list(cached.get("candles",[])) if cached else []
     effective_timeframe=timeframe
     source="tickerall_history_cache" if cached else "tickerall_history_pending"
-    # If historical OHLC is unavailable, use only genuine live tick-built M1.
+    fallback_reason=None
+    # When TickerAll historical candles are unavailable, aggregate only
+    # complete contiguous closed M1 bars built from genuine broker ticks.
     if len(clean)<2:
-        live_rows=live_m1_candles(symbol,120)
-        if len(live_rows)>=2:
-            clean=live_rows
-            effective_timeframe="M1"
-            source="tickerall_live_ticks"
+        aggregated=aggregate_live_m1_candles(symbol,timeframe,120)
+        if len(aggregated)>=2:
+            clean=aggregated
+            source="tickerall_live_ticks_aggregated"
+        else:
+            live_rows=live_m1_candles(symbol,120)
+            if timeframe=="M1" and len(live_rows)>=2:
+                clean=live_rows
+                effective_timeframe="M1"
+                source="tickerall_live_ticks"
+            elif len(live_rows)<2:
+                fallback_reason="WAITING_FOR_SUFFICIENT_LIVE_TICKS"
+            else:
+                fallback_reason="WAITING_FOR_COMPLETE_CONTIGUOUS_M1_BARS"
     return {"account_mode":"DEMO","symbol":symbol,"timeframe":effective_timeframe,
       "requested_timeframe":timeframe,"effective_timeframe":effective_timeframe,
-      "source":source,"candles":clean,"count":len(clean),
+      "source":source,"fallback_reason":fallback_reason,
+      "candles":clean,"count":len(clean),
       "coverage":cached.get("coverage") if cached else None,
       "truncated":cached.get("truncated",False) if cached else False,
       "served":cached.get("served") if cached else None,

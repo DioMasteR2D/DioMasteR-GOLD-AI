@@ -1,6 +1,6 @@
 """DioMasteR GOLD AI bridge for TickerAll MT5 DEMO."""
 import os, hmac, uuid, logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -271,7 +271,12 @@ async def candles(symbol:str,timeframe:str="M15",hours:int=24,authorization:Opti
     if hours<1 or hours>8760: raise HTTPException(422,"hours must be between 1 and 8760")
     symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
     if symbol not in symbols_data.get("symbols",[]): raise HTTPException(404,"Broker-native symbol not found")
-    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+    # Use TickerAll's exact date-range mode instead of a rolling hours request.
+    window_to=datetime.now(timezone.utc)
+    window_from=window_to-timedelta(hours=hours)
+    from_iso=window_from.isoformat(timespec="seconds").replace("+00:00","Z")
+    to_iso=window_to.isoformat(timespec="seconds").replace("+00:00","Z")
+    data=await ta("GET",f"/v1/accounts/{row['id']}/candles?symbol={symbol}&timeframe={timeframe}&from={from_iso}&to={to_iso}")
     rows=data.get("candles",[])
     if not isinstance(rows,list): raise HTTPException(502,"TickerAll candle payload is invalid")
     clean=[]

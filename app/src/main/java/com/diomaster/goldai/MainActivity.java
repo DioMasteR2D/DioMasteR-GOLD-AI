@@ -222,6 +222,8 @@ public class MainActivity extends Activity {
                         throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
                     double latest = (bid + ask) / 2.0;
                     final JSONArray bars = rows;
+                    final String effectiveTimeframe = candleData.optString("effective_timeframe",
+                            candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence || !activityResumed) return;
@@ -232,7 +234,8 @@ public class MainActivity extends Activity {
                             JSONObject bar=bars.optJSONObject(i);
                             if(bar!=null && bar.optDouble("close",0)>0) chartPrices.add(bar.optDouble("close"));
                         }
-                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + requestTimeframe + " · " +
+                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + effectiveTimeframe +
+                                ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
                         engine.onQuote(latest);

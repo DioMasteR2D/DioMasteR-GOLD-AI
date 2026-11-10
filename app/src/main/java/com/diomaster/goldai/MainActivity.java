@@ -1565,7 +1565,9 @@ public class MainActivity extends Activity {
         TextView title = text(label, 9, 0xFFB8AA8E, true);
         title.setLetterSpacing(0.045f);
         box.addView(title);
-        TextView v = text(value, 17, color, true);
+        TextView v = text(value, 15, color, true);
+        v.setSingleLine(true);
+        v.setEllipsize(android.text.TextUtils.TruncateAt.END);
         v.setPadding(0, dp(7), 0, 0);
         box.addView(v);
         return box;

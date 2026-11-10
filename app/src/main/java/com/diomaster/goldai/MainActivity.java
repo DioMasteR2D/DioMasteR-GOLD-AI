@@ -555,7 +555,8 @@ public class MainActivity extends Activity {
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(100)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
-        TextView brandEyebrow=text("PRECISION TRADING TERMINAL",8,0xFFB9A16B,true); brandEyebrow.setGravity(Gravity.CENTER); brandEyebrow.setLetterSpacing(0.12f); brandText.addView(brandEyebrow);\n        TextView brandTitle=text("DioMasteR2D",20,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView brandEyebrow=text("PRECISION TRADING TERMINAL",8,0xFFB9A16B,true); brandEyebrow.setGravity(Gravity.CENTER); brandEyebrow.setLetterSpacing(0.12f); brandText.addView(brandEyebrow);
+        TextView brandTitle=text("DioMasteR2D",20,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
         TextView goldTitle=text("GOLD AI",27,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
         TextView brandSub=text("XAUUSD  ·  VANTAGE MT5 DEMO",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);

@@ -1098,6 +1098,10 @@ public class MainActivity extends Activity {
                         + " · SL=" + String.format(Locale.US, "%.5f", aiSignal.stopLoss)
                         + " · TP=" + String.format(Locale.US, "%.5f", aiSignal.takeProfit)
                         + " · " + aiSignal.reason);
+        final long signalCreatedAt = System.currentTimeMillis();
+        final String signalTimeframe = selectedTimeframe;
+        final int signalConfidence = aiSignal.confidence;
+        final double signalEntry = aiSignal.entry;
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;
@@ -1108,9 +1112,14 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             String resultMessage;
             boolean submitted = false;
+            long statusMs = -1L, positionsMs = -1L, quoteMs = -1L, orderMs = -1L;
+            long orderAcceptedAt = 0L;
+            long reversalMs = 0L;
             try {
                 Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                long stageAt = System.currentTimeMillis();
                 JSONObject status = client.status();
+                statusMs = System.currentTimeMillis() - stageAt;
                 if (!"DEMO".equals(status.optString("account_mode"))
                         || !status.optBoolean("terminal_connected")
                         || !status.optBoolean("execution_enabled")) {
@@ -1118,7 +1127,9 @@ public class MainActivity extends Activity {
                 }
 
                 // Reverse only bot-owned positions on this symbol; never touch manual trades.
+                stageAt = System.currentTimeMillis();
                 JSONObject posResponse = client.positions();
+                positionsMs = System.currentTimeMillis() - stageAt;
                 JSONArray positions = posResponse.optJSONArray("positions");
                 int sameSide = 0;
                 int closedOpposite = 0;
@@ -1133,7 +1144,9 @@ public class MainActivity extends Activity {
                             sameSide++;
                         } else if (("BUY".equals(openSide) || "SELL".equals(openSide))
                                 && p.optLong("ticket", 0) > 0) {
+                            long closeAt = System.currentTimeMillis();
                             JSONObject closeResult = client.close(p.optLong("ticket"));
+                            reversalMs += System.currentTimeMillis() - closeAt;
                             if (!closeResult.optBoolean("ok")) {
                                 throw new IllegalStateException("Δεν επιβεβαιώθηκε κλείσιμο αντίθετης θέσης #" + p.optLong("ticket"));
                             }
@@ -1174,7 +1187,9 @@ public class MainActivity extends Activity {
                 if (botOpen >= 10) {
                     resultMessage = "ΑΝΑΜΟΝΗ · συμπληρώθηκαν οι 10 ανοιχτές θέσεις DioMasteR στο " + mt5Symbol;
                 } else {
+                    stageAt = System.currentTimeMillis();
                     JSONObject q = client.quote(mt5Symbol);
+                    quoteMs = System.currentTimeMillis() - stageAt;
                     double ref = q.optDouble("bid", 0);
                     long qTime = (long)(q.optDouble("time", 0) * 1000L);
                     if (ref <= 0 || qTime <= 0 || System.currentTimeMillis() - qTime > 120000L)
@@ -1182,7 +1197,10 @@ public class MainActivity extends Activity {
                     if (("BUY".equals(side) && !(sl < ref && ref < tp))
                             || ("SELL".equals(side) && !(tp < ref && ref < sl)))
                         throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
+                    stageAt = System.currentTimeMillis();
                     JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
+                    orderMs = System.currentTimeMillis() - stageAt;
+                    orderAcceptedAt = System.currentTimeMillis();
                     submitted = true;
                     resultMessage = (closedOpposite > 0 ? "ΑΝΤΙΣΤΡΟΦΗ · έκλεισαν " + closedOpposite + " αντίθετες θέσεις · " : "")
                             + "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · "
@@ -1197,6 +1215,17 @@ public class MainActivity extends Activity {
                 autoOrderInFlight = false;
                 if (sent) lastAutoSignalBar = signalBar;
                 autoExecutionMessage = message;
+                long totalMs = System.currentTimeMillis() - signalCreatedAt;
+                logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
+                        "timeframe=" + signalTimeframe + " · side=" + side + " · confidence=" + signalConfidence
+                                + " · signalToResult=" + totalMs + "ms"
+                                + " · status=" + statusMs + "ms · positions=" + positionsMs + "ms"
+                                + " · reversal=" + reversalMs + "ms · quote=" + quoteMs + "ms · order=" + orderMs + "ms"
+                                + (orderAcceptedAt > 0 ? " · signalToBrokerAck=" + (orderAcceptedAt - signalCreatedAt) + "ms" : "")
+                                + " · entry=" + String.format(Locale.US, "%.5f", signalEntry)
+                                + " · SL=" + String.format(Locale.US, "%.5f", sl)
+                                + " · TP=" + String.format(Locale.US, "%.5f", tp)
+                                + " · " + message);
                 logAgentActivity("AUTO EXECUTION", sent ? "ORDER_SENT" : "WAIT_OR_BLOCKED", message);
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 loadMt5AccountData();

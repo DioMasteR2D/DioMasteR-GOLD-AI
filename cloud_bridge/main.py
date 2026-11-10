@@ -566,3 +566,56 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
     auth(authorization)
     return {"running":False,"supported":False,"message":"No cloud auto loop is running"}
+
+
+@app.get("/assistant/snapshot")
+async def assistant_snapshot(limit:int=50,authorization:Optional[str]=Header(default=None)):
+    """Read-only consolidated snapshot for an external AI assistant. DEMO only."""
+    auth(authorization)
+    row,detail=await account_detail()
+    limit=max(1,min(limit,200))
+    account_data=detail.get("account",{}) if isinstance(detail,dict) else {}
+    positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    history_data=await ta("GET",f"/v1/accounts/{row['id']}/history?limit={limit}")
+    open_rows=positions_data.get("positions",[]) if isinstance(positions_data,dict) else []
+    history_rows=history_data.get("history",history_data.get("trades",[])) if isinstance(history_data,dict) else history_data
+    if not isinstance(open_rows,list) or not isinstance(history_rows,list):
+        raise HTTPException(502,"TickerAll assistant snapshot payload is invalid")
+    safe_positions=[]
+    for p in open_rows:
+        safe_positions.append({
+            "ticket":int(p.get("ticket") or 0),
+            "symbol":p.get("symbol"),
+            "side":str(p.get("side") or "").upper(),
+            "volume":float(p.get("volume") or 0),
+            "entry_price":float(p.get("entryPrice") or 0),
+            "current_price":float(p.get("currentPrice") or 0),
+            "profit":float(p.get("profit") or 0),
+            "stop_loss":float(p.get("stopLoss") or 0),
+            "take_profit":float(p.get("takeProfit") or 0)
+        })
+    return {
+        "service":"DioMasteR GOLD AI",
+        "account_mode":"DEMO",
+        "read_only":True,
+        "generated_at":datetime.now(timezone.utc).isoformat(),
+        "connection":{
+            "connected":True,
+            "broker":str(row.get("broker") or "MT5"),
+            "server":str(row.get("server") or ""),
+            "symbol":choose_symbol((await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])),
+            "price_stream_state":STREAM_DIAGNOSTIC.get("state"),
+            "last_tick_at":STREAM_DIAGNOSTIC.get("last_tick_at")
+        },
+        "account":{
+            "currency":str(account_data.get("currency") or "USD"),
+            "balance":float(account_data.get("balance") or 0),
+            "equity":float(account_data.get("equity") or 0),
+            "margin":float(account_data.get("margin") or 0),
+            "free_margin":float(account_data.get("freeMargin") or 0)
+        },
+        "open_positions":safe_positions,
+        "open_positions_count":len(safe_positions),
+        "closed_history":history_rows,
+        "closed_history_count":len(history_rows)
+    }

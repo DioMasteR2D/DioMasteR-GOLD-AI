@@ -257,8 +257,9 @@ public class MainActivity extends Activity {
                     final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
                     StringBuilder scan = new StringBuilder("MTF DEMO · ");
                     for (String frame : scanFrames) {
+                        int lookbackHours = "H4".equals(frame) ? 240 : 48;
                         JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
-                                ? candleData : client.candles(mt5Symbol, frame, 48);
+                                ? candleData : client.candles(mt5Symbol, frame, lookbackHours);
                         JSONArray frameRows = frameData.optJSONArray("candles");
                         ArrayList<Double> framePrices = new ArrayList<>();
                         if (frameRows != null) {

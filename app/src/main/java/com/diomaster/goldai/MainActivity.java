@@ -742,6 +742,69 @@ public class MainActivity extends Activity {
         quickActions.addView(autoTrade); quickActions.addView(analysis);
         root.addView(quickActions);
         addSpace(10);
+
+        // Premium home-screen account strip: live broker figures when connected,
+        // otherwise clearly labelled PAPER figures from the local simulator.
+        JSONObject homeSnap = engine.snapshot(quoteFresh() ? price : 0);
+        boolean useBrokerAccount = mt5Connected;
+        double homeBalance = useBrokerAccount ? mt5Balance : homeSnap.optDouble("equity");
+        double homeEquity = useBrokerAccount ? mt5Equity : homeSnap.optDouble("equity") + homeSnap.optDouble("floating");
+        double homePnl = useBrokerAccount ? (mt5Equity - mt5Balance) : homeSnap.optDouble("floating");
+        double homePct = homeBalance > 0 ? (homePnl / homeBalance) * 100.0 : 0.0;
+        LinearLayout accountTiles = new LinearLayout(this);
+        accountTiles.setOrientation(LinearLayout.HORIZONTAL);
+        accountTiles.addView(metric(useBrokerAccount ? "MT5 BALANCE" : "PAPER BALANCE", useBrokerAccount ? money(homeBalance) : PaperTradingEngine.money(homeBalance), GOLD),weight());
+        accountTiles.addView(metric("EQUITY", useBrokerAccount ? money(homeEquity) : PaperTradingEngine.money(homeEquity), GOLD),weight());
+        accountTiles.addView(metric("P/L", useBrokerAccount ? money(homePnl) : PaperTradingEngine.money(homePnl), homePnl >= 0 ? GREEN : RED),weight());
+        accountTiles.addView(metric("P/L %", String.format(Locale.US,"%+.2f%%",homePct), homePct >= 0 ? GREEN : RED),weight());
+        root.addView(accountTiles);
+        addSpace(10);
+
+        LinearLayout overviewRow = new LinearLayout(this);
+        overviewRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout homePositions = card();
+        homePositions.setPadding(dp(12),dp(13),dp(12),dp(13));
+        addLabel(homePositions,"▣  ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
+        JSONArray homeOpen = useBrokerAccount ? mt5OpenPositions : homeSnap.optJSONArray("positions");
+        if (homeOpen == null || homeOpen.length() == 0) {
+            homePositions.addView(text("Δεν υπάρχουν ανοιχτές θέσεις.",11,MUTED,false));
+        } else {
+            for (int n=0; n<Math.min(3,homeOpen.length()); n++) {
+                JSONObject pos=homeOpen.optJSONObject(n); if(pos==null) continue;
+                String side=pos.optString("side",pos.optInt("type")==0?"BUY":"SELL");
+                double pnl=pos.optDouble("profit",0);
+                String symbol=pos.optString("symbol",mt5Symbol);
+                String size=useBrokerAccount?String.format(Locale.US,"%.2f lot",pos.optDouble("volume")):String.format(Locale.US,"%.2f oz",pos.optDouble("oz"));
+                addRow(homePositions,symbol+"  "+side+"  "+size,
+                        useBrokerAccount?PaperTradingEngine.money(pnl):PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+            }
+        }
+        LinearLayout homeStats = card();
+        homeStats.setPadding(dp(12),dp(13),dp(12),dp(13));
+        addLabel(homeStats,"▥  ΣΤΑΤΙΣΤΙΚΑ PAPER");
+        JSONArray homeClosed=homeSnap.optJSONArray("history");
+        if(homeClosed==null) homeClosed=new JSONArray();
+        int homeWins=0,homeLosses=0; double homeNet=0;
+        for(int n=0;n<homeClosed.length();n++){
+            JSONObject tr=homeClosed.optJSONObject(n); if(tr==null) continue;
+            double result=tr.optDouble("pnl"); homeNet+=result;
+            if(result>0) homeWins++; else if(result<0) homeLosses++;
+        }
+        int homeTrades=homeWins+homeLosses;
+        String homeWinRate=homeTrades>0?String.format(Locale.US,"%.1f%%",100.0*homeWins/homeTrades):"—";
+        addRow(homeStats,"Συναλλαγές",String.valueOf(homeTrades));
+        addRow(homeStats,"Κερδισμένες",String.valueOf(homeWins),GREEN);
+        addRow(homeStats,"Χαμένες",String.valueOf(homeLosses),RED);
+        addRow(homeStats,"Win Rate",homeWinRate,GOLD);
+        addRow(homeStats,"Καθαρό P/L",PaperTradingEngine.money(homeNet),homeNet>=0?GREEN:RED);
+        LinearLayout.LayoutParams overviewHalf=new LinearLayout.LayoutParams(0,-2,1);
+        overviewHalf.setMargins(dp(2),0,dp(4),0);
+        overviewRow.addView(homePositions,overviewHalf);
+        LinearLayout.LayoutParams overviewHalf2=new LinearLayout.LayoutParams(0,-2,1);
+        overviewHalf2.setMargins(dp(4),0,dp(2),0);
+        overviewRow.addView(homeStats,overviewHalf2);
+        root.addView(overviewRow);
+        addSpace(10);
         homePageEnd = root.getChildCount();
 
         positionsPageStart = root.getChildCount();

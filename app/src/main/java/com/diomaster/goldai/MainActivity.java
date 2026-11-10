@@ -31,10 +31,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends Activity {
-    private final int BG = 0xFF050506;
-    private final int PANEL = 0xFF111014;
-    private final int GOLD = 0xFFFFC83D;
-    private final int MUTED = 0xFFB5A58A;
+    private final int BG = 0xFF080A0F;
+    private final int PANEL = 0xFF121722;
+    private final int GOLD = 0xFFE8B84B;
+    private final int MUTED = 0xFFA5ADBA;
     private final int GREEN = 0xFF19E78A;
     private final int RED = 0xFFFF5364;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -250,34 +250,12 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 try {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                    JSONObject quote = client.quote(mt5Symbol);
+                    // Load the selected execution timeframe first, then obtain the freshest broker tick.
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
                     JSONArray rows = candleData.optJSONArray("candles");
-                    // Diagnostic-only multi-timeframe scan. It never feeds the order engine.
-                    final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
-                    StringBuilder scan = new StringBuilder("MTF DEMO · ");
-                    for (String frame : scanFrames) {
-                        int lookbackHours = "H4".equals(frame) ? 240 : 48;
-                        JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
-                                ? candleData : client.candles(mt5Symbol, frame, lookbackHours);
-                        JSONArray frameRows = frameData.optJSONArray("candles");
-                        ArrayList<Double> framePrices = new ArrayList<>();
-                        if (frameRows != null) {
-                            for (int k = 0; k < frameRows.length(); k++) {
-                                JSONObject bar = frameRows.optJSONObject(k);
-                                if (bar != null && bar.optDouble("close", 0) > 0)
-                                    framePrices.add(bar.optDouble("close"));
-                            }
-                        }
-                        GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
-                                framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
-                        if (scan.length() > 10) scan.append(" | ");
-                        scan.append(frame).append(": ").append(frameSignal.side)
-                                .append(" ").append(frameSignal.confidence).append("%")
-                                .append(" (").append(framePrices.size()).append(" candles)");
-                    }
-                    final String mtfResult = scan.toString();
-                    if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    if (rows == null || rows.length() < 2)
+                        throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    JSONObject quote = client.quote(mt5Symbol);
                     String quoteSource = quote.optString("quote_source", "");
                     double bid = quote.optDouble("bid", 0);
                     double ask = quote.optDouble("ask", 0);
@@ -292,9 +270,11 @@ public class MainActivity extends Activity {
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
+                    final long fetchElapsed = System.currentTimeMillis() - (stamp - Math.max(0L, quoteAge));
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence || !activityResumed) return;
-                        fetching = false; price = latest; quoteAt = receivedAt;
+                        fetching = false;
+                        price = latest; quoteAt = receivedAt;
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
                         for (int i=0;i<bars.length();i++) {
@@ -305,12 +285,14 @@ public class MainActivity extends Activity {
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
-                        multiTimeframeStatus = mtfResult;
-                        logAgentActivity("MULTI-TIMEFRAME", "SCAN", mtfResult);
                         engine.onQuote(latest);
+                        // Trading analysis uses ONLY the currently selected timeframe, exactly as before.
                         if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
                         render();
                     });
+                    // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
+                    // It cannot delay the selected-timeframe analysis or feed the order engine.
+                    runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
                 } catch (Exception e) {
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence || !activityResumed) return;
@@ -319,8 +301,6 @@ public class MainActivity extends Activity {
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
                         logAgentActivity("MARKET FEED", "BLOCKED", e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
-                        logAgentActivity("MARKET FEED", "BLOCKED",
-                                e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
                         render();
                     });
                 }
@@ -346,6 +326,47 @@ public class MainActivity extends Activity {
                 });
             }
         })).start();
+    }
+
+    private void runMultiTimeframeDiagnostics(int requestId, String requestTimeframe, JSONObject selectedData) {
+        new Thread(() -> {
+            try {
+                final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
+                StringBuilder scan = new StringBuilder("MTF DEMO · ");
+                for (String frame : scanFrames) {
+                    int lookbackHours = "H4".equals(frame) ? 240 : 48;
+                    JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
+                            ? selectedData : new Mt5DemoClient(mt5BaseUrl, mt5Token)
+                                    .candles(mt5Symbol, frame, lookbackHours);
+                    JSONArray frameRows = frameData.optJSONArray("candles");
+                    ArrayList<Double> framePrices = new ArrayList<>();
+                    if (frameRows != null) {
+                        for (int k = 0; k < frameRows.length(); k++) {
+                            JSONObject bar = frameRows.optJSONObject(k);
+                            if (bar != null && bar.optDouble("close", 0) > 0)
+                                framePrices.add(bar.optDouble("close"));
+                        }
+                    }
+                    GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
+                            framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
+                    if (scan.length() > 10) scan.append(" | ");
+                    scan.append(frame).append(": ").append(frameSignal.side)
+                            .append(" ").append(frameSignal.confidence).append("%")
+                            .append(" (").append(framePrices.size()).append(" candles)");
+                }
+                final String result = scan.toString();
+                runOnUiThread(() -> {
+                    if (requestId != fetchSequence || !activityResumed
+                            || !requestTimeframe.equals(selectedTimeframe)) return;
+                    multiTimeframeStatus = result;
+                    logAgentActivity("MULTI-TIMEFRAME", "SCAN", result);
+                    render();
+                });
+            } catch (Exception e) {
+                logAgentActivity("MULTI-TIMEFRAME", "DIAGNOSTIC_DELAYED",
+                        e.getMessage() == null ? "MTF diagnostic unavailable" : e.getMessage());
+            }
+        }).start();
     }
 
     private boolean quoteFresh() {
@@ -501,7 +522,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(10), dp(8), dp(10), dp(18));
+        root.setPadding(dp(14), dp(10), dp(14), dp(22));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -527,16 +548,17 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(8),dp(6),dp(8),dp(6));
+        hero.setPadding(dp(10),dp(9),dp(10),dp(9));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
         ImageView headerArt=new ImageView(this);
         headerArt.setImageResource(R.drawable.lion_crown_header);
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(120),dp(104)));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(100)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
-        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView goldTitle=text("GOLD AI",29,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
-        TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
+        TextView brandEyebrow=text("PRECISION TRADING TERMINAL",8,0xFFB9A16B,true); brandEyebrow.setGravity(Gravity.CENTER); brandEyebrow.setLetterSpacing(0.12f); brandText.addView(brandEyebrow);
+        TextView brandTitle=text("DioMasteR2D",20,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView goldTitle=text("GOLD AI",27,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
+        TextView brandSub=text("XAUUSD  ·  VANTAGE MT5 DEMO",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
         TextView statusPill=text(mt5Connected?"DEMO":"OFFLINE",10,mt5Connected?0xFF071B12:0xFFFFE5A3,true);
@@ -544,7 +566,7 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(142)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(138)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
@@ -615,12 +637,26 @@ public class MainActivity extends Activity {
         String[] frames={"M1","M5","M15","M30","H1","H4"};
         for(String frame:frames) {
             final String tf=frame;
-            TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
-            chip.setGravity(Gravity.CENTER); chip.setPadding(dp(7),dp(8),dp(7),dp(8));
+            TextView chip=text(frame,11,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
+            chip.setGravity(Gravity.CENTER);
+            chip.setMinHeight(dp(48));
+            chip.setPadding(dp(8),dp(14),dp(8),dp(14));
+            chip.setClickable(true);
+            chip.setFocusable(true);
             chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
             chip.setOnClickListener(v->{
                 if (!tf.equals(selectedTimeframe)) {
                     selectedTimeframe=tf;
+                    // Update every timeframe chip immediately; do not wait for the broker network response.
+                    for (int i=0; i<periods.getChildCount(); i++) {
+                        View child=periods.getChildAt(i);
+                        if (child instanceof TextView) {
+                            TextView item=(TextView)child;
+                            boolean active=tf.equals(item.getText().toString());
+                            item.setTextColor(active?Color.BLACK:0xFFE8E8EA);
+                            item.setBackground(active?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+                        }
+                    }
                     fetchPrice(true);
                 }
             });
@@ -697,8 +733,7 @@ public class MainActivity extends Activity {
         Button agentDetails = actionButton("♙ AI AGENT\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
         agentDetails.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
         Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
-        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
+        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
         root.addView(quickActions);
         addSpace(10);
         homePageEnd = root.getChildCount();
@@ -1047,8 +1082,7 @@ public class MainActivity extends Activity {
             return;
         }
         JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
-        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
-        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
+        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
 
@@ -1065,6 +1099,10 @@ public class MainActivity extends Activity {
                         + " · SL=" + String.format(Locale.US, "%.5f", aiSignal.stopLoss)
                         + " · TP=" + String.format(Locale.US, "%.5f", aiSignal.takeProfit)
                         + " · " + aiSignal.reason);
+        final long signalCreatedAt = System.currentTimeMillis();
+        final String signalTimeframe = selectedTimeframe;
+        final int signalConfidence = aiSignal.confidence;
+        final double signalEntry = aiSignal.entry;
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;
@@ -1075,9 +1113,14 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             String resultMessage;
             boolean submitted = false;
+            long statusMs = -1L, positionsMs = -1L, quoteMs = -1L, orderMs = -1L;
+            long orderAcceptedAt = 0L;
+            long reversalMs = 0L;
             try {
                 Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                long stageAt = System.currentTimeMillis();
                 JSONObject status = client.status();
+                statusMs = System.currentTimeMillis() - stageAt;
                 if (!"DEMO".equals(status.optString("account_mode"))
                         || !status.optBoolean("terminal_connected")
                         || !status.optBoolean("execution_enabled")) {
@@ -1085,7 +1128,9 @@ public class MainActivity extends Activity {
                 }
 
                 // Reverse only bot-owned positions on this symbol; never touch manual trades.
+                stageAt = System.currentTimeMillis();
                 JSONObject posResponse = client.positions();
+                positionsMs = System.currentTimeMillis() - stageAt;
                 JSONArray positions = posResponse.optJSONArray("positions");
                 int sameSide = 0;
                 int closedOpposite = 0;
@@ -1100,7 +1145,9 @@ public class MainActivity extends Activity {
                             sameSide++;
                         } else if (("BUY".equals(openSide) || "SELL".equals(openSide))
                                 && p.optLong("ticket", 0) > 0) {
+                            long closeAt = System.currentTimeMillis();
                             JSONObject closeResult = client.close(p.optLong("ticket"));
+                            reversalMs += System.currentTimeMillis() - closeAt;
                             if (!closeResult.optBoolean("ok")) {
                                 throw new IllegalStateException("Δεν επιβεβαιώθηκε κλείσιμο αντίθετης θέσης #" + p.optLong("ticket"));
                             }
@@ -1141,7 +1188,9 @@ public class MainActivity extends Activity {
                 if (botOpen >= 10) {
                     resultMessage = "ΑΝΑΜΟΝΗ · συμπληρώθηκαν οι 10 ανοιχτές θέσεις DioMasteR στο " + mt5Symbol;
                 } else {
+                    stageAt = System.currentTimeMillis();
                     JSONObject q = client.quote(mt5Symbol);
+                    quoteMs = System.currentTimeMillis() - stageAt;
                     double ref = q.optDouble("bid", 0);
                     long qTime = (long)(q.optDouble("time", 0) * 1000L);
                     if (ref <= 0 || qTime <= 0 || System.currentTimeMillis() - qTime > 120000L)
@@ -1149,7 +1198,10 @@ public class MainActivity extends Activity {
                     if (("BUY".equals(side) && !(sl < ref && ref < tp))
                             || ("SELL".equals(side) && !(tp < ref && ref < sl)))
                         throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
+                    stageAt = System.currentTimeMillis();
                     JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
+                    orderMs = System.currentTimeMillis() - stageAt;
+                    orderAcceptedAt = System.currentTimeMillis();
                     submitted = true;
                     resultMessage = (closedOpposite > 0 ? "ΑΝΤΙΣΤΡΟΦΗ · έκλεισαν " + closedOpposite + " αντίθετες θέσεις · " : "")
                             + "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · "
@@ -1160,10 +1212,25 @@ public class MainActivity extends Activity {
             }
             final String message = resultMessage;
             final boolean sent = submitted;
+            final long completedAt = System.currentTimeMillis();
+            final long statusDuration = statusMs, positionsDuration = positionsMs;
+            final long quoteDuration = quoteMs, orderDuration = orderMs, reversalDuration = reversalMs;
+            final long brokerAckAt = orderAcceptedAt;
             runOnUiThread(() -> {
                 autoOrderInFlight = false;
                 if (sent) lastAutoSignalBar = signalBar;
                 autoExecutionMessage = message;
+                long totalMs = completedAt - signalCreatedAt;
+                logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
+                        "timeframe=" + signalTimeframe + " · side=" + side + " · confidence=" + signalConfidence
+                                + " · signalToResult=" + totalMs + "ms"
+                                + " · status=" + statusDuration + "ms · positions=" + positionsDuration + "ms"
+                                + " · reversal=" + reversalDuration + "ms · quote=" + quoteDuration + "ms · order=" + orderDuration + "ms"
+                                + (brokerAckAt > 0 ? " · signalToBrokerAck=" + (brokerAckAt - signalCreatedAt) + "ms" : "")
+                                + " · entry=" + String.format(Locale.US, "%.5f", signalEntry)
+                                + " · SL=" + String.format(Locale.US, "%.5f", sl)
+                                + " · TP=" + String.format(Locale.US, "%.5f", tp)
+                                + " · " + message);
                 logAgentActivity("AUTO EXECUTION", sent ? "ORDER_SENT" : "WAIT_OR_BLOCKED", message);
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                 loadMt5AccountData();
@@ -1347,9 +1414,9 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(16), dp(16), dp(16));
         GradientDrawable shell = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF171719, 0xFF0D0D0F, 0xFF141311});
-        shell.setCornerRadius(dp(20));
-        shell.setStroke(dp(1), 0xFF6E5425);
+                new int[]{0xFF1A202B, 0xFF11151D, 0xFF151923});
+        shell.setCornerRadius(dp(22));
+        shell.setStroke(dp(1), 0xFF554522);
         box.setBackground(shell);
         box.setElevation(dp(3));
         return box;
@@ -1397,8 +1464,7 @@ public class MainActivity extends Activity {
         box.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
     }
 
-    private Button actionButton(String label, int color, Runnable action) {
-        Button b = new Button(this);
+    private Button actionButton(String label, int color, Runnable action) {        Button b = new Button(this);
         b.setText(label);
         b.setTextSize(11);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1434,8 +1500,8 @@ public class MainActivity extends Activity {
 
     private GradientDrawable goldShell(int color, int stroke) {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF1B1710, color, 0xFF0D0D0F});
-        d.setCornerRadius(dp(18));
+                new int[]{0xFF20232B, color, 0xFF10131A});
+        d.setCornerRadius(dp(20));
         d.setStroke(dp(1), stroke);
         return d;
     }

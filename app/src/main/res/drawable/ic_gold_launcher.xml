@@ -3,33 +3,31 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#050506" android:pathData="M0,0h108v108h-108z"/>
-    <path android:fillColor="#100C06" android:strokeColor="#D69B24" android:strokeWidth="1.5"
-        android:pathData="M54,4 C82,4 103,25 103,54 C103,83 82,104 54,104 C26,104 5,83 5,54 C5,25 26,4 54,4Z"/>
+    <path android:fillColor="#05070B" android:pathData="M0,0h108v108h-108z"/>
+    <path android:fillColor="#0B0D12" android:strokeColor="#E8B84B" android:strokeWidth="2"
+        android:pathData="M54,5 C81,5 103,27 103,54 C103,81 81,103 54,103 C27,103 5,81 5,54 C5,27 27,5 54,5Z"/>
+    <path android:fillColor="#17120A" android:strokeColor="#A97822" android:strokeWidth="1"
+        android:pathData="M54,12 C77,12 96,31 96,54 C96,77 77,96 54,96 C31,96 12,77 12,54 C12,31 31,12 54,12Z"/>
+    <!-- Market candles -->
+    <path android:fillColor="#13C784" android:pathData="M17,57h5v22h-5z M27,46h5v33h-5z M76,43h5v36h-5z M86,31h5v48h-5z"/>
+    <path android:fillColor="#E94F5D" android:pathData="M22,65h5v14h-5z M81,54h5v25h-5z"/>
+    <path android:strokeColor="#E8B84B" android:strokeWidth="2" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M14,52 L29,39 L40,43 L54,27 L67,34 L91,18"/>
     <!-- Crown -->
-    <path android:fillColor="#F4C34F" android:strokeColor="#FFF0B1" android:strokeWidth="1"
-        android:pathData="M31,28 L26,12 L41,22 L54,5 L67,22 L82,12 L77,28 L72,34 L36,34Z"/>
-    <path android:fillColor="#8D5710" android:pathData="M33,28 L75,28 L72,33 L36,33Z"/>
-    <path android:fillColor="#FFF0B1" android:pathData="M26,12 L31,27 L36,27Z M54,5 L54,27 L59,27Z M82,12 L72,27 L77,27Z"/>
-    <path android:fillColor="#F7D875" android:pathData="M39,31a2,2 0,1 0,4 0a2,2 0,1 0,-4 0 M52,30a2,2 0,1 0,4 0a2,2 0,1 0,-4 0 M65,31a2,2 0,1 0,4 0a2,2 0,1 0,-4 0"/>
-    <!-- Subtle market bars behind the lion mark -->
-    <path android:fillColor="#2B2110" android:pathData="M12,78h5v13h-5z M20,70h5v21h-5z M83,68h5v23h-5z M91,58h5v33h-5z"/>
-    <path android:strokeColor="#B8872E" android:strokeWidth="1.2" android:strokeLineCap="round" android:fillColor="#00000000"
-        android:pathData="M12,75 L23,65 L31,68 M78,64 L88,55 L96,49"/>
-    <!-- Lion mane -->
-    <path android:fillColor="#9A5B13" android:strokeColor="#F5C34C" android:strokeWidth="1.4"
-        android:pathData="M54,32 C43,31 37,37 32,43 L20,37 L25,54 L16,64 L29,68 L25,84 L41,78 L54,98 L67,78 L83,84 L79,68 L92,64 L83,54 L88,37 L76,43 C71,37 65,31 54,32Z"/>
-    <path android:fillColor="#D89A28" android:pathData="M32,46 L24,42 L31,57 L23,63 L35,65 L31,77 L43,71 L54,91 L65,71 L77,77 L73,65 L85,63 L77,57 L84,42 L76,46 C70,39 63,36 54,36 C45,36 38,39 32,46Z"/>
-    <path android:fillColor="#F6D27A" android:pathData="M29,49 L36,53 L31,62 L40,62 L34,72 L46,67 L40,80 L52,74 L54,90 L59,74 L68,80 L62,67 L74,72 L68,62 L77,62 L72,53 L79,49 L69,45 L54,40 L39,45Z"/>
-    <!-- Face -->
-    <path android:fillColor="#241509" android:strokeColor="#FFE29A" android:strokeWidth="1.1"
-        android:pathData="M54,39 C42,39 35,48 37,60 C38,70 45,78 54,82 C63,78 70,70 71,60 C73,48 66,39 54,39Z"/>
-    <path android:fillColor="#E9B94D" android:pathData="M54,42 C44,42 39,50 41,60 C42,68 48,74 54,77 C60,74 66,68 67,60 C69,50 64,42 54,42Z"/>
-    <path android:fillColor="#241509" android:pathData="M42,55 Q49,48 53,55 L50,60 L42,59Z M66,55 Q59,48 55,55 L58,60 L66,59Z"/>
-    <path android:fillColor="#FFF0B1" android:pathData="M45,55 L50,55 L48,57Z M58,55 L63,55 L60,57Z"/>
-    <path android:fillColor="#1A1009" android:pathData="M48,66 Q54,61 60,66 Q60,72 54,74 Q48,72 48,66Z"/>
-    <path android:fillColor="#FFF0B1" android:pathData="M50,66 Q54,63 58,66 Q57,69 54,69 Q51,69 50,66Z"/>
-    <path android:strokeColor="#FFF0B1" android:strokeWidth="1.2" android:strokeLineCap="round"
-        android:fillColor="#00000000" android:pathData="M54,70 L54,75 M54,75 Q49,78 46,74 M54,75 Q59,78 62,74"/>
-    <path android:fillColor="#FFF0B1" android:pathData="M53,51a1.3,1.3 0,1 0,2.6 0a1.3,1.3 0,1 0,-2.6 0"/>
+    <path android:fillColor="#F6C85F" android:strokeColor="#FFF0B5" android:strokeWidth="1"
+        android:pathData="M35,29 L29,13 L43,22 L54,7 L65,22 L79,13 L73,29 L69,34 L39,34Z"/>
+    <path android:fillColor="#8A5514" android:pathData="M37,29h34l-3,5h-28z"/>
+    <!-- Lion mane silhouette -->
+    <path android:fillColor="#B9781C" android:strokeColor="#F7CD68" android:strokeWidth="1.5"
+        android:pathData="M54,34 C43,32 35,39 31,47 L21,43 L26,57 L18,66 L31,70 L29,84 L43,78 L54,94 L65,78 L79,84 L77,70 L90,66 L82,57 L87,43 L77,47 C73,39 65,32 54,34Z"/>
+    <path android:fillColor="#F4CB70"
+        android:pathData="M54,39 C44,39 37,47 38,59 C39,69 46,77 54,81 C62,77 69,69 70,59 C71,47 64,39 54,39Z"/>
+    <path android:fillColor="#28170A"
+        android:pathData="M40,54 Q47,48 52,55 L49,60 L41,59Z M68,54 Q61,48 56,55 L59,60 L67,59Z"/>
+    <path android:fillColor="#FFF2C5" android:pathData="M44,54h5l-2,3z M59,54h5l-3,3z"/>
+    <path android:fillColor="#2B170A" android:pathData="M48,65 Q54,61 60,65 Q60,72 54,74 Q48,72 48,65Z"/>
+    <path android:fillColor="#FFF0B5" android:pathData="M51,66 Q54,64 57,66 Q56,69 54,69 Q52,69 51,66Z"/>
+    <path android:strokeColor="#FFF0B5" android:strokeWidth="1.4" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M54,71v5 M54,76 Q49,79 46,75 M54,76 Q59,79 62,75"/>
+    <path android:fillColor="#FFF0B5" android:pathData="M53,50a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0"/>
 </vector>

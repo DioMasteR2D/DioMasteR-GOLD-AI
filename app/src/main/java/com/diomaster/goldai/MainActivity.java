@@ -250,34 +250,12 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 try {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                    JSONObject quote = client.quote(mt5Symbol);
+                    // Load the selected execution timeframe first, then obtain the freshest broker tick.
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
                     JSONArray rows = candleData.optJSONArray("candles");
-                    // Diagnostic-only multi-timeframe scan. It never feeds the order engine.
-                    final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
-                    StringBuilder scan = new StringBuilder("MTF DEMO · ");
-                    for (String frame : scanFrames) {
-                        int lookbackHours = "H4".equals(frame) ? 240 : 48;
-                        JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
-                                ? candleData : client.candles(mt5Symbol, frame, lookbackHours);
-                        JSONArray frameRows = frameData.optJSONArray("candles");
-                        ArrayList<Double> framePrices = new ArrayList<>();
-                        if (frameRows != null) {
-                            for (int k = 0; k < frameRows.length(); k++) {
-                                JSONObject bar = frameRows.optJSONObject(k);
-                                if (bar != null && bar.optDouble("close", 0) > 0)
-                                    framePrices.add(bar.optDouble("close"));
-                            }
-                        }
-                        GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
-                                framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
-                        if (scan.length() > 10) scan.append(" | ");
-                        scan.append(frame).append(": ").append(frameSignal.side)
-                                .append(" ").append(frameSignal.confidence).append("%")
-                                .append(" (").append(framePrices.size()).append(" candles)");
-                    }
-                    final String mtfResult = scan.toString();
-                    if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    if (rows == null || rows.length() < 2)
+                        throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    JSONObject quote = client.quote(mt5Symbol);
                     String quoteSource = quote.optString("quote_source", "");
                     double bid = quote.optDouble("bid", 0);
                     double ask = quote.optDouble("ask", 0);
@@ -292,9 +270,11 @@ public class MainActivity extends Activity {
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
+                    final long fetchElapsed = System.currentTimeMillis() - (stamp - Math.max(0L, quoteAge));
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence || !activityResumed) return;
-                        fetching = false; price = latest; quoteAt = receivedAt;
+                        fetching = false;
+                        price = latest; quoteAt = receivedAt;
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
                         for (int i=0;i<bars.length();i++) {
@@ -305,12 +285,14 @@ public class MainActivity extends Activity {
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
-                        multiTimeframeStatus = mtfResult;
-                        logAgentActivity("MULTI-TIMEFRAME", "SCAN", mtfResult);
                         engine.onQuote(latest);
+                        // Trading analysis uses ONLY the currently selected timeframe, exactly as before.
                         if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
                         render();
                     });
+                    // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
+                    // It cannot delay the selected-timeframe analysis or feed the order engine.
+                    runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
                 } catch (Exception e) {
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence || !activityResumed) return;
@@ -319,8 +301,6 @@ public class MainActivity extends Activity {
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
                         logAgentActivity("MARKET FEED", "BLOCKED", e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
-                        logAgentActivity("MARKET FEED", "BLOCKED",
-                                e.getMessage()==null ? "Άγνωστο σφάλμα broker feed" : e.getMessage());
                         render();
                     });
                 }
@@ -346,6 +326,47 @@ public class MainActivity extends Activity {
                 });
             }
         })).start();
+    }
+
+    private void runMultiTimeframeDiagnostics(int requestId, String requestTimeframe, JSONObject selectedData) {
+        new Thread(() -> {
+            try {
+                final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
+                StringBuilder scan = new StringBuilder("MTF DEMO · ");
+                for (String frame : scanFrames) {
+                    int lookbackHours = "H4".equals(frame) ? 240 : 48;
+                    JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
+                            ? selectedData : new Mt5DemoClient(mt5BaseUrl, mt5Token)
+                                    .candles(mt5Symbol, frame, lookbackHours);
+                    JSONArray frameRows = frameData.optJSONArray("candles");
+                    ArrayList<Double> framePrices = new ArrayList<>();
+                    if (frameRows != null) {
+                        for (int k = 0; k < frameRows.length(); k++) {
+                            JSONObject bar = frameRows.optJSONObject(k);
+                            if (bar != null && bar.optDouble("close", 0) > 0)
+                                framePrices.add(bar.optDouble("close"));
+                        }
+                    }
+                    GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
+                            framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
+                    if (scan.length() > 10) scan.append(" | ");
+                    scan.append(frame).append(": ").append(frameSignal.side)
+                            .append(" ").append(frameSignal.confidence).append("%")
+                            .append(" (").append(framePrices.size()).append(" candles)");
+                }
+                final String result = scan.toString();
+                runOnUiThread(() -> {
+                    if (requestId != fetchSequence || !activityResumed
+                            || !requestTimeframe.equals(selectedTimeframe)) return;
+                    multiTimeframeStatus = result;
+                    logAgentActivity("MULTI-TIMEFRAME", "SCAN", result);
+                    render();
+                });
+            } catch (Exception e) {
+                logAgentActivity("MULTI-TIMEFRAME", "DIAGNOSTIC_DELAYED",
+                        e.getMessage() == null ? "MTF diagnostic unavailable" : e.getMessage());
+            }
+        }).start();
     }
 
     private boolean quoteFresh() {
@@ -697,8 +718,7 @@ public class MainActivity extends Activity {
         Button agentDetails = actionButton("♙ AI AGENT\nΛεπτομέρειες", 0xFFB12BEE, () -> scrollToSection(settingsSection));
         agentDetails.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
         Button analysis = actionButton("▥ ΑΝΑΛΥΣΗ\nΤεχνικοί δείκτες", 0xFF168CFF, () -> scrollToSection(marketSection));
-        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
-        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
+        analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));        quickActions.addView(autoTrade); quickActions.addView(agentDetails); quickActions.addView(analysis);
         root.addView(quickActions);
         addSpace(10);
         homePageEnd = root.getChildCount();
@@ -1047,8 +1067,7 @@ public class MainActivity extends Activity {
             return;
         }
         JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
-        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
-        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
+        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
 
@@ -1397,8 +1416,7 @@ public class MainActivity extends Activity {
         box.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
     }
 
-    private Button actionButton(String label, int color, Runnable action) {
-        Button b = new Button(this);
+    private Button actionButton(String label, int color, Runnable action) {        Button b = new Button(this);
         b.setText(label);
         b.setTextSize(11);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);

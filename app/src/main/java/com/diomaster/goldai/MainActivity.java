@@ -636,12 +636,26 @@ public class MainActivity extends Activity {
         String[] frames={"M1","M5","M15","M30","H1","H4"};
         for(String frame:frames) {
             final String tf=frame;
-            TextView chip=text(frame,10,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
-            chip.setGravity(Gravity.CENTER); chip.setPadding(dp(7),dp(8),dp(7),dp(8));
+            TextView chip=text(frame,11,selectedTimeframe.equals(frame)?Color.BLACK:0xFFE8E8EA,true);
+            chip.setGravity(Gravity.CENTER);
+            chip.setMinHeight(dp(48));
+            chip.setPadding(dp(8),dp(14),dp(8),dp(14));
+            chip.setClickable(true);
+            chip.setFocusable(true);
             chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
             chip.setOnClickListener(v->{
                 if (!tf.equals(selectedTimeframe)) {
                     selectedTimeframe=tf;
+                    // Update every timeframe chip immediately; do not wait for the broker network response.
+                    for (int i=0; i<periods.getChildCount(); i++) {
+                        View child=periods.getChildAt(i);
+                        if (child instanceof TextView) {
+                            TextView item=(TextView)child;
+                            boolean active=tf.equals(item.getText().toString());
+                            item.setTextColor(active?Color.BLACK:0xFFE8E8EA);
+                            item.setBackground(active?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+                        }
+                    }
                     fetchPrice(true);
                 }
             });

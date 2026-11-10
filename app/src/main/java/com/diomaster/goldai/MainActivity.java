@@ -1018,6 +1018,19 @@ public class MainActivity extends Activity {
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
 
+        // Audit-only trace: records the exact local strategy decision before any broker request.
+        // This does not alter signal rules, thresholds, sizing, SL/TP, or order flow.
+        logAgentActivity("SIGNAL TRACE", "VALID_SIGNAL",
+                "timeframe=" + selectedTimeframe
+                        + " · candleTime=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(barTime))
+                        + " · side=" + aiSignal.side
+                        + " · confidence=" + aiSignal.confidence
+                        + " · quote=" + String.format(Locale.US, "%.5f", price)
+                        + " · quoteAge=" + Math.max(0L, (System.currentTimeMillis() - quoteAt) / 1000L) + "s"
+                        + " · entry=" + String.format(Locale.US, "%.5f", aiSignal.entry)
+                        + " · SL=" + String.format(Locale.US, "%.5f", aiSignal.stopLoss)
+                        + " · TP=" + String.format(Locale.US, "%.5f", aiSignal.takeProfit)
+                        + " · " + aiSignal.reason);
         autoOrderInFlight = true;
         autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
         final String side = aiSignal.side;

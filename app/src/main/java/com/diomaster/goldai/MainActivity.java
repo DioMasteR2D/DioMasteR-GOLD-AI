@@ -723,6 +723,14 @@ public class MainActivity extends Activity {
         TextView reason = text(aiSignal.reason, 12, 0xFFE2E4E8, false);
         reason.setPadding(0,dp(10),0,dp(8));
         agent.addView(reason);
+        LinearLayout signalLevels = new LinearLayout(this);
+        signalLevels.setOrientation(LinearLayout.HORIZONTAL);
+        boolean showLevels=aiSignal.ready && ("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
+                && aiSignal.entry>0 && aiSignal.stopLoss>0 && aiSignal.takeProfit>0;
+        signalLevels.addView(metric("ENTRY",showLevels?String.format(Locale.US,"%,.2f",aiSignal.entry):"—",0xFF75C9FF),weight());
+        signalLevels.addView(metric("STOP LOSS",showLevels?String.format(Locale.US,"%,.2f",aiSignal.stopLoss):"—",RED),weight());
+        signalLevels.addView(metric("TAKE PROFIT",showLevels?String.format(Locale.US,"%,.2f",aiSignal.takeProfit):"—",GREEN),weight());
+        agent.addView(signalLevels);
         LinearLayout evaluation = new LinearLayout(this);
         evaluation.setOrientation(LinearLayout.HORIZONTAL);
         evaluation.addView(metric("LIVE TICK",quoteFresh()?"OK":"WAIT",quoteFresh()?GREEN:RED),weight());

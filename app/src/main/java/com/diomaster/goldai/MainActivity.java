@@ -652,10 +652,14 @@ public class MainActivity extends Activity {
         market.addView(feed);
         LinearLayout accountStrip = new LinearLayout(this);
         accountStrip.setOrientation(LinearLayout.HORIZONTAL);
-        accountStrip.addView(metric("ΥΠΟΛΟΙΠΟ", mt5Connected ? money(mt5Balance) : "—", GOLD), weight());
-        accountStrip.addView(metric("EQUITY", mt5Connected ? money(mt5Equity) : "—", GOLD), weight());
         JSONObject accountSnap = engine.snapshot(quoteFresh() ? price : 0);
-        accountStrip.addView(metric("P/L", PaperTradingEngine.money(accountSnap.optDouble("floating")), accountSnap.optDouble("floating") >= 0 ? GREEN : RED), weight());
+        boolean liveAccount = mt5Connected;
+        double displayBalance = liveAccount ? mt5Balance : accountSnap.optDouble("equity");
+        double displayEquity = liveAccount ? mt5Equity : accountSnap.optDouble("equity") + accountSnap.optDouble("floating");
+        double displayPnl = liveAccount ? (mt5Equity - mt5Balance) : accountSnap.optDouble("floating");
+        accountStrip.addView(metric("ΥΠΟΛΟΙΠΟ", liveAccount ? money(displayBalance) : PaperTradingEngine.money(displayBalance), GOLD), weight());
+        accountStrip.addView(metric("EQUITY", liveAccount ? money(displayEquity) : PaperTradingEngine.money(displayEquity), GOLD), weight());
+        accountStrip.addView(metric("P/L", liveAccount ? money(displayPnl) : PaperTradingEngine.money(displayPnl), displayPnl >= 0 ? GREEN : RED), weight());
         market.addView(accountStrip);
         addSpace(5);
         LinearLayout periods = new LinearLayout(this);
@@ -698,8 +702,9 @@ public class MainActivity extends Activity {
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        // Keep the empty-feed state compact; reserve the full chart height for real broker candles.
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(brokerChartActive ? 226 : 142)));
+        // Match the reference terminal's tall chart viewport. Empty state stays honest,
+        // but keeps the same layout height so indicators and the signal card don't jump.
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(286)));
         chart.setCandles(brokerChartActive ? brokerCandles : new JSONArray());
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
@@ -712,7 +717,7 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Το γράφημα περιμένει πραγματικά MT5 OHLC candles. Δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);

@@ -12,6 +12,10 @@
     <path android:fillColor="#8D5710" android:pathData="M33,28 L75,28 L72,33 L36,33Z"/>
     <path android:fillColor="#FFF0B1" android:pathData="M26,12 L31,27 L36,27Z M54,5 L54,27 L59,27Z M82,12 L72,27 L77,27Z"/>
     <path android:fillColor="#F7D875" android:pathData="M39,31a2,2 0,1 0,4 0a2,2 0,1 0,-4 0 M52,30a2,2 0,1 0,4 0a2,2 0,1 0,-4 0 M65,31a2,2 0,1 0,4 0a2,2 0,1 0,-4 0"/>
+    <!-- Subtle market bars behind the lion mark -->
+    <path android:fillColor="#2B2110" android:pathData="M12,78h5v13h-5z M20,70h5v21h-5z M83,68h5v23h-5z M91,58h5v33h-5z"/>
+    <path android:strokeColor="#B8872E" android:strokeWidth="1.2" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M12,75 L23,65 L31,68 M78,64 L88,55 L96,49"/>
     <!-- Lion mane -->
     <path android:fillColor="#9A5B13" android:strokeColor="#F5C34C" android:strokeWidth="1.4"
         android:pathData="M54,32 C43,31 37,37 32,43 L20,37 L25,54 L16,64 L29,68 L25,84 L41,78 L54,98 L67,78 L83,84 L79,68 L92,64 L83,54 L88,37 L76,43 C71,37 65,31 54,32Z"/>

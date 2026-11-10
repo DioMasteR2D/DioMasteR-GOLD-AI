@@ -501,8 +501,24 @@ public class MainActivity extends Activity {
             .setNegativeButton("Άκυρο",null)
             .setPositiveButton("Κλείσιμο",(d,w)->new Thread(()->{
                 String msg;
-                try { JSONObject r=new Mt5DemoClient(mt5BaseUrl,mt5Token).close(ticket); msg="Εντολή κλεισίματος στάλθηκε · deal #"+r.optLong("deal"); }
-                catch(Exception e) { msg="Δεν έκλεισε: "+e.getMessage(); }
+                try {
+                    Mt5DemoClient client=new Mt5DemoClient(mt5BaseUrl,mt5Token);
+                    JSONObject r=client.close(ticket);
+                    // Verify the ticket disappeared from the broker's open-position list.
+                    JSONObject check=client.positions();
+                    JSONArray remaining=check.optJSONArray("positions");
+                    boolean stillOpen=false;
+                    if(remaining!=null) for(int i=0;i<remaining.length();i++){
+                        JSONObject p=remaining.optJSONObject(i);
+                        if(p!=null && p.optLong("ticket")==ticket){stillOpen=true;break;}
+                    }
+                    msg=stillOpen ? "Ο broker έλαβε το αίτημα, αλλά η θέση εξακολουθεί να εμφανίζεται ανοικτή. Έλεγξε το MT5." :
+                        "Επιβεβαιώθηκε από τον broker: η θέση #"+ticket+" δεν είναι πλέον ανοικτή · deal #"+r.optLong("deal");
+                    JSONObject h=client.history(mt5Symbol,50);
+                    JSONArray closed=h.optJSONArray("history");
+                    JSONArray fresh=closed==null?new JSONArray():closed;
+                    runOnUiThread(()->{mt5OpenPositions=remaining==null?new JSONArray():remaining;mt5ClosedHistory=fresh;render();});
+                } catch(Exception e) { msg="Δεν επιβεβαιώθηκε το κλείσιμο: "+e.getMessage(); }
                 final String done=msg;
                 runOnUiThread(()->Toast.makeText(this,done,Toast.LENGTH_LONG).show());
             }).start()).show();
@@ -821,22 +837,24 @@ public class MainActivity extends Activity {
         }
         LinearLayout homeStats = card();
         homeStats.setPadding(dp(12),dp(13),dp(12),dp(13));
-        addLabel(homeStats,"▥  ΣΤΑΤΙΣΤΙΚΑ PAPER");
-        JSONArray homeClosed=homeSnap.optJSONArray("history");
+        JSONArray homeClosed = useBrokerAccount ? mt5ClosedHistory : homeSnap.optJSONArray("history");
         if(homeClosed==null) homeClosed=new JSONArray();
+        addLabel(homeStats,useBrokerAccount ? "▥  ΣΤΑΤΙΣΤΙΚΑ MT5 DEMO" : "▥  ΣΤΑΤΙΣΤΙΚΑ PAPER");
         int homeWins=0,homeLosses=0; double homeNet=0;
         for(int n=0;n<homeClosed.length();n++){
             JSONObject tr=homeClosed.optJSONObject(n); if(tr==null) continue;
-            double result=tr.optDouble("pnl"); homeNet+=result;
+            double result=tr.optDouble(useBrokerAccount ? "profit" : "pnl",0.0);
+            homeNet+=result;
             if(result>0) homeWins++; else if(result<0) homeLosses++;
         }
         int homeTrades=homeWins+homeLosses;
         String homeWinRate=homeTrades>0?String.format(Locale.US,"%.1f%%",100.0*homeWins/homeTrades):"—";
-        addRow(homeStats,"Συναλλαγές",String.valueOf(homeTrades));
+        addRow(homeStats,"Κλεισμένες",String.valueOf(homeTrades));
         addRow(homeStats,"Κερδισμένες",String.valueOf(homeWins),GREEN);
         addRow(homeStats,"Χαμένες",String.valueOf(homeLosses),RED);
         addRow(homeStats,"Win Rate",homeWinRate,GOLD);
         addRow(homeStats,"Καθαρό P/L",PaperTradingEngine.money(homeNet),homeNet>=0?GREEN:RED);
+        if(useBrokerAccount && homeTrades==0) homeStats.addView(text("Δεν έχουν επιστραφεί κλεισμένες συναλλαγές MT5 ακόμη. Οι ανοιχτές θέσεις δεν υπολογίζονται.",9,MUTED,false));
         LinearLayout.LayoutParams overviewHalf=new LinearLayout.LayoutParams(0,-2,1);
         overviewHalf.setMargins(dp(2),0,dp(4),0);
         overviewRow.addView(homePositions,overviewHalf);

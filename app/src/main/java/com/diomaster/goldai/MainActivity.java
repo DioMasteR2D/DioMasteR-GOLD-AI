@@ -31,10 +31,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends Activity {
-    private final int BG = 0xFF050506;
-    private final int PANEL = 0xFF111014;
-    private final int GOLD = 0xFFFFC83D;
-    private final int MUTED = 0xFFB5A58A;
+    private final int BG = 0xFF080A0F;
+    private final int PANEL = 0xFF121722;
+    private final int GOLD = 0xFFE8B84B;
+    private final int MUTED = 0xFFA5ADBA;
     private final int GREEN = 0xFF19E78A;
     private final int RED = 0xFFFF5364;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -522,7 +522,7 @@ public class MainActivity extends Activity {
     private void render() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(10), dp(8), dp(10), dp(18));
+        root.setPadding(dp(14), dp(10), dp(14), dp(22));
         root.setBackgroundColor(BG);
 
         // Keep the existing ScrollView attached to the Activity during data refreshes.
@@ -1413,9 +1413,9 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(16), dp(16), dp(16));
         GradientDrawable shell = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF171719, 0xFF0D0D0F, 0xFF141311});
-        shell.setCornerRadius(dp(20));
-        shell.setStroke(dp(1), 0xFF6E5425);
+                new int[]{0xFF1A202B, 0xFF11151D, 0xFF151923});
+        shell.setCornerRadius(dp(22));
+        shell.setStroke(dp(1), 0xFF554522);
         box.setBackground(shell);
         box.setElevation(dp(3));
         return box;
@@ -1499,8 +1499,8 @@ public class MainActivity extends Activity {
 
     private GradientDrawable goldShell(int color, int stroke) {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF1B1710, color, 0xFF0D0D0F});
-        d.setCornerRadius(dp(18));
+                new int[]{0xFF20232B, color, 0xFF10131A});
+        d.setCornerRadius(dp(20));
         d.setStroke(dp(1), stroke);
         return d;
     }

@@ -548,16 +548,16 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(8),dp(6),dp(8),dp(6));
+        hero.setPadding(dp(10),dp(9),dp(10),dp(9));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
         ImageView headerArt=new ImageView(this);
         headerArt.setImageResource(R.drawable.lion_crown_header);
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(120),dp(104)));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(100)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
-        TextView brandTitle=text("DioMasteR2D",21,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
-        TextView goldTitle=text("GOLD AI",29,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
-        TextView brandSub=text("AI TRADING · XAUUSD · MT5",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
+        TextView brandEyebrow=text("PRECISION TRADING TERMINAL",8,0xFFB9A16B,true); brandEyebrow.setGravity(Gravity.CENTER); brandEyebrow.setLetterSpacing(0.12f); brandText.addView(brandEyebrow);\n        TextView brandTitle=text("DioMasteR2D",20,0xFFFFD45A,true); brandTitle.setGravity(Gravity.CENTER); brandTitle.setLetterSpacing(0.025f); brandText.addView(brandTitle);
+        TextView goldTitle=text("GOLD AI",27,0xFFFFD45A,true); goldTitle.setGravity(Gravity.CENTER); brandText.addView(goldTitle);
+        TextView brandSub=text("XAUUSD  ·  VANTAGE MT5 DEMO",8,0xFFFFD98A,true); brandSub.setGravity(Gravity.CENTER); brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1); brandLp.leftMargin=dp(4); hero.addView(brandText,brandLp);
         boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
         TextView statusPill=text(mt5Connected?"DEMO":"OFFLINE",10,mt5Connected?0xFF071B12:0xFFFFE5A3,true);
@@ -565,7 +565,7 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(142)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(138)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.

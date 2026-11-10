@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
     private long lastAutoSignalBar = 0L;
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
+    private String multiTimeframeStatus = "ΠΟΛΥΧΡΟΝΙΚΗ ΠΑΡΑΚΟΛΟΥΘΗΣΗ · ΑΝΑΜΟΝΗ";
     private final JSONArray agentActivityLog = new JSONArray();
     private static final String AUDIT_PREFS = "diomaster_ai_audit";
     private static final String AUDIT_EVENTS_KEY = "events";
@@ -252,6 +253,29 @@ public class MainActivity extends Activity {
                     JSONObject quote = client.quote(mt5Symbol);
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
                     JSONArray rows = candleData.optJSONArray("candles");
+                    // Diagnostic-only multi-timeframe scan. It never feeds the order engine.
+                    final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
+                    StringBuilder scan = new StringBuilder("MTF DEMO · ");
+                    for (String frame : scanFrames) {
+                        JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
+                                ? candleData : client.candles(mt5Symbol, frame, 48);
+                        JSONArray frameRows = frameData.optJSONArray("candles");
+                        ArrayList<Double> framePrices = new ArrayList<>();
+                        if (frameRows != null) {
+                            for (int k = 0; k < frameRows.length(); k++) {
+                                JSONObject bar = frameRows.optJSONObject(k);
+                                if (bar != null && bar.optDouble("close", 0) > 0)
+                                    framePrices.add(bar.optDouble("close"));
+                            }
+                        }
+                        GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
+                                framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
+                        if (scan.length() > 10) scan.append(" | ");
+                        scan.append(frame).append(": ").append(frameSignal.side)
+                                .append(" ").append(frameSignal.confidence).append("%")
+                                .append(" (").append(framePrices.size()).append(" candles)");
+                    }
+                    final String mtfResult = scan.toString();
                     if (rows == null || rows.length() < 2) throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
                     String quoteSource = quote.optString("quote_source", "");
                     double bid = quote.optDouble("bid", 0);
@@ -280,6 +304,8 @@ public class MainActivity extends Activity {
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
                         aiSignal = GoldAiAgent.analyze(chartPrices, latest);
+                        multiTimeframeStatus = mtfResult;
+                        logAgentActivity("MULTI-TIMEFRAME", "SCAN", mtfResult);
                         engine.onQuote(latest);
                         if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
                         render();
@@ -818,6 +844,13 @@ public class MainActivity extends Activity {
             history.addView(reloadHistory);
         }
         root.addView(history);
+        addSpace(10);
+
+        LinearLayout mtfCard = card();
+        addLabel(mtfCard, "MULTI-TIMEFRAME MONITOR · ΔΙΑΓΝΩΣΤΙΚΟ");
+        mtfCard.addView(text(multiTimeframeStatus, 11, GOLD, true));
+        mtfCard.addView(text("M1/M5/M15/M30/H1/H4 · Ανεξάρτητη ανάλυση · Δεν επηρεάζει BUY/SELL ή εντολές.", 10, MUTED, false));
+        root.addView(mtfCard);
         addSpace(10);
 
         LinearLayout activity = card();

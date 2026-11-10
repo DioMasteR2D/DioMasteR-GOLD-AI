@@ -548,11 +548,10 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(10),dp(9),dp(10),dp(9));
+        hero.setPadding(dp(12),dp(12),dp(12),dp(12));
         hero.setBackground(goldShell(0xFF080707,0xFF5B3A08));
-        ImageView headerArt=new ImageView(this);
-        headerArt.setImageResource(R.drawable.lion_crown_header);
-        headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        // Use the native mascot drawing in a fixed viewport so the lion is never cropped.
+        MascotView headerArt = new MascotView(this);
         hero.addView(headerArt,new LinearLayout.LayoutParams(dp(112),dp(100)));
         LinearLayout brandText=new LinearLayout(this); brandText.setOrientation(LinearLayout.VERTICAL); brandText.setGravity(Gravity.CENTER);
         TextView brandEyebrow=text("PRECISION TRADING TERMINAL",8,0xFFB9A16B,true); brandEyebrow.setGravity(Gravity.CENTER); brandEyebrow.setLetterSpacing(0.12f); brandText.addView(brandEyebrow);
@@ -566,7 +565,7 @@ public class MainActivity extends Activity {
         statusPill.setBackground(round(mt5Connected?GREEN:0xFF302515,18,mt5Connected?GREEN:GOLD));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         hero.addView(statusPill);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(138)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(132)));
         addSpace(10);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
@@ -671,7 +670,8 @@ public class MainActivity extends Activity {
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
-        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(250)));
+        // Keep the empty-feed state compact; reserve the full chart height for real broker candles.
+        chart.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(brokerChartActive ? 226 : 142)));
         chart.setCandles(brokerChartActive ? brokerCandles : new JSONArray());
         market.addView(chart);
         LinearLayout indicators = new LinearLayout(this);
@@ -684,7 +684,7 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Spot snapshots μόνο · σύνδεσε MT5 DEMO για πραγματικά OHLC candlesticks.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Το γράφημα περιμένει πραγματικά MT5 OHLC candles. Δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);
@@ -851,9 +851,34 @@ public class MainActivity extends Activity {
         historyPageStart = root.getChildCount();
         LinearLayout history = card();
         historySection = history;
-        addLabel(history, "ΙΣΤΟΡΙΚΟ ΚΛΕΙΣΜΕΝΩΝ ΣΥΝΑΛΛΑΓΩΝ");
+        addLabel(history, "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
         JSONArray closed = snap.optJSONArray("history");
-        if (closed == null || closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη.", 12, MUTED, false));
+        if (closed == null) closed = new JSONArray();
+        int winCount = 0, lossCount = 0;
+        double netClosedPnl = 0.0;
+        for (int k = 0; k < closed.length(); k++) {
+            JSONObject trade = closed.optJSONObject(k);
+            if (trade == null) continue;
+            double result = trade.optDouble("pnl", 0.0);
+            netClosedPnl += result;
+            if (result > 0) winCount++;
+            else if (result < 0) lossCount++;
+        }
+        LinearLayout historyStatsTop = new LinearLayout(this);
+        historyStatsTop.setOrientation(LinearLayout.HORIZONTAL);
+        historyStatsTop.addView(metric("ΚΛΕΙΣΜΕΝΕΣ", String.valueOf(closed.length()), GOLD), weight());
+        historyStatsTop.addView(metric("WIN / LOSS", winCount + " / " + lossCount, winCount >= lossCount ? GREEN : RED), weight());
+        history.addView(historyStatsTop);
+        addSpace(5);
+        LinearLayout historyStatsBottom = new LinearLayout(this);
+        historyStatsBottom.setOrientation(LinearLayout.HORIZONTAL);
+        historyStatsBottom.addView(metric("NET PAPER P/L", PaperTradingEngine.money(netClosedPnl), netClosedPnl >= 0 ? GREEN : RED), weight());
+        String winRate = (winCount + lossCount) > 0 ? String.format(Locale.US, "%.1f%%", 100.0 * winCount / (winCount + lossCount)) : "—";
+        historyStatsBottom.addView(metric("WIN RATE", winRate, GOLD), weight());
+        history.addView(historyStatsBottom);
+        addSpace(8);
+        addLabel(history, "ΠΡΟΣΦΑΤΕΣ PAPER ΣΥΝΑΛΛΑΓΕΣ");
+        if (closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη. Τα στατιστικά θα ενημερωθούν μετά τις πρώτες πραγματικές PAPER συναλλαγές.", 12, MUTED, false));
         else {
             for (int i = 0; i < Math.min(8, closed.length()); i++) {
                 JSONObject p = closed.optJSONObject(i);

@@ -199,7 +199,7 @@ class Order(BaseModel):
 def auth(value:Optional[str]):
     if not BRIDGE_TOKEN: raise HTTPException(503,"DIO_BRIDGE_TOKEN is not configured")
     got=(value or "").removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(got,BRIDGE_TOKEN): raise HTTPException(401,"Unauthorized")
+    if not hmac.compare_digest(got.encode("utf-8"),BRIDGE_TOKEN.encode("utf-8")): raise HTTPException(401,"Unauthorized")
 
 def configured():
     if not TA_TOKEN: raise HTTPException(503,"TickerAll API key is not configured")

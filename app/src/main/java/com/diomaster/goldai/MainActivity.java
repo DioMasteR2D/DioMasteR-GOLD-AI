@@ -520,6 +520,7 @@ public class MainActivity extends Activity {
     }
 
     private void render() {
+        final boolean mt5Connected = mt5Status != null && mt5Status.startsWith("DEMO");
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(10), dp(14), dp(22));

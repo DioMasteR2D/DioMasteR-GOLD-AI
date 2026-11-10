@@ -1211,17 +1211,21 @@ public class MainActivity extends Activity {
             }
             final String message = resultMessage;
             final boolean sent = submitted;
+            final long completedAt = System.currentTimeMillis();
+            final long statusDuration = statusMs, positionsDuration = positionsMs;
+            final long quoteDuration = quoteMs, orderDuration = orderMs, reversalDuration = reversalMs;
+            final long brokerAckAt = orderAcceptedAt;
             runOnUiThread(() -> {
                 autoOrderInFlight = false;
                 if (sent) lastAutoSignalBar = signalBar;
                 autoExecutionMessage = message;
-                long totalMs = System.currentTimeMillis() - signalCreatedAt;
+                long totalMs = completedAt - signalCreatedAt;
                 logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
                         "timeframe=" + signalTimeframe + " · side=" + side + " · confidence=" + signalConfidence
                                 + " · signalToResult=" + totalMs + "ms"
-                                + " · status=" + statusMs + "ms · positions=" + positionsMs + "ms"
-                                + " · reversal=" + reversalMs + "ms · quote=" + quoteMs + "ms · order=" + orderMs + "ms"
-                                + (orderAcceptedAt > 0 ? " · signalToBrokerAck=" + (orderAcceptedAt - signalCreatedAt) + "ms" : "")
+                                + " · status=" + statusDuration + "ms · positions=" + positionsDuration + "ms"
+                                + " · reversal=" + reversalDuration + "ms · quote=" + quoteDuration + "ms · order=" + orderDuration + "ms"
+                                + (brokerAckAt > 0 ? " · signalToBrokerAck=" + (brokerAckAt - signalCreatedAt) + "ms" : "")
                                 + " · entry=" + String.format(Locale.US, "%.5f", signalEntry)
                                 + " · SL=" + String.format(Locale.US, "%.5f", sl)
                                 + " · TP=" + String.format(Locale.US, "%.5f", tp)

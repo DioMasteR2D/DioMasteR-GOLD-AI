@@ -370,7 +370,8 @@ public class MainActivity extends Activity {
     }
 
     private boolean quoteFresh() {
-        return price > 0 && quoteAt > 0 && System.currentTimeMillis() - quoteAt <= 15000L;
+        long age = System.currentTimeMillis() - quoteAt;
+        return price > 0 && quoteAt > 0 && age >= -5000L && age <= 15000L;
     }
 
     private void openTrade(String side) {
@@ -408,7 +409,14 @@ public class MainActivity extends Activity {
                 if (symbols != null && symbols.length() > 0) mt5Symbol = symbols.optString(0, mt5Symbol);
                 JSONObject q = client.quote(mt5Symbol);
                 double bid=q.optDouble("bid"), ask=q.optDouble("ask");
-                if (bid<=0 || ask<=0 || ask<bid) throw new IllegalStateException("Μη έγκυρη τιμή broker.");
+                long tickTime=(long)(q.optDouble("time",0)*1000L);
+                long tickAge=System.currentTimeMillis()-tickTime;
+                if (!"tickerall_live_websocket_tick".equals(q.optString("quote_source","")))
+                    throw new IllegalStateException("Δεν υπάρχει πραγματικό LIVE tick TickerAll. Πιθανή κλειστή αγορά ή feed μη διαθέσιμο.");
+                if (bid<=0 || ask<=0 || ask<bid || tickTime<=0 || tickAge < -5000L || tickAge > 15000L)
+                    throw new IllegalStateException("Το LIVE tick είναι παλιό ή μη έγκυρο. Δεν αποστέλλεται εντολή.");
+                if (!"BUY".equals(side) && !"SELL".equals(side))
+                    throw new IllegalStateException("Μη έγκυρη κατεύθυνση εντολής.");
                 double entry="BUY".equals(side)?ask:bid;
                 double sl="BUY".equals(side)?entry-8.0:entry+8.0;
                 double tp="BUY".equals(side)?entry+16.0:entry-16.0;
@@ -1343,13 +1351,23 @@ public class MainActivity extends Activity {
                     stageAt = System.currentTimeMillis();
                     JSONObject q = client.quote(mt5Symbol);
                     quoteMs = System.currentTimeMillis() - stageAt;
-                    double ref = q.optDouble("bid", 0);
+                    String quoteSource = q.optString("quote_source", "");
+                    double bid = q.optDouble("bid", 0);
+                    double ask = q.optDouble("ask", 0);
                     long qTime = (long)(q.optDouble("time", 0) * 1000L);
-                    if (ref <= 0 || qTime <= 0 || System.currentTimeMillis() - qTime > 120000L)
-                        throw new IllegalStateException("Η τιμή broker δεν είναι φρέσκια.");
-                    if (("BUY".equals(side) && !(sl < ref && ref < tp))
-                            || ("SELL".equals(side) && !(tp < ref && ref < sl)))
-                        throw new IllegalStateException("Το SL/TP του υπάρχοντος σήματος δεν συμφωνεί με την τελευταία τιμή broker.");
+                    long quoteAge = System.currentTimeMillis() - qTime;
+                    if (!"tickerall_live_websocket_tick".equals(quoteSource))
+                        throw new IllegalStateException("Δεν υπάρχει πραγματικό LIVE tick TickerAll. Πιθανή κλειστή αγορά ή feed μη διαθέσιμο.");
+                    if (bid <= 0 || ask <= 0 || ask < bid || qTime <= 0
+                            || quoteAge < -5000L || quoteAge > 15000L)
+                        throw new IllegalStateException("Το LIVE tick είναι παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Η εντολή μπλοκαρίστηκε.");
+                    if (!"BUY".equals(side) && !"SELL".equals(side))
+                        throw new IllegalStateException("Μη έγκυρη κατεύθυνση σήματος.");
+                    // Validate protective levels against the executable side of the spread.
+                    double executableEntry = "BUY".equals(side) ? ask : bid;
+                    if (("BUY".equals(side) && !(sl < executableEntry && executableEntry < tp))
+                            || ("SELL".equals(side) && !(tp < executableEntry && executableEntry < sl)))
+                        throw new IllegalStateException("Το SL/TP δεν συμφωνεί με την εκτελέσιμη BID/ASK τιμή.");
                     stageAt = System.currentTimeMillis();
                     JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
                     orderMs = System.currentTimeMillis() - stageAt;

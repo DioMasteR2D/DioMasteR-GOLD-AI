@@ -571,7 +571,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 import pandas as pd
 from unified_engine import get_unified_signal, MIN_UNIFIED_SCORE
 AUTO_TASK=None
-AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None}
+AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
 AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
@@ -620,10 +620,10 @@ async def auto_cycle():
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
     h1,h4,d1,w1=await asyncio.gather(
-      strategy_frame(row["id"],symbol,"H1",9000),
-      strategy_frame(row["id"],symbol,"H4",30000),
-      strategy_frame(row["id"],symbol,"D1",180000),
-      strategy_frame(row["id"],symbol,"W1",700000))
+      strategy_frame(row["id"],symbol,"H1",8760),
+      strategy_frame(row["id"],symbol,"H4",8760),
+      strategy_frame(row["id"],symbol,"D1",8760),
+      strategy_frame(row["id"],symbol,"W1",8760))
     if len(h1)<300 or len(h4)<50 or len(d1)<20 or len(w1)<10:
         raise RuntimeError("Not enough closed H1/H4/D1/W1 candles for the full strategy")
     ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
@@ -633,7 +633,7 @@ async def auto_cycle():
         direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
         rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
         mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
-        sess_ok=13<=datetime.now(timezone.utc).hour<17
+        sess_ok=(13<=datetime.now(timezone.utc).hour<17 and datetime.now(timezone.utc).weekday()<5)
         signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
         signal.direction="HOLD"
     else:
@@ -663,6 +663,8 @@ async def auto_cycle():
         if not bot: AUTO_STATE["last_action"]="HOLD"
         return
     if bot: AUTO_STATE["last_action"]="POSITION_ALREADY_OPEN"; return
+    if AUTO_STATE.get("last_entry_bar_time")==stamp:
+        AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_H1_BAR"; return
     if not EXECUTION_ENABLED:
         AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
     if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
@@ -686,6 +688,7 @@ async def auto_cycle():
       client_order_id="AUTO"+uuid.uuid4().hex[:16],order_origin="AUTO")
     result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
     AUTO_STATE["trades_today"]+=1
+    AUTO_STATE["last_entry_bar_time"]=stamp
     AUTO_STATE["last_action"]="OPENED_"+signal.direction
     AUTO_STATE["last_order"]=result
 

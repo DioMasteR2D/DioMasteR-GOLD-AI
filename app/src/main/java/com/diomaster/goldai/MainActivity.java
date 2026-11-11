@@ -847,11 +847,11 @@ public class MainActivity extends Activity {
         indicators.setOrientation(LinearLayout.HORIZONTAL);
         boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
-        double emaFast=calcEma(6), emaSlow=calcEma(15);
+        double emaFast=calcEma(9), emaSlow=calcEma(21);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
         indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
-        indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
+        indicators.addView(metric("Τάση EMA 9/21",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
         TextView chartNote = text(brokerChartActive ? "Στρατηγική AUTO: H1 EMA 9 / 21 · H4 EMA 50." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
@@ -1337,7 +1337,7 @@ public class MainActivity extends Activity {
         render();
     }
 
-    // Diagnostics explain every local gate; GoldAiAgent strategy and thresholds remain unchanged.
+    // Diagnostics explain every local gate; Original EMA 9/21 H1 strategy diagnostics.
     private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
         if (!aiEngineStarted) return;
         if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
@@ -1355,7 +1355,7 @@ public class MainActivity extends Activity {
             return;
         }
         JSONObject latestBar = bars.optJSONObject(bars.length() - 2);
-        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
+        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }\n        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί ή επιχειρηθεί"); return; }
 
@@ -1513,7 +1513,7 @@ public class MainActivity extends Activity {
                 autoExecutionMessage = message;
                 long totalMs = completedAt - signalCreatedAt;
                 logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
-                        "timeframe=H1 + " · side=" + side + " · confidence=" + signalConfidence
+                        "timeframe=H1" + " · side=" + side + " · confidence=" + signalConfidence
                                 + " · signalToResult=" + totalMs + "ms"
                                 + " · status=" + statusDuration + "ms · positions=" + positionsDuration + "ms"
                                 + " · reversal=" + reversalDuration + "ms · quote=" + quoteDuration + "ms · order=" + orderDuration + "ms"

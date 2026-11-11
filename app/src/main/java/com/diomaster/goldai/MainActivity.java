@@ -1473,8 +1473,8 @@ public class MainActivity extends Activity {
                                 && mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) botOpen++;
                     }
                 }
-                if (botOpen >= 2) {
-                    resultMessage = "ΑΝΑΜΟΝΗ · υπάρχουν ήδη 2 αυτόματες θέσεις DioMasteR στο " + mt5Symbol;
+                if (botOpen >= 1) {
+                    resultMessage = "ΑΝΑΜΟΝΗ · η αρχική στρατηγική επιτρέπει μόνο 1 αυτόματη θέση DioMasteR στο " + mt5Symbol;
                 } else {
                     stageAt = System.currentTimeMillis();
                     JSONObject q = client.quote(mt5Symbol);

@@ -449,7 +449,8 @@ def get_upcoming_events() -> list[EconomicEvent]:
         "currency"    : e.currency,
         "hours_until" : e.hours_until
     } for e in events]
-    _cache_set("events", cache_data)
+    if EVENTS_SOURCE_OK:
+        _cache_set("events", cache_data)
 
     return events
 

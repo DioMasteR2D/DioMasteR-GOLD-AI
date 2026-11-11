@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,11 +26,19 @@ public final class GoldBackgroundService extends Service {
     private String token = "";
     private String symbol = "XAUUSD";
     private boolean initialized = false;
+    private PowerManager.WakeLock wakeLock;
 
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
         startForegroundCompat(buildStatus("DioMasteR ενεργό · σύνδεση MT5 DEMO"));
+        PowerManager pm = (PowerManager)getSystemService(POWER_SERVICE);
+        if (pm != null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DioMasteR:GOLDBackgroundMonitor");
+            wakeLock.setReferenceCounted(false);
+            // Renewed on each poll; timeout prevents an accidental permanent CPU lock.
+            wakeLock.acquire(10 * 60 * 1000L);
+        }
         SharedPreferences p = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE);
         base = p.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         token = p.getString("token", "");
@@ -43,6 +52,7 @@ public final class GoldBackgroundService extends Service {
             if (intent.hasExtra("token")) token = intent.getStringExtra("token");
             if (intent.hasExtra("symbol")) symbol = intent.getStringExtra("symbol");
         }
+        renewWakeLock();
         return START_STICKY;
     }
 
@@ -56,7 +66,7 @@ public final class GoldBackgroundService extends Service {
         }
     };
 
-    private void pollOnce() {
+    private void renewWakeLock() {\n        try { if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(10 * 60 * 1000L); }\n        catch (Exception ignored) {}\n    }\n\n    private void pollOnce() {
         try {
             if (base == null || base.isEmpty() || token == null || token.trim().isEmpty())
                 throw new IllegalStateException("Δεν έχει αποθηκευτεί σύνδεση MT5 DEMO");

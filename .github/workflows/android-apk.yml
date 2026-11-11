@@ -59,3 +59,5 @@ jobs:
           retention-days: 30
 
 # Includes backend strategy engine compilation and unit tests before APK packaging.
+
+# CI reruns against the latest cloud strategy branch head.

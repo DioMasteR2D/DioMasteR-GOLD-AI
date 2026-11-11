@@ -80,13 +80,20 @@ public final class Mt5DemoClient {
     public JSONObject autoStop() throws Exception { return request("POST", "/v1/auto/stop", new JSONObject()); }
     public JSONObject autoStatus() throws Exception { return request("GET", "/v1/auto/status", null); }
     public JSONObject order(String symbol, String side, double volume, double sl, double tp) throws Exception {
+        return order(symbol, side, volume, sl, tp, "AUTO");
+    }
+    public JSONObject manualOrder(String symbol, String side, double volume, double sl, double tp) throws Exception {
+        return order(symbol, side, volume, sl, tp, "MANUAL");
+    }
+    private JSONObject order(String symbol, String side, double volume, double sl, double tp, String origin) throws Exception {
         JSONObject p = new JSONObject();
         p.put("symbol", symbol);
         p.put("side", side);
         p.put("volume", volume);
         p.put("stop_loss", sl);
         p.put("take_profit", tp);
-        p.put("client_order_id", "android-" + UUID.randomUUID().toString());
+        p.put("order_origin", origin);
+        p.put("client_order_id", "android-" + origin.toLowerCase(java.util.Locale.US) + "-" + UUID.randomUUID().toString());
         return request("POST", "/v1/order", p);
     }
     public JSONObject close(long ticket) throws Exception {

@@ -284,7 +284,9 @@ public class MainActivity extends Activity {
                     if (bid <= 0 || ask < bid || stamp <= 0 || quoteAge < -5000L || quoteAge > 15000L)
                         throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
                     double latest = (bid + ask) / 2.0;
-                    final JSONArray bars = rows;\n                    final JSONArray h1Bars = strategyH1;\n                    final JSONArray h4Bars = strategyH4;
+                    final JSONArray bars = rows;
+                    final JSONArray h1Bars = strategyH1;
+                    final JSONArray h4Bars = strategyH4;
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
@@ -1227,7 +1229,11 @@ public class MainActivity extends Activity {
         bottomNav.setGravity(Gravity.CENTER);
         bottomNav.setPadding(dp(5),dp(5),dp(5),dp(5));
         bottomNav.setBackground(goldShell(0xFF080707,0xFFFFC83D));
-        String[] bottomLabels={"⌂\nΑρχική","▤\nΘέσεις","◷\nΙστορικό","⚙\nΡυθμίσεις"};
+        String[] bottomLabels={"⌂
+Αρχική","▤
+Θέσεις","◷
+Ιστορικό","⚙
+Ρυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
             boolean active=index==selectedBottomTab;
@@ -1355,7 +1361,8 @@ public class MainActivity extends Activity {
             return;
         }
         JSONObject latestBar = bars.optJSONObject(bars.length() - 2);
-        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }\n        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
+        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }
+        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί ή επιχειρηθεί"); return; }
 
@@ -1368,8 +1375,8 @@ public class MainActivity extends Activity {
         // Audit-only trace: records the exact local strategy decision before any broker request.
         // This does not alter signal rules, thresholds, sizing, SL/TP, or order flow.
         logAgentActivity("SIGNAL TRACE", "VALID_SIGNAL",
-                "timeframe=H1
-                        + " · candleTime=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(barTime))
+                "timeframe=H1" +
+                        " · candleTime=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(barTime))
                         + " · side=" + aiSignal.side
                         + " · confidence=" + aiSignal.confidence
                         + " · quote=" + String.format(Locale.US, "%.5f", price)
@@ -1534,7 +1541,8 @@ public class MainActivity extends Activity {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\r\n\\t ]+", "");
+        return cleaned.replaceAll("[\\r
+\\t ]+", "");
     }
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);

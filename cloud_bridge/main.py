@@ -686,8 +686,6 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
     global AUTO_TASK
     auth(authorization); row,detail=await account_detail()
     if detail.get("isDemo") is not True: raise HTTPException(403,"AUTO is DEMO-only")
-    if not EXECUTION_ENABLED:
-        raise HTTPException(423,"Cloud AUTO strategy is installed but DEMO execution is disabled pending validation")
     async with AUTO_LOCK:
         if AUTO_TASK and not AUTO_TASK.done():
             return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}

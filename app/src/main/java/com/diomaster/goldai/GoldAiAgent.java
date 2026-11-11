@@ -1,124 +1,93 @@
 package com.diomaster.goldai;
 
-import java.util.List;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.Calendar;
 import java.util.Locale;
+import java.util.TimeZone;
 
 /**
- * On-device XAUUSD signal assistant.
- * Uses broker candle closes when MT5 is connected. The rules and thresholds are
- * intentionally unchanged; diagnostics expose why a setup is or is not confirmed.
+ * XAUUSD Phase 1 strategy ported from a1shmuk/xauusd-algo-trader.
+ * AUTO signals use completed H1 candles only and a completed H4 EMA50 filter.
+ * Swing-point SL refinement is intentionally omitted: the source implementation
+ * reads future candles to confirm pivots, which would introduce look-ahead bias.
  */
 public final class GoldAiAgent {
     private GoldAiAgent() {}
-
     public static final class Signal {
-        public final String side;
-        public final String reason;
+        public final String side, reason;
         public final int confidence;
-        public final double entry;
-        public final double stopLoss;
-        public final double takeProfit;
+        public final double entry, stopLoss, takeProfit;
         public final boolean ready;
-
-        private Signal(String side, String reason, int confidence, double entry,
-                       double stopLoss, double takeProfit, boolean ready) {
-            this.side = side;
-            this.reason = reason;
-            this.confidence = confidence;
-            this.entry = entry;
-            this.stopLoss = stopLoss;
-            this.takeProfit = takeProfit;
-            this.ready = ready;
+        private Signal(String s,String r,int c,double e,double sl,double tp,boolean ok){
+            side=s;reason=r;confidence=c;entry=e;stopLoss=sl;takeProfit=tp;ready=ok;
         }
-
-        public static Signal waiting(String reason) {
-            return new Signal("HOLD", reason, 0, 0, 0, 0, false);
-        }
+        public static Signal waiting(String r){return new Signal("HOLD",r,0,0,0,0,false);}
     }
 
-    public static Signal analyze(List<Double> prices, double current) {
-        if (prices == null || prices.size() < 24 || current <= 0) {
-            int count = prices == null ? 0 : prices.size();
-            return Signal.waiting("ΑΝΕΠΑΡΚΗ ΔΕΔΟΜΕΝΑ · Μετρήσεις: " + count
-                    + "/24 · απαιτούνται τουλάχιστον 24 έγκυρες τιμές και θετική τρέχουσα τιμή.");
-        }
-
-        double fast = ema(prices, 6);
-        double slow = ema(prices, 15);
-        int n = prices.size();
-        int from = Math.max(0, n - 13);
-        double high = -Double.MAX_VALUE;
-        double low = Double.MAX_VALUE;
-        double movement = 0;
-        int changes = 0;
-        for (int i = from; i < n - 1; i++) {
-            double v = prices.get(i);
-            high = Math.max(high, v);
-            low = Math.min(low, v);
-            if (i > from) {
-                movement += Math.abs(v - prices.get(i - 1));
-                changes++;
-            }
-        }
-        double volatility = changes == 0 ? 0 : movement / changes;
-        double floor = Math.max(0.35, volatility * 1.8);
-        double breakoutBuffer = Math.max(0.08, volatility * 0.12);
-        boolean upTrend = fast > slow && current > prices.get(n - 5);
-        boolean downTrend = fast < slow && current < prices.get(n - 5);
-        boolean breakoutUp = current > high + breakoutBuffer;
-        boolean breakoutDown = current < low - breakoutBuffer;
-
-        String metrics = "ΔΙΑΓΝΩΣΗ · " + n + " candles | EMA6 " + fmt(fast)
-                + " / EMA15 " + fmt(slow) + " | εύρος " + fmt(low) + "–" + fmt(high)
-                + " | τιμή " + fmt(current) + " | buffer " + fmt(breakoutBuffer);
-
-        if (upTrend && breakoutUp) {
-            int score = score(Math.abs(fast - slow), volatility, current - high);
-            double sl = current - floor;
-            return new Signal("BUY", "ΕΠΙΒΕΒΑΙΩΜΕΝΟ BUY · Ανοδική EMA τάση και διάσπαση πρόσφατου εύρους. "
-                    + metrics + " | απόσταση διάσπασης " + fmt(current - high)
-                    + " | επιβεβαίωσε spread και νέα τιμή πριν από εκτέλεση.",
-                    score, current, sl, current + floor * 1.8, true);
-        }
-        if (downTrend && breakoutDown) {
-            int score = score(Math.abs(fast - slow), volatility, low - current);
-            double sl = current + floor;
-            return new Signal("SELL", "ΕΠΙΒΕΒΑΙΩΜΕΝΟ SELL · Καθοδική EMA τάση και διάσπαση πρόσφατου εύρους. "
-                    + metrics + " | απόσταση διάσπασης " + fmt(low - current)
-                    + " | επιβεβαίωσε spread και νέα τιμή πριν από εκτέλεση.",
-                    score, current, sl, current - floor * 1.8, true);
-        }
-
-        String trend = fast > slow ? "ήπια ανοδική" : fast < slow ? "ήπια καθοδική" : "ουδέτερη";
-        String blockers = (upTrend ? "UPTREND ΝΑΙ" : "UPTREND ΟΧΙ") + " · "
-                + (downTrend ? "DOWNTREND ΝΑΙ" : "DOWNTREND ΟΧΙ") + " · "
-                + (breakoutUp ? "BREAKOUT UP ΝΑΙ" : "BREAKOUT UP ΟΧΙ") + " · "
-                + (breakoutDown ? "BREAKOUT DOWN ΝΑΙ" : "BREAKOUT DOWN ΟΧΙ");
-        return new Signal("HOLD", "HOLD · Δεν υπάρχει επιβεβαιωμένο breakout. Τάση: " + trend
-                + ". " + blockers + ". " + metrics
-                + " | απαιτείται τιμή πάνω από " + fmt(high + breakoutBuffer)
-                + " για breakout UP ή κάτω από " + fmt(low - breakoutBuffer)
-                + " για breakout DOWN.", 0, 0, 0, 0, true);
+    /** Kept for read-only chart diagnostics; AUTO uses the H1/H4 overload below. */
+    public static Signal analyze(java.util.List<Double> prices,double current){
+        return Signal.waiting("AUTO STRATEGY: απαιτούνται κλεισμένα H1/H4 broker candles.");
     }
 
-    private static String fmt(double value) {
-        return String.format(Locale.US, "%.2f", value);
-    }
-
-    private static double ema(List<Double> values, int period) {
-        int start = Math.max(0, values.size() - period * 3);
-        double alpha = 2.0 / (period + 1.0);
-        double result = values.get(start);
-        for (int i = start + 1; i < values.size(); i++) {
-            result = values.get(i) * alpha + result * (1.0 - alpha);
+    public static Signal analyze(JSONArray h1, JSONArray h4, double executableReference) {
+        if (h1 == null || h1.length() < 30 || h4 == null || h4.length() < 52)
+            return Signal.waiting("EMA 9/21 · Αναμονή επαρκών H1/H4 candles (30 H1 και 52 H4).");
+        int n=h1.length(), hn=h4.length();
+        // The final row is the currently forming candle. Never use it for indicators/signals.
+        int last=n-2, prev=n-3, h4Last=hn-2;
+        if(last<28 || prev<0 || h4Last<50 || executableReference<=0)
+            return Signal.waiting("EMA 9/21 · Ανεπαρκή candles ή τιμή εκτέλεσης.");
+        double[] close=new double[last+1], high=new double[last+1], low=new double[last+1];
+        for(int i=0;i<=last;i++){
+            JSONObject b=h1.optJSONObject(i); if(b==null)return Signal.waiting("H1 candle μη έγκυρο.");
+            close[i]=b.optDouble("close",0); high[i]=b.optDouble("high",0); low[i]=b.optDouble("low",0);
+            if(close[i]<=0 || high[i]<=0 || low[i]<=0)return Signal.waiting("H1 OHLC μη έγκυρα.");
         }
-        return result;
+        double[] h4c=new double[h4Last+1];
+        for(int i=0;i<=h4Last;i++){JSONObject b=h4.optJSONObject(i); if(b==null)return Signal.waiting("H4 candle μη έγκυρο."); h4c[i]=b.optDouble("close",0); if(h4c[i]<=0)return Signal.waiting("H4 close μη έγκυρο.");}
+        double ema9Prev=ema(close,prev,9), ema21Prev=ema(close,prev,21);
+        double ema9Now=ema(close,last,9), ema21Now=ema(close,last,21);
+        boolean buyCross=ema9Prev<=ema21Prev && ema9Now>ema21Now;
+        boolean sellCross=ema9Prev>=ema21Prev && ema9Now<ema21Now;
+        if(!buyCross&&!sellCross)return Signal.waiting("H1 EMA 9/21 · Δεν υπάρχει νέο crossover σε κλεισμένο κερί.");
+        String side=buyCross?"BUY":"SELL";
+        double rsi=rsi(close,last,14), atr=atr(high,low,close,last,14);
+        double h4ema=ema(h4c,h4Last,50);
+        boolean h4Bull=h4c[h4Last]>h4ema;
+        if(buyCross && !(rsi>50 && rsi<65))
+            return Signal.waiting(String.format(Locale.US,"BUY μπλοκαρίστηκε · RSI %.1f (απαιτείται >50 και <65).",rsi));
+        if(sellCross && !(rsi<50 && rsi>35))
+            return Signal.waiting(String.format(Locale.US,"SELL μπλοκαρίστηκε · RSI %.1f (απαιτείται <50 και >35).",rsi));
+        if(buyCross&&!h4Bull)return Signal.waiting("BUY μπλοκαρίστηκε · H4 close κάτω από EMA50.");
+        if(sellCross&&h4Bull)return Signal.waiting("SELL μπλοκαρίστηκε · H4 close πάνω από EMA50.");
+        Calendar utc=Calendar.getInstance(TimeZone.getTimeZone("UTC"),Locale.US);
+        int day=utc.get(Calendar.DAY_OF_WEEK), hour=utc.get(Calendar.HOUR_OF_DAY);
+        if(day==Calendar.SATURDAY||day==Calendar.SUNDAY||hour<13||hour>=17)
+            return Signal.waiting("Σήμα "+side+" μπλοκαρίστηκε · επιτρέπεται μόνο Δευτέρα–Παρασκευή 13:00–16:59 UTC.");
+        if(!Double.isFinite(atr)||atr<=0)return Signal.waiting("ATR14 μη έγκυρο.");
+        double sl=side.equals("BUY")?executableReference-2.0*atr:executableReference+2.0*atr;
+        double tp=side.equals("BUY")?executableReference+3.0*atr:executableReference-3.0*atr;
+        String why=String.format(Locale.US,"ORIGINAL EMA 9/21 H1 · RSI14 %.1f · ATR14 %.2f · H4 EMA50 %.2f · Session 13–17 UTC · SL 2×ATR / TP 3×ATR · 1:1.5",rsi,atr,h4ema);
+        return new Signal(side,why,75,executableReference,sl,tp,true);
     }
-
-    private static int score(double trendGap, double volatility, double breakoutDistance) {
-        double denominator = Math.max(0.15, volatility);
-        int value = 62 + (int) Math.min(17, (trendGap / denominator) * 5.0)
-                + (int) Math.min(12, (breakoutDistance / denominator) * 3.0);
-        return Math.min(91, Math.max(62, value));
+    private static double ema(double[] v,int end,int period){
+        double a=2.0/(period+1.0), out=v[0];
+        for(int i=1;i<=end;i++)out=v[i]*a+out*(1-a);
+        return out;
+    }
+    private static double rsi(double[] c,int end,int period){
+        double gain=0,loss=0;
+        for(int i=1;i<=period;i++){double d=c[i]-c[i-1];gain+=Math.max(0,d);loss+=Math.max(0,-d);}
+        gain/=period;loss/=period;
+        for(int i=period+1;i<=end;i++){double d=c[i]-c[i-1];gain=(gain*(period-1)+Math.max(0,d))/period;loss=(loss*(period-1)+Math.max(0,-d))/period;}
+        if(loss==0)return 100;return 100.0-(100.0/(1.0+gain/loss));
+    }
+    private static double atr(double[] h,double[] l,double[] c,int end,int period){
+        double value=0;
+        for(int i=1;i<=period;i++)value+=Math.max(h[i]-l[i],Math.max(Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));
+        value/=period;
+        for(int i=period+1;i<=end;i++){double tr=Math.max(h[i]-l[i],Math.max(Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));value=(value*(period-1)+tr)/period;}
+        return value;
     }
 }

@@ -195,6 +195,7 @@ class Order(BaseModel):
     stop_loss:float=Field(gt=0)
     take_profit:float=Field(gt=0)
     client_order_id:str=Field(min_length=8,max_length=64)
+    order_origin:str="AUTO"
 
 def auth(value:Optional[str]):
     if not BRIDGE_TOKEN: raise HTTPException(503,"DIO_BRIDGE_TOKEN is not configured")
@@ -529,10 +530,20 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
         raise HTTPException(422,"Order exceeds configured 0.25% equity risk cap (conservative XAU contract estimate)")
     pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     open_rows=pdata.get("positions",[])
-    bot=[p for p in open_rows if str(p.get("comment","")).startswith("DioMasteR")]
-    if len(bot)>=MAX_BOT_POSITIONS: raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
+    origin=str(req.order_origin or "AUTO").upper()
+    if origin not in ("AUTO","MANUAL"):
+        raise HTTPException(422,"order_origin must be AUTO or MANUAL")
+    # Manual user orders must not consume the AI bot's own position quota.
+    # Legacy DioMasteR-tagged positions remain counted conservatively.
+    if origin=="AUTO":
+        bot=[p for p in open_rows if str(p.get("comment","")).startswith("DioMasteR")
+             and not str(p.get("comment","")).startswith("DioMasteR MANUAL")]
+        if len(bot)>=MAX_BOT_POSITIONS:
+            raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
-      "stopLoss":sl,"takeProfit":tp,"comment":"DioMasteR "+req.client_order_id[-16:]}
+      "stopLoss":sl,"takeProfit":tp,
+      "comment":"DioMasteR MANUAL "+req.client_order_id[-16:] if origin=="MANUAL"
+                else "DioMasteR AUTO "+req.client_order_id[-16:]}
     result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
       "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,

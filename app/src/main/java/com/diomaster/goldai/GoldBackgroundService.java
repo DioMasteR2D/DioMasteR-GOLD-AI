@@ -58,6 +58,7 @@ public final class GoldBackgroundService extends Service {
 
     private final Runnable pollLoop = new Runnable() {
         @Override public void run() {
+            renewWakeLock();
             if (!polling) {
                 polling = true;
                 new Thread(() -> pollOnce(), "DioMasteR-background-monitor").start();
@@ -205,6 +206,7 @@ public final class GoldBackgroundService extends Service {
 
     @Override public void onDestroy() {
         handler.removeCallbacks(pollLoop);
+        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
         super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent) { return null; }

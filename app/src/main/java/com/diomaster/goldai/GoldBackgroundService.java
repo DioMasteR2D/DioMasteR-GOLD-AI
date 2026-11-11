@@ -25,6 +25,9 @@ public final class GoldBackgroundService extends Service {
     private String base = "";
     private String token = "";
     private String symbol = "XAUUSD";
+    private String timeframe = "M15";
+    private long lastCandleFetchAt = 0L;
+    private long nextPollDelayMs = 20000L;
     private boolean initialized = false;
     private PowerManager.WakeLock wakeLock;
 
@@ -43,6 +46,7 @@ public final class GoldBackgroundService extends Service {
         base = p.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         token = p.getString("token", "");
         symbol = p.getString("symbol", "XAUUSD");
+        timeframe = p.getString("timeframe", "M15");
         handler.post(pollLoop);
     }
 
@@ -51,6 +55,7 @@ public final class GoldBackgroundService extends Service {
             if (intent.hasExtra("base")) base = intent.getStringExtra("base");
             if (intent.hasExtra("token")) token = intent.getStringExtra("token");
             if (intent.hasExtra("symbol")) symbol = intent.getStringExtra("symbol");
+            if (intent.hasExtra("timeframe")) timeframe = intent.getStringExtra("timeframe");
         }
         renewWakeLock();
         return START_STICKY;
@@ -63,7 +68,7 @@ public final class GoldBackgroundService extends Service {
                 polling = true;
                 new Thread(() -> pollOnce(), "DioMasteR-background-monitor").start();
             }
-            handler.postDelayed(this, 20000L);
+            handler.postDelayed(this, nextPollDelayMs);
         }
     };
 
@@ -89,6 +94,22 @@ public final class GoldBackgroundService extends Service {
                     || bid <= 0 || ask < bid || stamp <= 0
                     || System.currentTimeMillis() - stamp > 15000L)
                 throw new IllegalStateException("Δεν υπάρχει φρέσκο LIVE tick TickerAll");
+            // Refresh broker OHLC in the background at a lower cadence than live quotes.
+            // This cache is informational only; it does not run or alter the trading strategy.
+            long now = System.currentTimeMillis();
+            if (now - lastCandleFetchAt >= 60000L) {
+                JSONObject candleResponse = client.candles(symbol, timeframe, 48);
+                JSONArray candles = candleResponse.optJSONArray("candles");
+                if (candles != null && candles.length() >= 2) {
+                    getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                            .putString("symbol", symbol)
+                            .putString("timeframe", timeframe)
+                            .putString("candles", candles.toString())
+                            .putLong("candles_updated_at", now)
+                            .apply();
+                    lastCandleFetchAt = now;
+                }
+            }
             JSONObject positionsResponse = client.positions();
             JSONArray positions = positionsResponse.optJSONArray("positions");
             if (positions == null) positions = new JSONArray();
@@ -136,6 +157,18 @@ public final class GoldBackgroundService extends Service {
                 }
             }
             prefs.edit().putString("open_positions", current.toString()).apply();
+            getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                    .putString("symbol", symbol)
+                    .putString("timeframe", timeframe)
+                    .putLong("bid_bits", Double.doubleToRawLongBits(bid))
+                    .putLong("ask_bits", Double.doubleToRawLongBits(ask))
+                    .putLong("mid_bits", Double.doubleToRawLongBits((bid + ask) / 2.0))
+                    .putLong("quote_at", stamp)
+                    .putLong("updated_at", System.currentTimeMillis())
+                    .putBoolean("connected", true)
+                    .putString("feed", "tickerall_live_websocket_tick")
+                    .apply();
+            nextPollDelayMs = 20000L;
             initialized = true;
             getSharedPreferences("diomaster_background_monitor", MODE_PRIVATE).edit().putBoolean("offline", false).apply();
             updateForeground("Συνδεδεμένο · " + symbol + " · " + positions.length() + " ανοιχτές θέσεις · LIVE TickerAll");
@@ -148,6 +181,12 @@ public final class GoldBackgroundService extends Service {
             boolean wasOffline = p.getBoolean("offline", false);
             if (!wasOffline) notifyEvent("ΣΥΝΔΕΣΗ LOST", msg);
             p.edit().putBoolean("offline", true).apply();
+            getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                    .putBoolean("connected", false)
+                    .putString("last_error", msg)
+                    .putLong("updated_at", System.currentTimeMillis())
+                    .apply();
+            nextPollDelayMs = Math.min(120000L, Math.max(20000L, nextPollDelayMs * 2L));
         } finally {
             polling = false;
         }

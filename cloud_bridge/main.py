@@ -98,7 +98,7 @@ async def live_tick_stream():
     # Reconnect indefinitely with bounded exponential backoff. A clean server
     # close must also retry (the old async-for path could reconnect too fast).
     retry_delay = 3
-    max_retry_delay = 60
+    max_retry_delay = 20
     while True:
         connected = False
         symbol = None
@@ -113,10 +113,10 @@ async def live_tick_stream():
             url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
             async with websockets.connect(
                 url,
-                ping_interval=15,
-                ping_timeout=15,
-                close_timeout=10,
-                open_timeout=20,
+                ping_interval=10,
+                ping_timeout=30,
+                close_timeout=5,
+                open_timeout=15,
                 max_queue=256
             ) as ws:
                 connected = True

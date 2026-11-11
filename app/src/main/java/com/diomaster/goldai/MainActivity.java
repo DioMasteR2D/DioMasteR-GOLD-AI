@@ -128,6 +128,7 @@ public class MainActivity extends Activity {
         mt5BaseUrl = mt5Prefs.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         mt5Token = cleanBridgeToken(mt5Prefs.getString("token", ""));
         mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
+        lastAutoSignalBar = mt5Prefs.getLong("last_auto_signal_bar", 0L);
         selectedTimeframe = mt5Prefs.getString("timeframe", "M15");
         mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
@@ -462,7 +463,7 @@ public class MainActivity extends Activity {
                 double entry="BUY".equals(side)?ask:bid;
                 double sl="BUY".equals(side)?entry-8.0:entry+8.0;
                 double tp="BUY".equals(side)?entry+16.0:entry-16.0;
-                JSONObject result=client.order(mt5Symbol,side,0.01,sl,tp);
+                JSONObject result=client.manualOrder(mt5Symbol,side,0.01,sl,tp);
                 message="VANTAGE DEMO "+side+" · "+mt5Symbol+" · 0.01 lot · order #"+result.optLong("order")+" · "+String.format(Locale.US,"%.2f",result.optDouble("price"));
             } catch(Exception e) { message="Η εντολή δεν εκτελέστηκε: "+e.getMessage(); }
             final String done=message;
@@ -1289,7 +1290,13 @@ public class MainActivity extends Activity {
         JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
         if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
-        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί"); return; }
+        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί ή επιχειρηθεί"); return; }
+
+        // Reserve this candle BEFORE any broker request. If Android recreates the Activity
+        // or a network response is lost, the same M15 signal cannot submit a duplicate order.
+        lastAutoSignalBar = barTime;
+        getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                .putLong("last_auto_signal_bar", barTime).apply();
 
         // Audit-only trace: records the exact local strategy decision before any broker request.
         // This does not alter signal rules, thresholds, sizing, SL/TP, or order flow.

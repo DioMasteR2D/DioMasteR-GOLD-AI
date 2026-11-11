@@ -571,7 +571,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 import pandas as pd
 from unified_engine import get_unified_signal, MIN_UNIFIED_SCORE
 AUTO_TASK=None
-AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None}
+AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None}
 AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
@@ -609,6 +609,14 @@ def strategy_indicators(df):
 
 async def auto_cycle():
     row,detail=await account_detail()
+    equity_now=float((detail.get("account") or {}).get("equity") or 0)
+    utc_day=datetime.now(timezone.utc).date().isoformat()
+    if AUTO_STATE.get("utc_day")!=utc_day:
+        AUTO_STATE["utc_day"]=utc_day
+        AUTO_STATE["trades_today"]=0
+        AUTO_STATE["daily_start_equity"]=equity_now if equity_now>0 else None
+    if AUTO_STATE.get("initial_equity") is None and equity_now>0:
+        AUTO_STATE["initial_equity"]=equity_now
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
     h1,h4,d1,w1=await asyncio.gather(
@@ -661,11 +669,11 @@ async def auto_cycle():
         AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
     equity=float((detail.get("account") or {}).get("equity") or 0)
     if equity<=0: raise RuntimeError("DEMO equity unavailable; entry blocked")
-    start=AUTO_STATE.get("daily_start_equity") or equity
-    AUTO_STATE["daily_start_equity"]=start
-    if equity<=start*(1-AUTO_DAILY_LOSS_LIMIT):
+    daily_start=AUTO_STATE.get("daily_start_equity") or equity
+    initial=AUTO_STATE.get("initial_equity") or equity
+    if equity<=daily_start*(1-AUTO_DAILY_LOSS_LIMIT):
         AUTO_STATE["last_action"]="DAILY_LOSS_LIMIT"; return
-    if equity<=start*(1-AUTO_MAX_DRAWDOWN):
+    if equity<=initial*(1-AUTO_MAX_DRAWDOWN):
         AUTO_STATE["last_action"]="MAX_DRAWDOWN_LIMIT"; return
     q=LIVE_TICKS.get(symbol)
     if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:

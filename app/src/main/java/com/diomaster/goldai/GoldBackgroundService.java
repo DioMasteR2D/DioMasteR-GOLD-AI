@@ -98,16 +98,25 @@ public final class GoldBackgroundService extends Service {
             // This cache is informational only; it does not run or alter the trading strategy.
             long now = System.currentTimeMillis();
             if (now - lastCandleFetchAt >= 60000L) {
-                JSONObject candleResponse = client.candles(symbol, timeframe, 48);
-                JSONArray candles = candleResponse.optJSONArray("candles");
-                if (candles != null && candles.length() >= 2) {
+                try {
+                    JSONObject candleResponse = client.candles(symbol, timeframe, 48);
+                    JSONArray candles = candleResponse.optJSONArray("candles");
+                    if (candles != null && candles.length() >= 2) {
+                        getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                                .putString("symbol", symbol)
+                                .putString("timeframe", timeframe)
+                                .putString("candles", candles.toString())
+                                .putLong("candles_updated_at", now)
+                                .apply();
+                        lastCandleFetchAt = now;
+                    }
+                } catch (Exception candleError) {
+                    // Candle/chart refresh is optional for the monitor. A candle endpoint hiccup
+                    // must not mark a healthy MT5 quote/position connection as offline.
                     getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
-                            .putString("symbol", symbol)
-                            .putString("timeframe", timeframe)
-                            .putString("candles", candles.toString())
-                            .putLong("candles_updated_at", now)
+                            .putString("candles_error", candleError.getMessage() == null
+                                    ? "Candle refresh unavailable" : candleError.getMessage())
                             .apply();
-                    lastCandleFetchAt = now;
                 }
             }
             JSONObject positionsResponse = client.positions();

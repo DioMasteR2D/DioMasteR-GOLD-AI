@@ -545,6 +545,64 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void closeAllManualMt5Positions() {
+        new Thread(() -> {
+            try {
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject response = client.positions();
+                JSONArray rows = response.optJSONArray("positions");
+                java.util.ArrayList<JSONObject> manual = new java.util.ArrayList<>();
+                if (rows != null) {
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject p = rows.optJSONObject(i);
+                        if (p != null && p.optString("comment", "").startsWith("DioMasteR MANUAL")) manual.add(p);
+                    }
+                }
+                runOnUiThread(() -> new AlertDialog.Builder(this)
+                    .setTitle("Κλείσιμο χειροκίνητων θέσεων")
+                    .setMessage("Θα κλείσουν μόνο οι " + manual.size() + " χειροκίνητες θέσεις DioMasteR στο Vantage MT5 DEMO. Οι AUTO θέσεις δεν θα επηρεαστούν.")
+                    .setNegativeButton("Ακύρωση", null)
+                    .setPositiveButton("Κλείσιμο", (d, w) -> new Thread(() -> {
+                        int closedCount = 0;
+                        String error = null;
+                        for (JSONObject p : manual) {
+                            try {
+                                JSONObject result = client.close(p.optLong("ticket"));
+                                if (result.optBoolean("ok")) closedCount++;
+                                else error = "Ο broker δεν επιβεβαίωσε το κλείσιμο #" + p.optLong("ticket");
+                            } catch (Exception ex) {
+                                error = ex.getMessage();
+                                break;
+                            }
+                        }
+                        final int done = closedCount;
+                        final String problem = error;
+                        try {
+                            JSONObject verify = client.positions();
+                            JSONArray remain = verify.optJSONArray("positions");
+                            int stillManual = 0;
+                            if (remain != null) for (int i = 0; i < remain.length(); i++) {
+                                JSONObject p = remain.optJSONObject(i);
+                                if (p != null && p.optString("comment", "").startsWith("DioMasteR MANUAL")) stillManual++;
+                            }
+                            final int remaining = stillManual;
+                            runOnUiThread(() -> {
+                                loadMt5AccountData();
+                                String msg = "Έκλεισαν " + done + " χειροκίνητες θέσεις. Παραμένουν " + remaining + ".";
+                                if (problem != null) msg += " Σφάλμα: " + problem;
+                                Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+                            });
+                        } catch (Exception ex) {
+                            runOnUiThread(() -> Toast.makeText(this, "Έκλεισαν " + done + " θέσεις, αλλά δεν επιβεβαιώθηκε η ανανέωση: " + ex.getMessage(), Toast.LENGTH_LONG).show());
+                        }
+                    }).start())
+                    .show());
+            } catch (Exception ex) {
+                runOnUiThread(() -> Toast.makeText(this, "Δεν φορτώθηκαν οι χειροκίνητες θέσεις: " + ex.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
+    }
+
     private void confirmMt5Close(JSONObject position) {
         long ticket=position.optLong("ticket");
         new AlertDialog.Builder(this).setTitle("Κλείσιμο θέσης #"+ticket)
@@ -1022,6 +1080,8 @@ public class MainActivity extends Activity {
                 addRow(positions,"#"+p.optString("ticket")+"  "+p.optString("symbol")+"  "+side+"  "+p.optDouble("volume")+" lot",
                         PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
             }
+            Button closeManual=actionButton("ΚΛΕΙΣΙΜΟ ΟΛΩΝ ΤΩΝ ΧΕΙΡΟΚΙΝΗΤΩΝ MT5",0xFF8A3434,this::closeAllManualMt5Positions);
+            positions.addView(closeManual);
             Button reloadPositions=actionButton("↻ ΑΝΑΝΕΩΣΗ MT5 ΘΕΣΕΩΝ",0xFF292C34,this::loadMt5AccountData);
             positions.addView(reloadPositions);
         }

@@ -546,7 +546,7 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
             raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
       "stopLoss":sl,"takeProfit":tp,
-      "comment":"DioMasteR MANUAL "+req.client_order_id[-16:] if origin=="MANUAL"
+      "comment":"DioMasteR MANUAL "+req.client_order_id[-14:] if origin=="MANUAL"
                 else "DioMasteR AUTO "+req.client_order_id[-16:]}
     result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,

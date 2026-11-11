@@ -263,6 +263,13 @@ public class MainActivity extends Activity {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
                     // Load the selected execution timeframe first, then obtain the freshest broker tick.
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
+                    // Independent strategy feeds: fixed H1 entry timeframe and H4 trend filter.
+                    JSONObject strategyH1Data = client.candles(mt5Symbol, "H1", 400);
+                    JSONObject strategyH4Data = client.candles(mt5Symbol, "H4", 1200);
+                    JSONArray strategyH1 = strategyH1Data.optJSONArray("candles");
+                    JSONArray strategyH4 = strategyH4Data.optJSONArray("candles");
+                    if (strategyH1 == null || strategyH4 == null)
+                        throw new IllegalStateException("Λείπουν τα H1/H4 candles της στρατηγικής.");
                     JSONArray rows = candleData.optJSONArray("candles");
                     if (rows == null || rows.length() < 2)
                         throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
@@ -277,7 +284,7 @@ public class MainActivity extends Activity {
                     if (bid <= 0 || ask < bid || stamp <= 0 || quoteAge < -5000L || quoteAge > 15000L)
                         throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
                     double latest = (bid + ask) / 2.0;
-                    final JSONArray bars = rows;
+                    final JSONArray bars = rows;\n                    final JSONArray h1Bars = strategyH1;\n                    final JSONArray h4Bars = strategyH4;
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
@@ -301,10 +308,10 @@ public class MainActivity extends Activity {
                         feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + effectiveTimeframe +
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
-                        aiSignal = GoldAiAgent.analyze(chartPrices, latest);
+                        aiSignal = GoldAiAgent.analyze(h1Bars, h4Bars, latest);
                         engine.onQuote(latest);
-                        // Trading analysis uses ONLY the currently selected timeframe, exactly as before.
-                        if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
+                        // AUTO strategy always uses the original H1 setup; selected chart timeframe is display-only.
+                        if (aiEngineStarted) evaluateAutoSignal(h1Bars, h4Bars, receivedAt);
                         render();
                     });
                     // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
@@ -825,8 +832,8 @@ public class MainActivity extends Activity {
         market.addView(periods);
         LinearLayout chartLegend=new LinearLayout(this);
         chartLegend.setOrientation(LinearLayout.HORIZONTAL);
-        chartLegend.addView(text("● EMA 6",10,0xFF28B8FF,true));
-        TextView ema21Legend=text("● EMA 15",10,GOLD,true);
+        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
+        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
         ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
         market.addView(chartLegend);
         addSpace(5);
@@ -846,7 +853,7 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Στρατηγική AUTO: H1 EMA 9 / 21 · H4 EMA 50." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);
@@ -1331,13 +1338,13 @@ public class MainActivity extends Activity {
     }
 
     // Diagnostics explain every local gate; GoldAiAgent strategy and thresholds remain unchanged.
-    private void evaluateAutoSignal(JSONArray bars, long quoteTimestamp) {
+    private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
         if (!aiEngineStarted) return;
         if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
         if (!brokerChartActive) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · δεν έχουν φορτωθεί broker OHLC candles"); return; }
         if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 15 δευτ."); return; }
         if (!mt5ExecutionEnabled) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · ο server δεν επιτρέπει DEMO εντολές"); return; }
-        if (bars == null || bars.length() < 2) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · ανεπαρκή OHLC candles · timeframe=" + selectedTimeframe); return; }
+        if (bars == null || bars.length() < 30 || h4Bars == null || h4Bars.length() < 52) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · απαιτούνται τουλάχιστον 30 H1 και 52 H4 candles."); return; }
         if (!aiSignal.ready) { setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.reason); return; }
         if (!("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))) {
             setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.side + " · " + aiSignal.reason);
@@ -1347,7 +1354,7 @@ public class MainActivity extends Activity {
             setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · το σήμα δεν έχει έγκυρα SL/TP");
             return;
         }
-        JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
+        JSONObject latestBar = bars.optJSONObject(bars.length() - 2);
         if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
         if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
         if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί ή επιχειρηθεί"); return; }
@@ -1361,7 +1368,7 @@ public class MainActivity extends Activity {
         // Audit-only trace: records the exact local strategy decision before any broker request.
         // This does not alter signal rules, thresholds, sizing, SL/TP, or order flow.
         logAgentActivity("SIGNAL TRACE", "VALID_SIGNAL",
-                "timeframe=" + selectedTimeframe
+                "timeframe=H1
                         + " · candleTime=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(barTime))
                         + " · side=" + aiSignal.side
                         + " · confidence=" + aiSignal.confidence
@@ -1372,7 +1379,7 @@ public class MainActivity extends Activity {
                         + " · TP=" + String.format(Locale.US, "%.5f", aiSignal.takeProfit)
                         + " · " + aiSignal.reason);
         final long signalCreatedAt = System.currentTimeMillis();
-        final String signalTimeframe = selectedTimeframe;
+        final String signalTimeframe = "H1";
         final int signalConfidence = aiSignal.confidence;
         final double signalEntry = aiSignal.entry;
         autoOrderInFlight = true;
@@ -1506,7 +1513,7 @@ public class MainActivity extends Activity {
                 autoExecutionMessage = message;
                 long totalMs = completedAt - signalCreatedAt;
                 logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
-                        "timeframe=" + signalTimeframe + " · side=" + side + " · confidence=" + signalConfidence
+                        "timeframe=H1 + " · side=" + side + " · confidence=" + signalConfidence
                                 + " · signalToResult=" + totalMs + "ms"
                                 + " · status=" + statusDuration + "ms · positions=" + positionsDuration + "ms"
                                 + " · reversal=" + reversalDuration + "ms · quote=" + quoteDuration + "ms · order=" + orderDuration + "ms"

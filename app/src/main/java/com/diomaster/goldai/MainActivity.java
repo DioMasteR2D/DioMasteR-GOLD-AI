@@ -1386,19 +1386,21 @@ public class MainActivity extends Activity {
                     }
                 }
 
-                // Allow up to the bridge's configured ten bot positions, one new order per candle.
+                // Keep at most two AUTO positions open. Manual positions never consume this quota.
                 JSONObject refreshed = client.positions();
                 JSONArray current = refreshed.optJSONArray("positions");
                 int botOpen = 0;
                 if (current != null) {
                     for (int i = 0; i < current.length(); i++) {
                         JSONObject p = current.optJSONObject(i);
-                        if (p != null && p.optString("comment", "").startsWith("DioMasteR")
+                        String comment = p == null ? "" : p.optString("comment", "");
+                        if (p != null && comment.startsWith("DioMasteR")
+                                && !comment.startsWith("DioMasteR MANUAL")
                                 && mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) botOpen++;
                     }
                 }
-                if (botOpen >= 10) {
-                    resultMessage = "ΑΝΑΜΟΝΗ · συμπληρώθηκαν οι 10 ανοιχτές θέσεις DioMasteR στο " + mt5Symbol;
+                if (botOpen >= 2) {
+                    resultMessage = "ΑΝΑΜΟΝΗ · υπάρχουν ήδη 2 αυτόματες θέσεις DioMasteR στο " + mt5Symbol;
                 } else {
                     stageAt = System.currentTimeMillis();
                     JSONObject q = client.quote(mt5Symbol);

@@ -24,6 +24,8 @@ MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
 MAX_BOT_POSITIONS=2  # Exactly two concurrent AUTO positions; MANUAL orders are excluded.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
+from assistant_mcp import router as assistant_mcp_router
+app.include_router(assistant_mcp_router)
 
 # Live bid/ask cache populated by TickerAll's realtime WebSocket.
 import asyncio, json, time

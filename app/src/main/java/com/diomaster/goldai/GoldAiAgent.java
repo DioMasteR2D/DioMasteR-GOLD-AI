@@ -65,7 +65,7 @@ public final class GoldAiAgent {
         int day=utc.get(Calendar.DAY_OF_WEEK), hour=utc.get(Calendar.HOUR_OF_DAY);
         if(day==Calendar.SATURDAY||day==Calendar.SUNDAY||hour<13||hour>=17)
             return Signal.waiting("Σήμα "+side+" μπλοκαρίστηκε · επιτρέπεται μόνο Δευτέρα–Παρασκευή 13:00–16:59 UTC.");
-        if(!Double.isFinite(atr)||atr<=0)return Signal.waiting("ATR14 μη έγκυρο.");
+        if((Double.isNaN(atr)||Double.isInfinite(atr))||atr<=0)return Signal.waiting("ATR14 μη έγκυρο.");
         double sl=side.equals("BUY")?executableReference-2.0*atr:executableReference+2.0*atr;
         double tp=side.equals("BUY")?executableReference+3.0*atr:executableReference-3.0*atr;
         String why=String.format(Locale.US,"ORIGINAL EMA 9/21 H1 · RSI14 %.1f · ATR14 %.2f · H4 EMA50 %.2f · Session 13–17 UTC · SL 2×ATR / TP 3×ATR · 1:1.5",rsi,atr,h4ema);

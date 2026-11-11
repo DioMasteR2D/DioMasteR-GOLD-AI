@@ -26,6 +26,8 @@ MAX_BOT_POSITIONS=2  # Exactly two concurrent AUTO positions; MANUAL orders are 
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
+from assistant_api import router as assistant_api_router
+app.include_router(assistant_api_router)
 
 # Live bid/ask cache populated by TickerAll's realtime WebSocket.
 import asyncio, json, time

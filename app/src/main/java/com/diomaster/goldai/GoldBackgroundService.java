@@ -66,7 +66,13 @@ public final class GoldBackgroundService extends Service {
         }
     };
 
-    private void renewWakeLock() {\n        try { if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(10 * 60 * 1000L); }\n        catch (Exception ignored) {}\n    }\n\n    private void pollOnce() {
+    private void renewWakeLock() {
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(10 * 60 * 1000L);
+        } catch (Exception ignored) {}
+    }
+
+    private void pollOnce() {
         try {
             if (base == null || base.isEmpty() || token == null || token.trim().isEmpty())
                 throw new IllegalStateException("Δεν έχει αποθηκευτεί σύνδεση MT5 DEMO");

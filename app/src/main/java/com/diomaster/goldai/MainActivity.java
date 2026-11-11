@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
+    private long lastMtfDiagnosticsAt = 0L;
     private boolean activityResumed = false;
     private int fetchSequence = 0;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
@@ -126,6 +127,7 @@ public class MainActivity extends Activity {
         mt5BaseUrl = mt5Prefs.getString("base", "https://diomaster-gold-ai-metaapi-demo.onrender.com");
         mt5Token = cleanBridgeToken(mt5Prefs.getString("token", ""));
         mt5Symbol = mt5Prefs.getString("symbol", "XAUUSD");
+        selectedTimeframe = mt5Prefs.getString("timeframe", "M15");
         mt5ExecutionEnabled = mt5Prefs.getBoolean("execution_enabled", false);
         mt5Status = mt5Prefs.getString("status", "ΜΗ ΣΥΝΔΕΔΕΜΕΝΗ");
         mt5Login = mt5Prefs.getString("login", "");
@@ -148,6 +150,7 @@ public class MainActivity extends Activity {
         monitor.putExtra("base", mt5BaseUrl);
         monitor.putExtra("token", mt5Token);
         monitor.putExtra("symbol", mt5Symbol);
+        monitor.putExtra("timeframe", selectedTimeframe);
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(monitor);
             else startService(monitor);
@@ -241,7 +244,9 @@ public class MainActivity extends Activity {
 
     private void fetchPrice(boolean force) {
         if (!activityResumed && !force) return;
-        if (fetching && !force) return;
+        // Keep one market request in flight. Forced UI refreshes must not spawn overlapping
+        // broker requests that can race and leave the feed appearing frozen.
+        if (fetching) return;
         fetching = true;
         final int requestId = ++fetchSequence;
         final String requestTimeframe = selectedTimeframe;
@@ -272,8 +277,9 @@ public class MainActivity extends Activity {
                     final long receivedAt = stamp;
                     final long fetchElapsed = System.currentTimeMillis() - (stamp - Math.max(0L, quoteAge));
                     runOnUiThread(() -> {
-                        if (requestId != fetchSequence || !activityResumed) return;
+                        if (requestId != fetchSequence) return;
                         fetching = false;
+                        if (!activityResumed) return;
                         price = latest; quoteAt = receivedAt;
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
@@ -295,8 +301,9 @@ public class MainActivity extends Activity {
                     runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
                 } catch (Exception e) {
                     runOnUiThread(() -> {
-                        if (requestId != fetchSequence || !activityResumed) return;
-                        fetching=false; brokerChartActive=false;
+                        if (requestId != fetchSequence) return;
+                        fetching=false;
+                        if (!activityResumed) return; brokerChartActive=false;
                         price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
@@ -310,8 +317,9 @@ public class MainActivity extends Activity {
         new Thread(() -> priceClient.fetch(new GoldPriceClient.Callback() {
             @Override public void onPrice(double value, long receivedAt) {
                 runOnUiThread(() -> {
-                    if (requestId != fetchSequence || !activityResumed) return;
-                    fetching = false; price = value; quoteAt = receivedAt; brokerChartActive=false;
+                    if (requestId != fetchSequence) return;
+                    fetching = false;
+                    if (!activityResumed) return; price = value; quoteAt = receivedAt; brokerChartActive=false;
                     brokerCandles = new JSONArray();
                     feedMessage = "Ενδεικτική spot τιμή · όχι broker tick · " +
                             new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
@@ -321,14 +329,19 @@ public class MainActivity extends Activity {
             }
             @Override public void onError(String message) {
                 runOnUiThread(() -> {
-                    if (requestId != fetchSequence || !activityResumed) return;
-                    fetching=false; feedMessage="Αδυναμία λήψης τιμής: "+message; render();
+                    if (requestId != fetchSequence) return;
+                    fetching=false;
+                    if (!activityResumed) return; feedMessage="Αδυναμία λήψης τιμής: "+message; render();
                 });
             }
         })).start();
     }
 
     private void runMultiTimeframeDiagnostics(int requestId, String requestTimeframe, JSONObject selectedData) {
+        // MTF is diagnostic-only, so avoid repeating its six broker requests on every 30s refresh.
+        long now = System.currentTimeMillis();
+        if (now - lastMtfDiagnosticsAt < 120000L) return;
+        lastMtfDiagnosticsAt = now;
         new Thread(() -> {
             try {
                 final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
@@ -703,6 +716,9 @@ public class MainActivity extends Activity {
             chip.setOnClickListener(v->{
                 if (!tf.equals(selectedTimeframe)) {
                     selectedTimeframe=tf;
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                            .putString("timeframe", tf).apply();
+                    startBackgroundMonitor();
                     // Update every timeframe chip immediately; do not wait for the broker network response.
                     for (int i=0; i<periods.getChildCount(); i++) {
                         View child=periods.getChildAt(i);

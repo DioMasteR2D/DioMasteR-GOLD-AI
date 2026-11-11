@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private double price = 0.0;
     private long quoteAt = 0L;
     private boolean fetching = false;
+    private boolean pendingRefresh = false;
     private long lastMtfDiagnosticsAt = 0L;
     private boolean activityResumed = false;
     private int fetchSequence = 0;
@@ -246,8 +247,12 @@ public class MainActivity extends Activity {
         if (!activityResumed && !force) return;
         // Keep one market request in flight. Forced UI refreshes must not spawn overlapping
         // broker requests that can race and leave the feed appearing frozen.
-        if (fetching) return;
+        if (fetching) {
+            if (force) pendingRefresh = true;
+            return;
+        }
         fetching = true;
+        pendingRefresh = false;
         final int requestId = ++fetchSequence;
         final String requestTimeframe = selectedTimeframe;
         if (mt5BaseUrl != null && !mt5BaseUrl.isEmpty() && mt5Token != null && !mt5Token.isEmpty()
@@ -280,6 +285,11 @@ public class MainActivity extends Activity {
                         if (requestId != fetchSequence) return;
                         fetching = false;
                         if (!activityResumed) return;
+                        if (pendingRefresh || !requestTimeframe.equals(selectedTimeframe)) {
+                            pendingRefresh = false;
+                            handler.post(() -> fetchPrice(true));
+                            return;
+                        }
                         price = latest; quoteAt = receivedAt;
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
@@ -298,12 +308,19 @@ public class MainActivity extends Activity {
                     });
                     // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
                     // It cannot delay the selected-timeframe analysis or feed the order engine.
-                    runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
+                    if (requestTimeframe.equals(selectedTimeframe))
+                        runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
                 } catch (Exception e) {
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence) return;
                         fetching=false;
-                        if (!activityResumed) return; brokerChartActive=false;
+                        if (!activityResumed) return;
+                        if (pendingRefresh || !requestTimeframe.equals(selectedTimeframe)) {
+                            pendingRefresh = false;
+                            handler.post(() -> fetchPrice(true));
+                            return;
+                        }
+                        brokerChartActive=false;
                         price=0.0; quoteAt=0L; brokerCandles=new JSONArray(); chartPrices.clear();
                         aiSignal=GoldAiAgent.Signal.waiting("NO LIVE BROKER TICK · "+(e.getMessage()==null?"unknown":e.getMessage()));
                         feedMessage="MT5 DEMO · NO LIVE TICK: "+(e.getMessage()==null?"unknown":e.getMessage());
@@ -319,7 +336,13 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (requestId != fetchSequence) return;
                     fetching = false;
-                    if (!activityResumed) return; price = value; quoteAt = receivedAt; brokerChartActive=false;
+                    if (!activityResumed) return;
+                    if (pendingRefresh) {
+                        pendingRefresh = false;
+                        handler.post(() -> fetchPrice(true));
+                        return;
+                    }
+                    price = value; quoteAt = receivedAt; brokerChartActive=false;
                     brokerCandles = new JSONArray();
                     feedMessage = "Ενδεικτική spot τιμή · όχι broker tick · " +
                             new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
@@ -331,7 +354,13 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (requestId != fetchSequence) return;
                     fetching=false;
-                    if (!activityResumed) return; feedMessage="Αδυναμία λήψης τιμής: "+message; render();
+                    if (!activityResumed) return;
+                    if (pendingRefresh) {
+                        pendingRefresh = false;
+                        handler.post(() -> fetchPrice(true));
+                        return;
+                    }
+                    feedMessage="Αδυναμία λήψης τιμής: "+message; render();
                 });
             }
         })).start();

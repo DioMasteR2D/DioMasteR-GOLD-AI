@@ -227,16 +227,16 @@ public class MainActivity extends Activity {
 
 
     private void startAutoTradingOnLaunch() {
+        // Never auto-start trading merely because the APK was opened.
+        // Cloud AUTO must be explicitly started by the user.
         new Thread(() -> {
             String result;
             try {
-                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                JSONObject status = client.status();
-                if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || !status.optBoolean("execution_enabled"))
-                    throw new IllegalStateException("Το MT5 δεν είναι συνδεδεμένο σε ενεργό DEMO execution.");
-                JSONObject started = client.autoStart();
-                result = started.optBoolean("running") ? "DioMasteR AI AUTO ξεκίνησε στο Vantage DEMO." : "Η αυτόματη λειτουργία δεν ξεκίνησε.";
-            } catch(Exception e) { result = "AI AUTO σε αναμονή: " + e.getMessage(); }
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
+                result = status.optBoolean("running")
+                        ? "Cloud AUTO DEMO συνεχίζει ήδη στον server."
+                        : "Cloud AUTO παραμένει σταματημένο μέχρι να το ξεκινήσεις.";
+            } catch(Exception e) { result = "Cloud AUTO: " + e.getMessage(); }
             final String message = result;
             runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
         }).start();
@@ -1287,22 +1287,23 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Πρώτα σύνδεσε τον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
             return;
         }
-        autoExecutionMessage = "Έλεγχος Vantage MT5 DEMO και δικαιώματος εντολών…";
+        autoExecutionMessage = "Έλεγχος DEMO και εκκίνησης Cloud AUTO…";
         render();
         new Thread(() -> {
             String failure = null;
             try {
-                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).status();
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject status = client.status();
                 if (!"DEMO".equals(status.optString("account_mode"))
                         || !status.optBoolean("terminal_connected")
-                        || !status.optBoolean("execution_enabled")) {
-                    throw new IllegalStateException("Απαιτείται συνδεδεμένος Vantage MT5 DEMO με ενεργό server-side DEMO execution.");
-                }
+                        || !status.optBoolean("execution_enabled"))
+                    throw new IllegalStateException("Απαιτείται επαληθευμένος Vantage MT5 DEMO και ενεργό server-side DEMO execution.");
                 String server = status.optString("server", "");
-                if (!server.toLowerCase(Locale.US).contains("vantage") || !server.toLowerCase(Locale.US).contains("demo")) {
-                    throw new IllegalStateException("Ο broker server δεν επιβεβαιώθηκε ως Vantage DEMO.");
-                }
-            } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία ελέγχου MT5" : e.getMessage(); }
+                if (!server.toLowerCase(Locale.US).contains("vantage") || !server.toLowerCase(Locale.US).contains("demo"))
+                    throw new IllegalStateException("Ο broker δεν επιβεβαιώθηκε ως Vantage DEMO.");
+                JSONObject started = client.autoStart();
+                if (!started.optBoolean("running")) throw new IllegalStateException("Ο cloud AUTO δεν ξεκίνησε.");
+            } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία εκκίνησης Cloud AUTO" : e.getMessage(); }
             final String error = failure;
             runOnUiThread(() -> {
                 if (error != null) {
@@ -1311,9 +1312,8 @@ public class MainActivity extends Activity {
                     Toast.makeText(this, autoExecutionMessage, Toast.LENGTH_LONG).show();
                 } else {
                     aiEngineStarted = true;
-                    autoExecutionMessage = "ΕΝΕΡΓΟ · εντολές μόνο στον Vantage MT5 DEMO";
-                    Toast.makeText(this, "AUTO ενεργό στον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
-                    fetchPrice();
+                    autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · Unified 8/10 · DEMO";
+                    Toast.makeText(this, "Cloud AUTO ξεκίνησε στον server DEMO.", Toast.LENGTH_LONG).show();
                 }
                 render();
             });
@@ -1322,9 +1322,17 @@ public class MainActivity extends Activity {
 
     private void stopAiEngine() {
         aiEngineStarted = false;
-        autoExecutionMessage = "STOP · δεν θα σταλούν νέες εντολές· οι ανοιχτές θέσεις μένουν στο MT5 με τα SL/TP τους";
-        Toast.makeText(this, "Auto σταμάτησε. Δεν θα ανοίξουν νέες θέσεις.", Toast.LENGTH_LONG).show();
+        autoExecutionMessage = "Αποστολή εντολής STOP στο Cloud AUTO…";
         render();
+        new Thread(() -> {
+            String result;
+            try {
+                new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStop();
+                result = "STOP · Cloud AUTO σταμάτησε. Οι ανοιχτές θέσεις διατηρούν τα SL/TP.";
+            } catch (Exception e) { result = "STOP ERROR · " + e.getMessage(); }
+            final String message = result;
+            runOnUiThread(() -> { autoExecutionMessage = message; Toast.makeText(this,message,Toast.LENGTH_LONG).show(); render(); });
+        }).start();
     }
 
     private void setAutoDiagnostic(String message) {
@@ -1342,6 +1350,9 @@ public class MainActivity extends Activity {
     // Diagnostics explain every local gate; Original EMA 9/21 H1 strategy diagnostics.
     private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
         if (!aiEngineStarted) return;
+        setAutoDiagnostic("CLOUD AUTO · οι αποφάσεις εκτελούνται στον server με Unified Score 8/10.");
+        return;
+        /* legacy local execution disabled; only the cloud strategy may submit AUTO orders.
         if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
         if (!brokerChartActive) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · δεν έχουν φορτωθεί broker OHLC candles"); return; }
         if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 15 δευτ."); return; }
@@ -1532,6 +1543,8 @@ public class MainActivity extends Activity {
             });
         }).start();
     }
+        */
+
 
     private String cleanBridgeToken(String value) {
         if (value == null) return "";

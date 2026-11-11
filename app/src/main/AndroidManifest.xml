@@ -8,8 +8,8 @@
     <application
         android:allowBackup="false"
         android:label="DioMasteR2D Gold AI"
-        android:icon="@drawable/ic_gold_launcher"
-        android:roundIcon="@drawable/ic_gold_launcher"
+        android:icon="@drawable/ic_gold_launcher_small"
+        android:roundIcon="@drawable/ic_gold_launcher_small"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
         <activity

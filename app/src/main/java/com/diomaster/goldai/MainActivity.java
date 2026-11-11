@@ -1229,11 +1229,7 @@ public class MainActivity extends Activity {
         bottomNav.setGravity(Gravity.CENTER);
         bottomNav.setPadding(dp(5),dp(5),dp(5),dp(5));
         bottomNav.setBackground(goldShell(0xFF080707,0xFFFFC83D));
-        String[] bottomLabels={"⌂
-Αρχική","▤
-Θέσεις","◷
-Ιστορικό","⚙
-Ρυθμίσεις"};
+        String[] bottomLabels={"⌂\\nΑρχική","▤\\nΘέσεις","◷\\nΙστορικό","⚙\\nΡυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
             boolean active=index==selectedBottomTab;
@@ -1541,8 +1537,7 @@ public class MainActivity extends Activity {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\r
-\\t ]+", "");
+        return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
     }
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);

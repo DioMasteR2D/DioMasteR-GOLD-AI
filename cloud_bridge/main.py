@@ -22,7 +22,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=2  # Exactly two concurrent AUTO positions; MANUAL orders are excluded.
+MAX_BOT_POSITIONS=1  # One AUTO position; MANUAL orders are excluded.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
@@ -567,20 +567,161 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
     return {"ok":bool(result.get("closed")),"account_mode":"DEMO","ticket":ticket,
       "deal":result.get("dealTicket"),"result":result}
 
+# Cloud strategy loop: all decisions are made on completed broker candles.
+import pandas as pd
+from unified_engine import get_unified_signal, MIN_UNIFIED_SCORE
+AUTO_TASK=None
+AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None}
+AUTO_LOCK=asyncio.Lock()
+AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
+AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
+AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
+
+async def strategy_frame(account_id,symbol,timeframe,hours):
+    payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+    rows=payload.get("candles",[]) if isinstance(payload,dict) else []
+    if not isinstance(rows,list): raise RuntimeError(f"{timeframe} candle payload invalid")
+    clean=[]
+    for x in rows:
+        try:
+            clean.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),"high":float(x["high"]),
+              "low":float(x["low"]),"close":float(x["close"]),"tick_volume":float(x.get("tickVolume") or 0)})
+        except (KeyError,TypeError,ValueError): continue
+    clean.sort(key=lambda x:x["timestamp"])
+    # TickerAll history includes the forming candle at the end. Exclude it.
+    if clean: clean=clean[:-1]
+    if len(clean)<2: raise RuntimeError(f"Insufficient completed {timeframe} candles")
+    return pd.DataFrame(clean)
+
+def strategy_indicators(df):
+    close=df["close"]
+    delta=close.diff()
+    gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    rs=gain/loss.replace(0,float("nan"))
+    rsi=(100-(100/(1+rs))).fillna(50)
+    tr=pd.concat([(df["high"]-df["low"]), (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()],axis=1).max(axis=1)
+    atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    ema9=close.ewm(span=9,adjust=False).mean()
+    ema21=close.ewm(span=21,adjust=False).mean()
+    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
+      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2])}
+
+async def auto_cycle():
+    row,detail=await account_detail()
+    symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
+    symbol=choose_symbol(symbols)
+    h1,h4,d1,w1=await asyncio.gather(
+      strategy_frame(row["id"],symbol,"H1",9000),
+      strategy_frame(row["id"],symbol,"H4",30000),
+      strategy_frame(row["id"],symbol,"D1",180000),
+      strategy_frame(row["id"],symbol,"W1",700000))
+    if len(h1)<300 or len(h4)<50 or len(d1)<20 or len(w1)<10:
+        raise RuntimeError("Not enough closed H1/H4/D1/W1 candles for the full strategy")
+    ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
+    ema_buy=ind["ema9"]>ind["ema21"] and ind["ema9_prev"]<=ind["ema21_prev"]
+    ema_sell=ind["ema9"]<ind["ema21"] and ind["ema9_prev"]>=ind["ema21_prev"]
+    if not (ema_buy or ema_sell):
+        direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
+        rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
+        mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
+        sess_ok=13<=datetime.now(timezone.utc).hour<17
+        signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
+        signal.direction="HOLD"
+    else:
+        direction="BUY" if ema_buy else "SELL"
+        rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
+        mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
+        sess_ok=13<=datetime.now(timezone.utc).hour<17
+        signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
+    stamp=float(h1["timestamp"].iloc[-1])
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
+      "last_signal":{"direction":signal.direction,"score":signal.total_score,"phase1":signal.phase1_score,
+       "smc":signal.phase2_score,"fundamental":signal.phase4_score,"news_block":signal.news_block,
+       "details":signal.details},"last_error":None})
+    positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    all_positions=positions_data.get("positions",[])
+    bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
+    # Smart exits only touch bot-owned positions; manual trades are never managed.
+    for p in bot:
+        side=str(p.get("side","")).upper(); profit=float(p.get("profit") or 0)
+        opposite=(side=="BUY" and ind["ema9"]<ind["ema21"]) or (side=="SELL" and ind["ema9"]>ind["ema21"])
+        reversal=(side=="BUY" and ind["rsi"]>=70) or (side=="SELL" and ind["rsi"]<=30)
+        if profit>0 and (opposite or reversal):
+            ticket=int(p.get("ticket") or 0)
+            await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+            AUTO_STATE["last_action"]=f"SMART_EXIT_{side}_{ticket}"
+    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
+        if not bot: AUTO_STATE["last_action"]="HOLD"
+        return
+    if bot: AUTO_STATE["last_action"]="POSITION_ALREADY_OPEN"; return
+    if not EXECUTION_ENABLED:
+        AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
+    if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
+        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
+    equity=float((detail.get("account") or {}).get("equity") or 0)
+    if equity<=0: raise RuntimeError("DEMO equity unavailable; entry blocked")
+    start=AUTO_STATE.get("daily_start_equity") or equity
+    AUTO_STATE["daily_start_equity"]=start
+    if equity<=start*(1-AUTO_DAILY_LOSS_LIMIT):
+        AUTO_STATE["last_action"]="DAILY_LOSS_LIMIT"; return
+    if equity<=start*(1-AUTO_MAX_DRAWDOWN):
+        AUTO_STATE["last_action"]="MAX_DRAWDOWN_LIMIT"; return
+    q=LIVE_TICKS.get(symbol)
+    if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
+        AUTO_STATE["last_action"]="NO_FRESH_LIVE_QUOTE"; return
+    price=float(q["ask"] if signal.direction=="BUY" else q["bid"])
+    atr=ind["atr"]
+    sl=price-2*atr if signal.direction=="BUY" else price+2*atr
+    tp=price+3*atr if signal.direction=="BUY" else price-3*atr
+    req=Order(symbol=symbol,side=signal.direction,volume=min(0.01,MAX_VOLUME),stop_loss=sl,take_profit=tp,
+      client_order_id="AUTO"+uuid.uuid4().hex[:16],order_origin="AUTO")
+    result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
+    AUTO_STATE["trades_today"]+=1
+    AUTO_STATE["last_action"]="OPENED_"+signal.direction
+    AUTO_STATE["last_order"]=result
+
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await account_detail()
-    raise HTTPException(501,"Automatic strategy loop is not implemented yet; manual DEMO orders only")
+    global AUTO_TASK
+    auth(authorization); row,detail=await account_detail()
+    if detail.get("isDemo") is not True: raise HTTPException(403,"AUTO is DEMO-only")
+    if not EXECUTION_ENABLED:
+        raise HTTPException(423,"Cloud AUTO strategy is installed but DEMO execution is disabled pending validation")
+    async with AUTO_LOCK:
+        if AUTO_TASK and not AUTO_TASK.done():
+            return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
+        AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
+        async def runner():
+            while AUTO_STATE["running"]:
+                try: await auto_cycle()
+                except asyncio.CancelledError: raise
+                except Exception as exc:
+                    AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR"})
+                    logger.exception("DioMasteR AUTO cycle blocked")
+                await asyncio.sleep(60)
+        AUTO_TASK=asyncio.create_task(runner())
+    return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}
 
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {"running":False,"supported":False,"last_action":"NOT_IMPLEMENTED","account_mode":"DEMO"}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
+      "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
+      "strategy":"EMA9/21 + RSI14 + ATR14 + H4 EMA50 + SMC + FRED fundamentals + news blackout",
+      "unified_threshold":8,"max_auto_positions":1,"max_volume":min(0.01,MAX_VOLUME)}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
+    global AUTO_TASK
     auth(authorization)
-    return {"running":False,"supported":False,"message":"No cloud auto loop is running"}
+    AUTO_STATE["running"]=False
+    if AUTO_TASK and not AUTO_TASK.done():
+        AUTO_TASK.cancel()
+        try: await AUTO_TASK
+        except asyncio.CancelledError: pass
+    AUTO_STATE["last_action"]="STOPPED"
+    return {"running":False,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO stopped"}
 
 
 @app.get("/assistant/snapshot")

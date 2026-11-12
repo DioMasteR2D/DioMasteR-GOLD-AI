@@ -822,7 +822,7 @@ async def auto_cycle():
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
       "news_block=%s news_reason=%s details=%s",
       symbol,len(h1),len(h4),len(d1),len(w1),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
-      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ema_buy,ema_sell,
+      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
       ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
       signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
       signal.phase4_score,signal.news_block,signal.news_reason,signal.details)

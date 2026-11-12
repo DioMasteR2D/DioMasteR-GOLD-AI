@@ -1387,7 +1387,7 @@ public class MainActivity extends Activity {
     private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
         if (!aiEngineStarted) return;
         // AUTO decisions and orders are exclusively handled by the cloud Unified 8/10 engine.
-        setAutoDiagnostic("CLOUD AUTO · αποφάσεις στον server · Unified Score 8/10 · DEMO.");
+        setAutoDiagnostic("CLOUD AUTO · Adaptive Liquidity Hunter · H4/H1 + M15 + M5 · DEMO.");
     }
 
     private String cleanBridgeToken(String value) {
@@ -1681,3 +1681,5 @@ public class MainActivity extends Activity {
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
     private String money(double value) { return "$" + String.format(Locale.US, "%,.2f", value); }
 }
+
+

@@ -811,13 +811,21 @@ async def auto_cycle():
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
     global AUTO_TASK
-    auth(authorization); row,detail=await account_detail()
-    if detail.get("isDemo") is not True: raise HTTPException(403,"AUTO is DEMO-only")
-    if not EXECUTION_ENABLED: raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
+    logger.info("AUTO_START_REQUEST received")
+    auth(authorization)
+    row,detail=await account_detail()
+    if detail.get("isDemo") is not True:
+        logger.warning("AUTO_START_BLOCKED reason=account_not_demo")
+        raise HTTPException(403,"AUTO is DEMO-only")
+    if not EXECUTION_ENABLED:
+        logger.warning("AUTO_START_BLOCKED reason=execution_disabled")
+        raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
     async with AUTO_LOCK:
         if AUTO_TASK and not AUTO_TASK.done():
+            logger.info("AUTO_START_ALREADY_RUNNING")
             return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
         AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
+        logger.info("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true")
         async def runner():
             while AUTO_STATE["running"]:
                 try: await auto_cycle()

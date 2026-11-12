@@ -138,33 +138,56 @@ def _cache_set(key: str, data):
 # ─────────────────────────────────────────────
 
 def _fetch_fred_series(series_id: str, limit: int = 24) -> Optional[list]:
-    """Fetch recent observations from FRED API."""
-    if FRED_API_KEY == "YOUR_FRED_API_KEY_HERE":
-        return None
-
-    url = "https://api.stlouisfed.org/fred/series/observations"
-    params = {
-        "series_id"     : series_id,
-        "api_key"       : FRED_API_KEY,
-        "file_type"     : "json",
-        "sort_order"    : "desc",
-        "limit"         : limit,
-        "observation_start": (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d"),
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code == 200:
+    """Fetch recent FRED observations; use public CSV graph endpoint if API key is absent."""
+    start = (datetime.now(timezone.utc) - timedelta(days=900)).strftime("%Y-%m-%d")
+    if FRED_API_KEY:
+        url = "https://api.stlouisfed.org/fred/series/observations"
+        params = {
+            "series_id": series_id, "api_key": FRED_API_KEY,
+            "file_type": "json", "sort_order": "desc", "limit": limit,
+            "observation_start": start,
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=12)
+            resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, dict):
-                raise ValueError("FRED response is not a JSON object")
+                raise ValueError("FRED API response is not a JSON object")
             observations = data.get("observations", [])
             if not isinstance(observations, list):
                 raise ValueError("FRED observations field is not a list")
             obs = [o for o in observations if isinstance(o, dict) and o.get("value") not in (None, ".")]
-            return obs
+            if obs:
+                return obs
+            print(f"FRED API returned no usable observations for {series_id}; trying public CSV")
+        except Exception as e:
+            print(f"FRED API error ({series_id}): {type(e).__name__}: {e}; trying public CSV")
+
+    # The FRED graph CSV endpoint publishes the same official series without
+    # requiring an API key. Keep the exact series IDs and fail closed if empty.
+    try:
+        url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+        resp = requests.get(url, params={"id": series_id, "cosd": start}, timeout=15,
+                            headers={"User-Agent": "DioMasteR-GOLD-AI/1.0"})
+        resp.raise_for_status()
+        from io import StringIO
+        frame = pd.read_csv(StringIO(resp.text))
+        if frame.empty or len(frame.columns) < 2:
+            raise ValueError("FRED CSV contains no observations")
+        value_col = series_id if series_id in frame.columns else frame.columns[-1]
+        date_col = "observation_date" if "observation_date" in frame.columns else frame.columns[0]
+        frame = frame[[date_col, value_col]].dropna()
+        frame[value_col] = pd.to_numeric(frame[value_col], errors="coerce")
+        frame = frame.dropna().sort_values(date_col, ascending=False).head(limit)
+        observations = [{"date": str(row[date_col]), "value": str(row[value_col])}
+                        for _, row in frame.iterrows()]
+        if not observations:
+            raise ValueError("FRED CSV contains no numeric observations")
+        print(f"FRED public CSV OK ({series_id}); observations={len(observations)}")
+        return observations
     except Exception as e:
-        print(f"  ⚠️  FRED API error ({series_id}): {e}")
-    return None
+        print(f"FRED public CSV error ({series_id}): {type(e).__name__}: {e}")
+        return None
 
 
 def get_cpi_data() -> dict:
@@ -210,7 +233,7 @@ def get_cpi_data() -> dict:
         else:
             result["details"] = f"CPI {latest:.2f} (MoM: {mom:+.3f}%)"
 
-    _cache_set("cpi", result)
+    if result["value"] is not None:\n        _cache_set("cpi", result)
     return result
 
 
@@ -262,7 +285,7 @@ def get_fed_rate_data() -> dict:
                 result["signal"]  = "NEUTRAL"
                 result["details"] = f"Fed on hold at {current:.2f}%"
 
-    _cache_set("fomc", result)
+    if result["rate"] is not None:\n        _cache_set("fomc", result)
     return result
 
 
@@ -302,7 +325,7 @@ def get_nfp_data() -> dict:
             result["signal"]  = "NEUTRAL"
             result["details"] = f"NFP in-line (+{mom:.0f}k jobs) — neutral"
 
-    _cache_set("nfp", result)
+    if result["value"] is not None:\n        _cache_set("nfp", result)
     return result
 
 # ─────────────────────────────────────────────
@@ -350,7 +373,7 @@ def get_dxy_data() -> dict:
             result["signal"] = "NEUTRAL"
             result["details"] = f"DXY flat ({pct_change_week:+.2f}% this week) — neutral"
 
-    _cache_set("dxy", result)
+    if result["value"] is not None:\n        _cache_set("dxy", result)
     return result
 
 # ─────────────────────────────────────────────

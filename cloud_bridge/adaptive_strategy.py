@@ -114,25 +114,30 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
         return hold
     rsi=float(rsi1.iloc[i1]); atr=float(atr1.iloc[i1]); price=float(c1.iloc[i1])
     momentum=(50<=rsi<=72) if side=="BUY" else (28<=rsi<=50)
-    # Score is quality, not a promise of win probability.
-    score=35+setup_points+(15 if confirmed else 0)+(10 if momentum else 0)
+    if not momentum:
+        hold.details=f"HOLD: {setup_name} confirmed but H1 RSI momentum is not aligned (RSI14={rsi:.1f})"
+        return hold
+    # Score is setup quality, not a win-probability percentage.
+    score=35+setup_points+15+10
     score=min(100,score)
     if score<MIN_ADAPTIVE_SCORE:
         hold.total_score=score; hold.details=f"HOLD: {setup_name} score {score}/{MIN_ADAPTIVE_SCORE}; momentum not confirmed"
         return hold
-    m15atr=float(_ind(m15)[-1].iloc[-1])
+    m15c,_,_,_,_,_,m15atr_series=_ind(m15)
+    m15atr=float(m15atr_series.iloc[-1])
+    price=float(m15c.iloc[-1])
     if not np.isfinite(m15atr) or m15atr<=0:
         hold.details="HOLD: invalid M15 ATR"; return hold
-    # Structure-led stop with an ATR safety buffer; minimum 1.2 ATR.
+    # Structure-led stop with an M15 ATR safety buffer.
     if side=="BUY":
-        sl=min(float(structure_price),price-1.2*atr)-0.15*m15atr
+        sl=min(float(structure_price),price-1.2*m15atr)-0.15*m15atr
         risk=price-sl
         tp=price+2.0*risk
     else:
-        sl=max(float(structure_price),price+1.2*atr)+0.15*m15atr
+        sl=max(float(structure_price),price+1.2*m15atr)+0.15*m15atr
         risk=sl-price
         tp=price-2.0*risk
-    if risk<=0 or risk>3.5*atr:
+    if risk<=0 or risk>3.5*m15atr:
         hold.details=f"HOLD: stop distance invalid ({risk:.3f})"; return hold
     # Reuse the established macro/news evaluator. News remains an absolute block.
     try:

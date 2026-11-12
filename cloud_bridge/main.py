@@ -447,6 +447,8 @@ async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
 # in the background so switching timeframes does not block the Android UI.
 CANDLE_CACHE={}
 CANDLE_REFRESH_TASKS={}
+AUTO_STRATEGY_CACHE={}
+AUTO_STRATEGY_CACHE_TTL={"M5":5,"M15":15,"H1":30,"H4":60}
 CANDLE_CACHE_TTL={"M1":15,"M5":20,"M15":30,"M30":45,"H1":60,"H4":90,"D1":120,"W1":180,"MN1":300}
 
 async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
@@ -639,12 +641,16 @@ AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
 
 async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
+    cache_key=(symbol,timeframe)
+    cached_frame=AUTO_STRATEGY_CACHE.get(cache_key)
+    if cached_frame and time.time()-cached_frame["at"]<AUTO_STRATEGY_CACHE_TTL.get(timeframe,15):
+        return cached_frame["frame"].copy()
     # Reuse the bridge's recently verified broker-candle cache before making
     # another upstream request. The Android chart and AUTO share this cache.
     # Only genuine broker OHLC is used; the forming candle is always excluded.
     required={"H1":60,"H4":50}.get(timeframe,2)
-    cache_key=(symbol,timeframe,hours)
-    cached=CANDLE_CACHE.get(cache_key)
+    bridge_cache_key=(symbol,timeframe,hours)
+    cached=CANDLE_CACHE.get(bridge_cache_key)
     best=[]
     if cached:
         age=max(0.0,time.time()-float(cached.get("fetched_at",0)))
@@ -665,7 +671,9 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
             if len(completed)>=required:
                 logger.info("AUTO candle cache hit symbol=%s timeframe=%s bars=%s age_seconds=%.1f",
                             symbol,timeframe,len(completed),age)
-                return pd.DataFrame(completed)
+                frame=pd.DataFrame(completed)
+                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+                return frame
             logger.info("AUTO candle cache insufficient symbol=%s timeframe=%s bars=%s required=%s age_seconds=%.1f",
                         symbol,timeframe,len(completed),required,age)
 
@@ -699,7 +707,9 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
                 if window_index or attempt:
                     logger.info("AUTO candle history recovered symbol=%s timeframe=%s requested_hours=%s used_hours=%s bars=%s",
                                 symbol,timeframe,hours,window_hours,len(clean))
-                return pd.DataFrame(clean)
+                frame=pd.DataFrame(clean)
+                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+                return frame
             if attempt<attempts-1:
                 logger.warning("AUTO candle retry symbol=%s timeframe=%s hours=%s attempt=%s raw=%s valid=%s stop=%s",
                     symbol,timeframe,window_hours,attempt+1,len(rows),len(parsed),
@@ -711,7 +721,10 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
     if len(best)<2 and not allow_insufficient:
         stop=(last_payload.get("stopReason") if isinstance(last_payload,dict) else "invalid_payload")
         raise RuntimeError(f"Insufficient completed {timeframe} candles after cache/retries/fallback: {len(best)}; stop={stop}")
-    return pd.DataFrame(best)
+    frame=pd.DataFrame(best)
+    if not frame.empty:
+        AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+    return frame
 
 def strategy_indicators(df):
     close=df["close"]
@@ -792,16 +805,12 @@ async def auto_cycle():
     # observed H1 coverage is ~294 bars for 400h and H4 ~216 bars for 1200h.
     # Asking for a full year can trigger oversized/empty history responses on
     # some TickerAll sessions; the strategy only needs 60 H1 and 50 H4 bars.
-    h1,h4,m15,m5,d1,w1=await asyncio.gather(
+    h1,h4,m15,m5=await asyncio.gather(
       strategy_frame(row["id"],symbol,"H1",400),
       strategy_frame(row["id"],symbol,"H4",1200),
       strategy_frame(row["id"],symbol,"M15",240),
-      strategy_frame(row["id"],symbol,"M5",120),
-      strategy_frame(row["id"],symbol,"D1",8760,allow_insufficient=True),
-      strategy_frame(row["id"],symbol,"W1",8760,allow_insufficient=True))
-    native_counts={"D1":len(d1),"W1":len(w1)}
-    if len(d1)<20: d1=aggregate_h4_history(h4,"D1")
-    if len(w1)<10: w1=aggregate_h4_history(h4,"W1")
+      strategy_frame(row["id"],symbol,"M5",120))
+    # D1/W1 are not decision inputs; skip unused broker history requests.
     minimums={"H1":60,"H4":55,"M15":30,"M5":25}
     available={"H1":len(h1),"H4":len(h4),"M15":len(m15),"M5":len(m5)}
     missing={tf:count for tf,count in available.items() if count<minimums[tf]}
@@ -895,14 +904,26 @@ async def auto_cycle():
     volume_min=float(spec.get("volumeMin") or 0)
     volume_step=float(spec.get("volumeStep") or 0)
     volume_max=float(spec.get("volumeMax") or 0)
-    if volume_min<=0 or volume_step<=0 or volume_max<=0:
-        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_VOLUME_SPEC"; return
+    tick_size=float(spec.get("tickSize") or 0)
+    tick_value_account=float(spec.get("tickValueAccount") or 0)
+    if volume_min<=0 or volume_step<=0 or volume_max<=0 or tick_size<=0 or tick_value_account<=0:
+        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_BROKER_RISK_SPEC"; return
     step_units=volume/volume_step
     if volume<volume_min-1e-9 or volume>volume_max+1e-9 or abs(step_units-round(step_units))>1e-7:
         AUTO_STATE["last_action"]="BLOCKED_VOLUME_NOT_BROKER_VALID"; return
-    sl=price-risk_distance if signal.direction=="BUY" else price+risk_distance
+    risk_distance=(price-float(signal.stop_loss)) if signal.direction=="BUY" else (float(signal.stop_loss)-price)
+    if risk_distance<=0 or risk_distance>3.5*float(signal.atr):
+        AUTO_STATE["last_action"]="BLOCKED_STALE_OR_INVALID_STOP"; return
+    spread=float(q["ask"])-float(q["bid"])
+    m5_atr=float(_ind(m5)[-1].iloc[-1]) if len(m5)>=25 else 0.0
+    if m5_atr<=0 or spread>0.20*m5_atr:
+        AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
+    sl=float(signal.stop_loss)
     fast_tp=price+risk_distance if signal.direction=="BUY" else price-risk_distance
     runner_tp=price+2*risk_distance if signal.direction=="BUY" else price-2*risk_distance
+    per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
+    if per_leg_risk*2>equity*MAX_RISK_FRACTION:
+        AUTO_STATE["last_action"]="BLOCKED_TWO_LEG_AGGREGATE_RISK_CAP"; return
     if AUTO_STATE["trades_today"]+2>AUTO_MAX_TRADES_PER_DAY:
         AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
     fast_req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
@@ -965,7 +986,7 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
                     import traceback
                     print("DioMasteR AUTO cycle blocked: %s" % str(exc)[:350],flush=True)
                     traceback.print_exc()
-                await asyncio.sleep(60)
+                await asyncio.sleep(15)
         AUTO_TASK=asyncio.create_task(runner())
     return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}
 

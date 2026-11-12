@@ -636,18 +636,44 @@ AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
 
 async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
-    # TickerAll sometimes returns empty/truncated long-lookback batches while
-    # shorter lookbacks contain valid broker candles. Retry the original request,
-    # then fall back to progressively shorter lookbacks. Keep only genuine,
-    # completed broker candles; global H1/H4 minimums remain enforced below.
+    # Reuse the bridge's recently verified broker-candle cache before making
+    # another upstream request. The Android chart and AUTO share this cache.
+    # Only genuine broker OHLC is used; the forming candle is always excluded.
     required={"H1":60,"H4":50}.get(timeframe,2)
+    cache_key=(symbol,timeframe,hours)
+    cached=CANDLE_CACHE.get(cache_key)
+    best=[]
+    if cached:
+        age=max(0.0,time.time()-float(cached.get("fetched_at",0)))
+        max_age=max(120.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
+        cached_rows=cached.get("candles",[])
+        if age<=max_age and isinstance(cached_rows,list):
+            parsed=[]
+            for x in cached_rows:
+                try:
+                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),
+                      "high":float(x["high"]),"low":float(x["low"]),"close":float(x["close"]),
+                      "tick_volume":float(x.get("tick_volume") or 0)})
+                except (KeyError,TypeError,ValueError):
+                    continue
+            parsed.sort(key=lambda x:x["timestamp"])
+            completed=parsed[:-1] if len(parsed)>1 else parsed
+            best=completed
+            if len(completed)>=required:
+                logger.info("AUTO candle cache hit symbol=%s timeframe=%s bars=%s age_seconds=%.1f",
+                            symbol,timeframe,len(completed),age)
+                return pd.DataFrame(completed)
+            logger.info("AUTO candle cache insufficient symbol=%s timeframe=%s bars=%s required=%s age_seconds=%.1f",
+                        symbol,timeframe,len(completed),required,age)
+
+    # Retry the full lookback once, then use progressively shorter broker
+    # history windows. This avoids long stalls on TickerAll empty batches.
     windows=[hours]
     if not allow_insufficient and hours>=200:
         windows.extend(sorted({max(100,hours//2),max(100,hours//4)},reverse=True))
-    best=[]
     last_payload=None
     for window_index,window_hours in enumerate(windows):
-        attempts=3 if window_index==0 else 2
+        attempts=2 if window_index==0 else 1
         for attempt in range(attempts):
             payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={window_hours}")
             last_payload=payload
@@ -675,13 +701,13 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
                 logger.warning("AUTO candle retry symbol=%s timeframe=%s hours=%s attempt=%s raw=%s valid=%s stop=%s",
                     symbol,timeframe,window_hours,attempt+1,len(rows),len(parsed),
                     (payload.get("stopReason") if isinstance(payload,dict) else "invalid_payload"))
-                await asyncio.sleep(1.5*(attempt+1))
+                await asyncio.sleep(0.5)
         if window_index+1<len(windows):
             logger.warning("AUTO candle lookback fallback symbol=%s timeframe=%s hours=%s next_hours=%s best_completed=%s",
                            symbol,timeframe,window_hours,windows[window_index+1],len(best))
     if len(best)<2 and not allow_insufficient:
         stop=(last_payload.get("stopReason") if isinstance(last_payload,dict) else "invalid_payload")
-        raise RuntimeError(f"Insufficient completed {timeframe} candles after retries/fallback: {len(best)}; stop={stop}")
+        raise RuntimeError(f"Insufficient completed {timeframe} candles after cache/retries/fallback: {len(best)}; stop={stop}")
     return pd.DataFrame(best)
 
 def strategy_indicators(df):
@@ -887,10 +913,23 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
         logger.info("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true")
         async def runner():
             while AUTO_STATE["running"]:
-                try: await auto_cycle()
-                except asyncio.CancelledError: raise
+                cycle_started=time.monotonic()
+                AUTO_STATE["last_cycle_started_at"]=datetime.now(timezone.utc).isoformat()
+                try:
+                    logger.info("AUTO_CYCLE_STARTED symbol=XAUUSD")
+                    await auto_cycle()
+                    duration=time.monotonic()-cycle_started
+                    AUTO_STATE["cycle_count"]=int(AUTO_STATE.get("cycle_count",0))+1
+                    AUTO_STATE["last_cycle_duration_seconds"]=round(duration,2)
+                    logger.info("AUTO_CYCLE_COMPLETED duration_seconds=%.2f action=%s signal=%s",
+                                duration,AUTO_STATE.get("last_action"),
+                                AUTO_STATE.get("last_signal"))
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
-                    AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR"})
+                    duration=time.monotonic()-cycle_started
+                    AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR",
+                                       "last_cycle_duration_seconds":round(duration,2)})
                     logger.exception("DioMasteR AUTO cycle blocked")
                 await asyncio.sleep(60)
         AUTO_TASK=asyncio.create_task(runner())

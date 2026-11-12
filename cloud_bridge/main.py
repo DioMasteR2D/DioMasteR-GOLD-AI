@@ -22,7 +22,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=1  # One AUTO position; MANUAL orders are excluded.
+MAX_BOT_POSITIONS=2  # Two AUTO legs (FAST + RUNNER); MANUAL orders are excluded.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
@@ -602,10 +602,12 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
              and not str(p.get("comment","")).startswith("DioMasteR MANUAL")]
         if len(bot)>=MAX_BOT_POSITIONS:
             raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
+    leg_tag=(" FAST" if "FAST" in req.client_order_id.upper() else
+             " RUNNER" if "RUNNER" in req.client_order_id.upper() else "")
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
       "stopLoss":sl,"takeProfit":tp,
       "comment":"DioMasteR MANUAL "+req.client_order_id[-14:] if origin=="MANUAL"
-                else "DioMasteR AUTO "+req.client_order_id[-16:]}
+                else "DioMasteR AUTO"+leg_tag}
     result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
       "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,
@@ -833,6 +835,23 @@ async def auto_cycle():
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
+    # Move the RUNNER stop to entry once live price reaches +1R.
+    for p in bot:
+        if "RUNNER" in str(p.get("comment","")).upper():
+            side=str(p.get("side","")).upper()
+            entry=float(p.get("entryPrice") or 0)
+            current=float(p.get("currentPrice") or 0)
+            tp_existing=float(p.get("takeProfit") or 0)
+            sl_existing=float(p.get("stopLoss") or 0)
+            if entry>0 and tp_existing>0:
+                one_r=abs(tp_existing-entry)/2.0
+                reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
+                already_be=abs(sl_existing-entry)<=max(0.01,one_r*0.02)
+                if reached and not already_be:
+                    ticket=int(p.get("ticket") or 0)
+                    await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",
+                             {"stopLoss":entry},idem=True)
+                    logger.info("AUTO_RUNNER_BREAK_EVEN ticket=%s entry=%.5f",ticket,entry)
     # Smart exits only touch bot-owned positions; manual trades are never managed.
     for p in bot:
         side=str(p.get("side","")).upper(); profit=float(p.get("profit") or 0)
@@ -870,15 +889,41 @@ async def auto_cycle():
     risk_distance=abs(float(signal.entry)-float(signal.stop_loss))
     if risk_distance<=0:
         AUTO_STATE["last_action"]="INVALID_STRATEGY_STOP"; return
+    spec_payload=await ta("GET",f"/v1/accounts/{row['id']}/symbols/{symbol}/spec")
+    spec=spec_payload.get("spec",{}) if isinstance(spec_payload,dict) else {}
+    volume=min(0.01,MAX_VOLUME)
+    volume_min=float(spec.get("volumeMin") or 0)
+    volume_step=float(spec.get("volumeStep") or 0)
+    volume_max=float(spec.get("volumeMax") or 0)
+    if volume_min<=0 or volume_step<=0 or volume_max<=0:
+        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_VOLUME_SPEC"; return
+    step_units=volume/volume_step
+    if volume<volume_min-1e-9 or volume>volume_max+1e-9 or abs(step_units-round(step_units))>1e-7:
+        AUTO_STATE["last_action"]="BLOCKED_VOLUME_NOT_BROKER_VALID"; return
     sl=price-risk_distance if signal.direction=="BUY" else price+risk_distance
-    tp=price+2*risk_distance if signal.direction=="BUY" else price-2*risk_distance
-    req=Order(symbol=symbol,side=signal.direction,volume=min(0.01,MAX_VOLUME),stop_loss=sl,take_profit=tp,
-      client_order_id="AUTO"+uuid.uuid4().hex[:16],order_origin="AUTO")
-    result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
-    AUTO_STATE["trades_today"]+=1
+    fast_tp=price+risk_distance if signal.direction=="BUY" else price-risk_distance
+    runner_tp=price+2*risk_distance if signal.direction=="BUY" else price-2*risk_distance
+    if AUTO_STATE["trades_today"]+2>AUTO_MAX_TRADES_PER_DAY:
+        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
+    fast_req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
+      client_order_id="AUTOFAST"+uuid.uuid4().hex[:12],order_origin="AUTO")
+    fast_result=await order(fast_req,authorization="Bearer "+BRIDGE_TOKEN)
+    try:
+        runner_req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=runner_tp,
+          client_order_id="AUTORUNNER"+uuid.uuid4().hex[:10],order_origin="AUTO")
+        runner_result=await order(runner_req,authorization="Bearer "+BRIDGE_TOKEN)
+    except Exception as exc:
+        AUTO_STATE["last_action"]="FAST_OPENED_RUNNER_FAILED"
+        AUTO_STATE["last_error"]="Runner leg rejected after fast leg opened: "+str(exc)[:220]
+        AUTO_STATE["last_order"]={"fast":fast_result,"runner_error":str(exc)[:220]}
+        AUTO_STATE["trades_today"]+=1
+        AUTO_STATE["last_entry_bar_time"]=stamp
+        return
+    AUTO_STATE["trades_today"]+=2
     AUTO_STATE["last_entry_bar_time"]=stamp
-    AUTO_STATE["last_action"]="OPENED_"+signal.direction
-    AUTO_STATE["last_order"]=result
+    AUTO_STATE["last_action"]="OPENED_TWO_LEGS_"+signal.direction
+    AUTO_STATE["last_order"]={"fast":fast_result,"runner":runner_result,"volume_each":volume,
+                              "aggregate_volume":round(volume*2,4),"fast_target_R":1,"runner_target_R":2}
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
@@ -930,7 +975,7 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
     return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":1,"max_volume":min(0.01,MAX_VOLUME)}
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":2,"max_volume_each":min(0.01,MAX_VOLUME),"legs":{"fast_target_R":1,"runner_target_R":2,"equal_volume":True}}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

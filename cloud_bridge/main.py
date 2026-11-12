@@ -824,15 +824,15 @@ async def auto_cycle():
     mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
     now_utc=datetime.now(timezone.utc)
     sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
-    signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5,d1,w1)
+    signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
     stamp=float(h1["timestamp"].iloc[-1])
     print(
-      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,D1:%s,W1:%s bar=%s "
+      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M15:%s,M5:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
       "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
       "news_block=%s news_reason=%s details=%s",
-      symbol,len(h1),len(h4),len(d1),len(w1),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
+      symbol,len(h1),len(h4),len(m15),len(m5),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
       ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
       ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
       signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,

@@ -577,7 +577,7 @@ AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
 
-async def strategy_frame(account_id,symbol,timeframe,hours):
+async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
     payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
     rows=payload.get("candles",[]) if isinstance(payload,dict) else []
     if not isinstance(rows,list): raise RuntimeError(f"{timeframe} candle payload invalid")
@@ -590,7 +590,7 @@ async def strategy_frame(account_id,symbol,timeframe,hours):
     clean.sort(key=lambda x:x["timestamp"])
     # TickerAll history includes the forming candle at the end. Exclude it.
     if clean: clean=clean[:-1]
-    if len(clean)<2: raise RuntimeError(f"Insufficient completed {timeframe} candles")
+    if len(clean)<2 and not allow_insufficient: raise RuntimeError(f"Insufficient completed {timeframe} candles")
     return pd.DataFrame(clean)
 
 def strategy_indicators(df):
@@ -607,6 +607,34 @@ def strategy_indicators(df):
     return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
       "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2])}
 
+def aggregate_h4_history(h4, timeframe):
+    """Build genuine D1/W1 OHLC from completed broker H4 bars when native history is short."""
+    if timeframe not in ("D1", "W1") or h4.empty:
+        return pd.DataFrame(columns=["timestamp","open","high","low","close","tick_volume"])
+    groups={}
+    for bar in h4.to_dict("records"):
+        stamp=float(bar["timestamp"])
+        dt=datetime.fromtimestamp(stamp, timezone.utc)
+        key=dt.date().isoformat() if timeframe=="D1" else f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+        groups.setdefault(key,[]).append(bar)
+    result=[]
+    minimum_bars=4 if timeframe=="D1" else 20
+    for key in sorted(groups):
+        rows=sorted(groups[key],key=lambda x:float(x["timestamp"]))
+        # Require at least four completed H4 bars per trading day and twenty per
+        # trading week. This excludes partial sessions/weeks rather than inventing OHLC.
+        if len(rows)<minimum_bars:
+            continue
+        result.append({
+            "timestamp":float(rows[0]["timestamp"]),
+            "open":float(rows[0]["open"]),
+            "high":max(float(x["high"]) for x in rows),
+            "low":min(float(x["low"]) for x in rows),
+            "close":float(rows[-1]["close"]),
+            "tick_volume":sum(float(x.get("tick_volume",0)) for x in rows),
+        })
+    return pd.DataFrame(result)
+
 async def auto_cycle():
     row,detail=await account_detail()
     equity_now=float((detail.get("account") or {}).get("equity") or 0)
@@ -622,19 +650,26 @@ async def auto_cycle():
     h1,h4,d1,w1=await asyncio.gather(
       strategy_frame(row["id"],symbol,"H1",8760),
       strategy_frame(row["id"],symbol,"H4",8760),
-      strategy_frame(row["id"],symbol,"D1",8760),
-      strategy_frame(row["id"],symbol,"W1",8760))
-    # The broker may return fewer than 300 H1 bars for a one-year request
-    # (weekends/market closures and provider history limits). The strategy
-    # indicators need 21 bars; SMC detectors use a 50-bar H1 lookback.
-    # Keep conservative minimums per timeframe without demanding an
-    # arbitrary 300 H1 bars that the broker does not provide.
+      strategy_frame(row["id"],symbol,"D1",8760,allow_insufficient=True),
+      strategy_frame(row["id"],symbol,"W1",8760,allow_insufficient=True))
+    # TickerAll can return very short native D1/W1 history even when H4
+    # history is healthy. Derive higher timeframes only from completed,
+    # genuine broker H4 OHLC; never fabricate or relax the strategy minimums.
+    native_counts={"D1":len(d1),"W1":len(w1)}
+    if len(d1)<20:
+        d1=aggregate_h4_history(h4,"D1")
+        logger.warning("AUTO higher-timeframe fallback: D1 native=%s aggregated_from_H4=%s",
+                       native_counts["D1"],len(d1))
+    if len(w1)<10:
+        w1=aggregate_h4_history(h4,"W1")
+        logger.warning("AUTO higher-timeframe fallback: W1 native=%s aggregated_from_H4=%s",
+                       native_counts["W1"],len(w1))
     minimums = {"H1": 60, "H4": 50, "D1": 20, "W1": 10}
     available = {"H1": len(h1), "H4": len(h4), "D1": len(d1), "W1": len(w1)}
     missing = {tf: count for tf, count in available.items() if count < minimums[tf]}
     if missing:
         detail = ", ".join(f"{tf}={count}/{minimums[tf]}" for tf, count in missing.items())
-        raise RuntimeError(f"Insufficient completed broker candles: {detail}; available={available}")
+        raise RuntimeError(f"Insufficient completed broker candles after native/derived history: {detail}; native={native_counts}; available={available}")
     ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     ema_buy=ind["ema9"]>ind["ema21"] and ind["ema9_prev"]<=ind["ema21_prev"]
     ema_sell=ind["ema9"]<ind["ema21"] and ind["ema9_prev"]>=ind["ema21_prev"]

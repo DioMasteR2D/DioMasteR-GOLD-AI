@@ -627,7 +627,8 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 
 # Cloud strategy loop: all decisions are made on completed broker candles.
 import pandas as pd
-from unified_engine import get_unified_signal, MIN_UNIFIED_SCORE
+from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
+MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
 AUTO_TASK=None
 AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
 AUTO_LOCK=asyncio.Lock()
@@ -789,47 +790,30 @@ async def auto_cycle():
     # observed H1 coverage is ~294 bars for 400h and H4 ~216 bars for 1200h.
     # Asking for a full year can trigger oversized/empty history responses on
     # some TickerAll sessions; the strategy only needs 60 H1 and 50 H4 bars.
-    h1,h4,d1,w1=await asyncio.gather(
+    h1,h4,m15,m5,d1,w1=await asyncio.gather(
       strategy_frame(row["id"],symbol,"H1",400),
       strategy_frame(row["id"],symbol,"H4",1200),
+      strategy_frame(row["id"],symbol,"M15",240),
+      strategy_frame(row["id"],symbol,"M5",120),
       strategy_frame(row["id"],symbol,"D1",8760,allow_insufficient=True),
       strategy_frame(row["id"],symbol,"W1",8760,allow_insufficient=True))
-    # TickerAll can return very short native D1/W1 history even when H4
-    # history is healthy. Derive higher timeframes only from completed,
-    # genuine broker H4 OHLC; never fabricate or relax the strategy minimums.
     native_counts={"D1":len(d1),"W1":len(w1)}
-    if len(d1)<20:
-        d1=aggregate_h4_history(h4,"D1")
-        logger.warning("AUTO higher-timeframe fallback: D1 native=%s aggregated_from_H4=%s",
-                       native_counts["D1"],len(d1))
-    if len(w1)<10:
-        w1=aggregate_h4_history(h4,"W1")
-        logger.warning("AUTO higher-timeframe fallback: W1 native=%s aggregated_from_H4=%s",
-                       native_counts["W1"],len(w1))
-    minimums = {"H1": 60, "H4": 50, "D1": 20, "W1": 10}
-    available = {"H1": len(h1), "H4": len(h4), "D1": len(d1), "W1": len(w1)}
-    missing = {tf: count for tf, count in available.items() if count < minimums[tf]}
+    if len(d1)<20: d1=aggregate_h4_history(h4,"D1")
+    if len(w1)<10: w1=aggregate_h4_history(h4,"W1")
+    minimums={"H1":60,"H4":55,"M15":30,"M5":25}
+    available={"H1":len(h1),"H4":len(h4),"M15":len(m15),"M5":len(m5)}
+    missing={tf:count for tf,count in available.items() if count<minimums[tf]}
     if missing:
-        detail = ", ".join(f"{tf}={count}/{minimums[tf]}" for tf, count in missing.items())
-        raise RuntimeError(f"Insufficient completed broker candles after native/derived history: {detail}; native={native_counts}; available={available}")
-    ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
-    ema_buy=ind.get("cross_direction")=="BUY"
-    ema_sell=ind.get("cross_direction")=="SELL"
-    if not (ema_buy or ema_sell):
-        direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
-        rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
-        mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
-        sess_ok=(6<=datetime.now(timezone.utc).hour<20 and datetime.now(timezone.utc).weekday()<5)
-        signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
-        # When there is no fresh crossover, retain the confirmed EMA trend direction.
-        # RSI, H4, SMC, fundamentals, news and the unified score still gate every entry.
-    else:
-        direction="BUY" if ema_buy else "SELL"
-        rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
-        mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
-        now_utc=datetime.now(timezone.utc)
-        sess_ok=(6<=now_utc.hour<20 and now_utc.weekday()<5)
-        signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
+        detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
+        raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
+    ind=strategy_indicators(h1)
+    h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
+    direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
+    rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
+    mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
+    now_utc=datetime.now(timezone.utc)
+    sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
+    signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5,d1,w1)
     stamp=float(h1["timestamp"].iloc[-1])
     print(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,D1:%s,W1:%s bar=%s "
@@ -883,9 +867,11 @@ async def auto_cycle():
     if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
         AUTO_STATE["last_action"]="NO_FRESH_LIVE_QUOTE"; return
     price=float(q["ask"] if signal.direction=="BUY" else q["bid"])
-    atr=ind["atr"]
-    sl=price-2*atr if signal.direction=="BUY" else price+2*atr
-    tp=price+3*atr if signal.direction=="BUY" else price-3*atr
+    risk_distance=abs(float(signal.entry)-float(signal.stop_loss))
+    if risk_distance<=0:
+        AUTO_STATE["last_action"]="INVALID_STRATEGY_STOP"; return
+    sl=price-risk_distance if signal.direction=="BUY" else price+risk_distance
+    tp=price+2*risk_distance if signal.direction=="BUY" else price-2*risk_distance
     req=Order(symbol=symbol,side=signal.direction,volume=min(0.01,MAX_VOLUME),stop_loss=sl,take_profit=tp,
       client_order_id="AUTO"+uuid.uuid4().hex[:16],order_origin="AUTO")
     result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
@@ -943,8 +929,8 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
     return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
-      "strategy":"EMA9/21 + RSI14 + ATR14 + H4 EMA50 + SMC + FRED fundamentals + news blackout",
-      "unified_threshold":8,"max_auto_positions":1,"max_volume":min(0.01,MAX_VOLUME)}
+      "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":1,"max_volume":min(0.01,MAX_VOLUME)}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

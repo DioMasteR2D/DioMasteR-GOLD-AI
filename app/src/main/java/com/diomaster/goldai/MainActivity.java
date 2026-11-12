@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
     private double mt5Equity = 0.0;
     private boolean aiEngineStarted = false;
     private boolean autoOrderInFlight = false;
+    private boolean autoStartInFlight = false;
     private long lastAutoSignalBar = 0L;
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
@@ -932,7 +933,8 @@ public class MainActivity extends Activity {
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ  STOP AUTO · DEMO" : "▶  START AUTO · DEMO", GREEN, this::startAiEngine);
+        Button autoTrade = actionButton(autoStartInFlight ? "ΕΛΕΓΧΟΣ CLOUD AUTO…" : (aiEngineStarted ? "Ⅱ  STOP AUTO · DEMO" : "▶  START AUTO · DEMO"), GREEN, this::toggleAutoEngine);
+        autoTrade.setEnabled(!autoStartInFlight);
         autoTrade.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
         Button analysis = actionButton("⌁  ΑΝΑΛΥΣΗ", GOLD, () -> scrollToSection(marketSection));
         analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
@@ -1225,12 +1227,13 @@ public class MainActivity extends Activity {
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
         addRow(connections, "Μηχανή σημάτων AI", aiEngineStarted ? (aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΕΝΕΡΓΗ · ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ") : "ΑΝΑΜΟΝΗ START AI", aiEngineStarted ? GOLD : MUTED);
         addRow(connections, "Εντολές MT5 DEMO", mt5ExecutionEnabled ? "ΕΝΕΡΓΕΣ · ΜΟΝΟ ΜΕ ΕΠΙΒΕΒΑΙΩΣΗ DEMO" : "ΑΝΑΜΟΝΗ ΣΥΝΔΕΣΗΣ", mt5ExecutionEnabled ? GREEN : GOLD);
-        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς τον Vantage MT5 DEMO. Ο server ελέγχει ότι ο λογαριασμός είναι DEMO. Η τιμή αναφοράς για εντολές προέρχεται από το τελευταίο M1 candle και όχι από live bid/ask tick. Οι εντολές παραμένουν απενεργοποιημένες μέχρι να ολοκληρωθούν οι έλεγχοι. Η αυτόματη στρατηγική cloud δεν έχει υλοποιηθεί ακόμη.", 10, MUTED, false);
+        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς Vantage MT5 DEMO. Το Cloud AUTO εκτελεί την εγκεκριμένη στρατηγική μόνο σε DEMO, με όρια κινδύνου και χωρίς εξαναγκασμένες συναλλαγές. Αν κάποιος έλεγχος αποτύχει, η αιτία εμφανίζεται παρακάτω.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
         Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ TICKERALL API · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
-        Button startAi = actionButton(aiEngineStarted ? "STOP AUTO · ΔΙΑΚΟΠΗ ΝΕΩΝ ΕΝΤΟΛΩΝ" : "START AUTO · MT5 DEMO", 0xFFB58A35, aiEngineStarted ? this::stopAiEngine : this::startAiEngine);
+        Button startAi = actionButton(autoStartInFlight ? "ΕΛΕΓΧΟΣ CLOUD AUTO…" : (aiEngineStarted ? "STOP AUTO · ΔΙΑΚΟΠΗ ΝΕΩΝ ΕΝΤΟΛΩΝ" : "START AUTO · MT5 DEMO"), 0xFFB58A35, this::toggleAutoEngine);
+        startAi.setEnabled(!autoStartInFlight);
         connections.addView(startAi);
         addRow(connections, "Αυτόματη εκτέλεση", autoExecutionMessage, aiEngineStarted ? GREEN : MUTED);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
@@ -1302,12 +1305,21 @@ public class MainActivity extends Activity {
     }
 
     // Local execution loop: strategy stays in GoldAiAgent; broker execution is DEMO-only.
+    private void toggleAutoEngine() {
+        if (autoStartInFlight) return;
+        if (aiEngineStarted) stopAiEngine(); else startAiEngine();
+    }
+
     private void startAiEngine() {
+        if (autoStartInFlight) return;
         if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty()) {
             Toast.makeText(this, "Πρώτα σύνδεσε τον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
             return;
         }
-        autoExecutionMessage = "Έλεγχος DEMO και εκκίνησης Cloud AUTO…";
+        autoStartInFlight = true;
+        autoExecutionMessage = "ΕΚΚΙΝΗΣΗ: έλεγχος σύνδεσης, DEMO και Cloud AUTO…";
+        logAgentActivity("CLOUD AUTO", "START_REQUESTED", "Ο χρήστης πάτησε START AUTO · DEMO");
+        Toast.makeText(this, "Έγινε λήψη εντολής. Ελέγχω το DEMO και τον server…", Toast.LENGTH_SHORT).show();
         render();
         new Thread(() -> {
             String failure = null;
@@ -1326,12 +1338,15 @@ public class MainActivity extends Activity {
             } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία εκκίνησης Cloud AUTO" : e.getMessage(); }
             final String error = failure;
             runOnUiThread(() -> {
+                autoStartInFlight = false;
                 if (error != null) {
                     aiEngineStarted = false;
+                    logAgentActivity("CLOUD AUTO", "START_BLOCKED", error);
                     autoExecutionMessage = "ΜΠΛΟΚΑΡΙΣΜΕΝΟ · " + error;
                     Toast.makeText(this, autoExecutionMessage, Toast.LENGTH_LONG).show();
                 } else {
                     aiEngineStarted = true;
+                    logAgentActivity("CLOUD AUTO", "START_CONFIRMED", "Ο server επιβεβαίωσε running=true · DEMO");
                     autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · Unified 8/10 · DEMO";
                     Toast.makeText(this, "Cloud AUTO ξεκίνησε στον server DEMO.", Toast.LENGTH_LONG).show();
                 }
@@ -1341,6 +1356,7 @@ public class MainActivity extends Activity {
     }
 
     private void stopAiEngine() {
+        if (autoStartInFlight) return;
         aiEngineStarted = false;
         autoExecutionMessage = "Αποστολή εντολής STOP στο Cloud AUTO…";
         render();

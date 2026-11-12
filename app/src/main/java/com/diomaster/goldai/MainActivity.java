@@ -139,6 +139,7 @@ public class MainActivity extends Activity {
         mt5Currency = mt5Prefs.getString("currency", "USD");
         mt5Balance = Double.longBitsToDouble(mt5Prefs.getLong("balance_bits", Double.doubleToRawLongBits(0.0)));
         mt5Equity = Double.longBitsToDouble(mt5Prefs.getLong("equity_bits", Double.doubleToRawLongBits(0.0)));
+        restoreBackgroundMarketCache();
         startBackgroundMonitor();
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -148,6 +149,55 @@ public class MainActivity extends Activity {
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) autoConnectMt5();
     }
 
+
+    private void restoreBackgroundMarketCache() {
+        try {
+            android.content.SharedPreferences cache = getSharedPreferences("diomaster_background_market", MODE_PRIVATE);
+            long updated = cache.getLong("updated_at", 0L);
+            if (updated <= 0L) return;
+            double mid = Double.longBitsToDouble(cache.getLong("mid_bits", Double.doubleToRawLongBits(0.0)));
+            long tick = cache.getLong("quote_at", 0L);
+            String cachedSymbol = cache.getString("symbol", mt5Symbol);
+            String cachedFrame = cache.getString("timeframe", selectedTimeframe);
+            String candles = cache.getString("candles", "");
+            if (mid > 0 && tick > 0) {
+                price = mid;
+                quoteAt = tick;
+                mt5Symbol = cachedSymbol;
+                brokerChartActive = true;
+                feedMessage = "ΤΕΛΕΥΤΑΙΑ ΑΠΟΘΗΚΕΥΜΕΝΑ BROKER ΔΕΔΟΜΕΝΑ · ΓΙΝΕΤΑΙ ΑΝΑΝΕΩΣΗ";
+            }
+            if (candles != null && !candles.isEmpty()) {
+                JSONArray rows = new JSONArray(candles);
+                if (rows.length() >= 2) {
+                    brokerCandles = rows;
+                    chartPrices.clear();
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject bar = rows.optJSONObject(i);
+                        if (bar != null && bar.optDouble("close", 0) > 0) chartPrices.add(bar.optDouble("close"));
+                    }
+                    selectedTimeframe = cachedFrame;
+                }
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void refreshCloudAutoState() {
+        if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
+                boolean running = status.optBoolean("running", false);
+                runOnUiThread(() -> {
+                    aiEngineStarted = running;
+                    autoExecutionMessage = running
+                            ? "CLOUD AUTO ΕΝΕΡΓΟ · συνεχίζει στον server DEMO"
+                            : "Cloud AUTO σταματημένο · DEMO";
+                    render();
+                });
+            } catch (Exception ignored) { }
+        }, "DioMasteR-auto-state").start();
+    }
 
     private void startBackgroundMonitor() {
         if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
@@ -209,6 +259,9 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         activityResumed = true;
+        restoreBackgroundMarketCache();
+        startBackgroundMonitor();
+        refreshCloudAutoState();
         handler.removeCallbacks(refreshLoop);
         fetchPrice(true);
         handler.postDelayed(refreshLoop, 30000L);
@@ -304,6 +357,13 @@ public class MainActivity extends Activity {
                             return;
                         }
                         price = latest; quoteAt = receivedAt;
+                        getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                                .putString("symbol", mt5Symbol).putString("timeframe", effectiveTimeframe)
+                                .putLong("mid_bits", Double.doubleToRawLongBits(latest))
+                                .putLong("bid_bits", Double.doubleToRawLongBits(bid))
+                                .putLong("ask_bits", Double.doubleToRawLongBits(ask))
+                                .putLong("quote_at", receivedAt).putLong("updated_at", System.currentTimeMillis())
+                                .putBoolean("connected", true).putString("candles", bars.toString()).apply();
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
                         for (int i=0;i<bars.length();i++) {
@@ -1476,6 +1536,7 @@ public class MainActivity extends Activity {
                     String display = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login") + (execEnabled ? " · ORDERS ON" : " · READ ONLY");
                     getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).putBoolean("execution_enabled",execEnabled).putString("status",display).apply();
                     mt5BaseUrl=base; mt5Token=secret; mt5Symbol=selectedSymbol; mt5ExecutionEnabled=execEnabled;
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).apply();
                     mt5Login=status.optString("account_login",""); mt5Currency=status.optString("currency","USD"); mt5Balance=status.optDouble("balance",0); mt5Equity=status.optDouble("equity",mt5Balance);
                     getSharedPreferences("diomaster_mt5_demo",MODE_PRIVATE).edit().putString("login",mt5Login).putString("currency",mt5Currency).putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance)).putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity)).apply();
                     result = display;
@@ -1487,6 +1548,7 @@ public class MainActivity extends Activity {
                 final String finalResult = result;
                 runOnUiThread(() -> {
                     mt5Status = finalResult;
+                    if (finalResult.startsWith("DEMO")) startBackgroundMonitor();
                     Toast.makeText(this, finalResult, Toast.LENGTH_LONG).show();
                     render();
                 });

@@ -662,8 +662,29 @@ def strategy_indicators(df):
     atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
     ema9=close.ewm(span=9,adjust=False).mean()
     ema21=close.ewm(span=21,adjust=False).mean()
+    # Keep the original EMA9/21 crossover rule, but recognize a confirmed
+    # crossover on any of the latest 3 CLOSED H1 candles. The current EMA
+    # relationship must still agree with that crossover direction.
+    cross_age=None
+    cross_direction=None
+    for offset in range(0, min(3, len(close)-1)):
+        idx=len(close)-1-offset
+        prev=idx-1
+        if ema9.iloc[idx]>ema21.iloc[idx] and ema9.iloc[prev]<=ema21.iloc[prev]:
+            cross_age=offset
+            cross_direction="BUY"
+            break
+        if ema9.iloc[idx]<ema21.iloc[idx] and ema9.iloc[prev]>=ema21.iloc[prev]:
+            cross_age=offset
+            cross_direction="SELL"
+            break
+    if cross_direction=="BUY" and not (ema9.iloc[-1]>ema21.iloc[-1]):
+        cross_direction=None; cross_age=None
+    if cross_direction=="SELL" and not (ema9.iloc[-1]<ema21.iloc[-1]):
+        cross_direction=None; cross_age=None
     return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
-      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2])}
+      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2]),
+      "cross_age":cross_age,"cross_direction":cross_direction}
 
 def aggregate_h4_history(h4, timeframe):
     """Build genuine D1/W1 OHLC from completed broker H4 bars when native history is short."""
@@ -729,8 +750,8 @@ async def auto_cycle():
         detail = ", ".join(f"{tf}={count}/{minimums[tf]}" for tf, count in missing.items())
         raise RuntimeError(f"Insufficient completed broker candles after native/derived history: {detail}; native={native_counts}; available={available}")
     ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
-    ema_buy=ind["ema9"]>ind["ema21"] and ind["ema9_prev"]<=ind["ema21_prev"]
-    ema_sell=ind["ema9"]<ind["ema21"] and ind["ema9_prev"]>=ind["ema21_prev"]
+    ema_buy=ind.get("cross_direction")=="BUY"
+    ema_sell=ind.get("cross_direction")=="SELL"
     if not (ema_buy or ema_sell):
         direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
         rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
@@ -748,12 +769,12 @@ async def auto_cycle():
     logger.info(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,D1:%s,W1:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
-      "cross_buy=%s cross_sell=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
+      "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
       "news_block=%s news_reason=%s details=%s",
       symbol,len(h1),len(h4),len(d1),len(w1),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
       ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ema_buy,ema_sell,
-      ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
+      ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
       signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
       signal.phase4_score,signal.news_block,signal.news_reason,signal.details)
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,

@@ -636,39 +636,53 @@ AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
 
 async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
-    # TickerAll can intermittently return an empty/truncated batch (stopReason=fromTs)
-    # even while other timeframes are healthy. Retry transient empty responses only;
-    # never substitute fabricated prices or weaken the strategy's candle minimums.
-    clean=[]
+    # TickerAll sometimes returns empty/truncated long-lookback batches while
+    # shorter lookbacks contain valid broker candles. Retry the original request,
+    # then fall back to progressively shorter lookbacks. Keep only genuine,
+    # completed broker candles; global H1/H4 minimums remain enforced below.
+    required={"H1":60,"H4":50}.get(timeframe,2)
+    windows=[hours]
+    if not allow_insufficient and hours>=200:
+        windows.extend(sorted({max(100,hours//2),max(100,hours//4)},reverse=True))
+    best=[]
     last_payload=None
-    for attempt in range(3):
-        payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
-        last_payload=payload
-        rows=payload.get("candles",[]) if isinstance(payload,dict) else []
-        if not isinstance(rows,list):
-            raise RuntimeError(f"{timeframe} candle payload invalid")
-        parsed=[]
-        for x in rows:
-            try:
-                parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),"high":float(x["high"]),
-                  "low":float(x["low"]),"close":float(x["close"]),"tick_volume":float(x.get("tickVolume") or 0)})
-            except (KeyError,TypeError,ValueError):
-                continue
-        parsed.sort(key=lambda x:x["timestamp"])
-        # TickerAll includes the currently forming candle; exclude it before validation.
-        if len(parsed)>1:
-            clean=parsed[:-1]
-            break
-        clean=parsed
-        if attempt<2:
-            logger.warning("AUTO candle retry symbol=%s timeframe=%s attempt=%s raw=%s valid=%s stop=%s",
-                symbol,timeframe,attempt+1,len(rows),len(parsed),
-                (payload.get("stopReason") if isinstance(payload,dict) else "invalid_payload"))
-            await asyncio.sleep(1.5*(attempt+1))
-    if len(clean)<2 and not allow_insufficient:
+    for window_index,window_hours in enumerate(windows):
+        attempts=3 if window_index==0 else 2
+        for attempt in range(attempts):
+            payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={window_hours}")
+            last_payload=payload
+            rows=payload.get("candles",[]) if isinstance(payload,dict) else []
+            if not isinstance(rows,list):
+                raise RuntimeError(f"{timeframe} candle payload invalid")
+            parsed=[]
+            for x in rows:
+                try:
+                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),"high":float(x["high"]),
+                      "low":float(x["low"]),"close":float(x["close"]),"tick_volume":float(x.get("tickVolume") or 0)})
+                except (KeyError,TypeError,ValueError):
+                    continue
+            parsed.sort(key=lambda x:x["timestamp"])
+            # TickerAll includes the currently forming candle; exclude it.
+            clean=parsed[:-1] if len(parsed)>1 else parsed
+            if len(clean)>len(best):
+                best=clean
+            if len(clean)>=required:
+                if window_index or attempt:
+                    logger.info("AUTO candle history recovered symbol=%s timeframe=%s requested_hours=%s used_hours=%s bars=%s",
+                                symbol,timeframe,hours,window_hours,len(clean))
+                return pd.DataFrame(clean)
+            if attempt<attempts-1:
+                logger.warning("AUTO candle retry symbol=%s timeframe=%s hours=%s attempt=%s raw=%s valid=%s stop=%s",
+                    symbol,timeframe,window_hours,attempt+1,len(rows),len(parsed),
+                    (payload.get("stopReason") if isinstance(payload,dict) else "invalid_payload"))
+                await asyncio.sleep(1.5*(attempt+1))
+        if window_index+1<len(windows):
+            logger.warning("AUTO candle lookback fallback symbol=%s timeframe=%s hours=%s next_hours=%s best_completed=%s",
+                           symbol,timeframe,window_hours,windows[window_index+1],len(best))
+    if len(best)<2 and not allow_insufficient:
         stop=(last_payload.get("stopReason") if isinstance(last_payload,dict) else "invalid_payload")
-        raise RuntimeError(f"Insufficient completed {timeframe} candles after 3 attempts: {len(clean)}; stop={stop}")
-    return pd.DataFrame(clean)
+        raise RuntimeError(f"Insufficient completed {timeframe} candles after retries/fallback: {len(best)}; stop={stop}")
+    return pd.DataFrame(best)
 
 def strategy_indicators(df):
     close=df["close"]

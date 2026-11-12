@@ -830,7 +830,7 @@ async def auto_cycle():
         sess_ok=(13<=now_utc.hour<17 and now_utc.weekday()<5)
         signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
     stamp=float(h1["timestamp"].iloc[-1])
-    logger.info(
+    print(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,D1:%s,W1:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
       "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
@@ -896,41 +896,43 @@ async def auto_cycle():
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
     global AUTO_TASK
-    logger.info("AUTO_START_REQUEST received")
+    print("AUTO_START_REQUEST received",flush=True)
     auth(authorization)
     row,detail=await account_detail()
     if detail.get("isDemo") is not True:
-        logger.warning("AUTO_START_BLOCKED reason=account_not_demo")
+        print("AUTO_START_BLOCKED reason=account_not_demo",flush=True)
         raise HTTPException(403,"AUTO is DEMO-only")
     if not EXECUTION_ENABLED:
-        logger.warning("AUTO_START_BLOCKED reason=execution_disabled")
+        print("AUTO_START_BLOCKED reason=execution_disabled",flush=True)
         raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
     async with AUTO_LOCK:
         if AUTO_TASK and not AUTO_TASK.done():
-            logger.info("AUTO_START_ALREADY_RUNNING")
+            print("AUTO_START_ALREADY_RUNNING",flush=True)
             return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
         AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
-        logger.info("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true")
+        print("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true",flush=True)
         async def runner():
             while AUTO_STATE["running"]:
                 cycle_started=time.monotonic()
                 AUTO_STATE["last_cycle_started_at"]=datetime.now(timezone.utc).isoformat()
                 try:
-                    logger.info("AUTO_CYCLE_STARTED symbol=XAUUSD")
+                    print("AUTO_CYCLE_STARTED symbol=XAUUSD",flush=True)
                     await auto_cycle()
                     duration=time.monotonic()-cycle_started
                     AUTO_STATE["cycle_count"]=int(AUTO_STATE.get("cycle_count",0))+1
                     AUTO_STATE["last_cycle_duration_seconds"]=round(duration,2)
-                    logger.info("AUTO_CYCLE_COMPLETED duration_seconds=%.2f action=%s signal=%s",
-                                duration,AUTO_STATE.get("last_action"),
-                                AUTO_STATE.get("last_signal"))
+                    print("AUTO_CYCLE_COMPLETED duration_seconds=%.2f action=%s signal=%s" %
+                          (duration,AUTO_STATE.get("last_action"),
+                           AUTO_STATE.get("last_signal")),flush=True)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     duration=time.monotonic()-cycle_started
                     AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR",
                                        "last_cycle_duration_seconds":round(duration,2)})
-                    logger.exception("DioMasteR AUTO cycle blocked")
+                    import traceback
+                    print("DioMasteR AUTO cycle blocked: %s" % str(exc)[:350],flush=True)
+                    traceback.print_exc()
                 await asyncio.sleep(60)
         AUTO_TASK=asyncio.create_task(runner())
     return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}

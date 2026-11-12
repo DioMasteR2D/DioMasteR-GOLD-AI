@@ -726,9 +726,13 @@ async def auto_cycle():
         AUTO_STATE["initial_equity"]=equity_now
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
+    # Request bounded windows matching the broker history actually served:
+    # observed H1 coverage is ~294 bars for 400h and H4 ~216 bars for 1200h.
+    # Asking for a full year can trigger oversized/empty history responses on
+    # some TickerAll sessions; the strategy only needs 60 H1 and 50 H4 bars.
     h1,h4,d1,w1=await asyncio.gather(
-      strategy_frame(row["id"],symbol,"H1",8760),
-      strategy_frame(row["id"],symbol,"H4",8760),
+      strategy_frame(row["id"],symbol,"H1",400),
+      strategy_frame(row["id"],symbol,"H4",1200),
       strategy_frame(row["id"],symbol,"D1",8760,allow_insufficient=True),
       strategy_frame(row["id"],symbol,"W1",8760,allow_insufficient=True))
     # TickerAll can return very short native D1/W1 history even when H4
@@ -763,7 +767,8 @@ async def auto_cycle():
         direction="BUY" if ema_buy else "SELL"
         rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)
         mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
-        sess_ok=13<=datetime.now(timezone.utc).hour<17
+        now_utc=datetime.now(timezone.utc)
+        sess_ok=(13<=now_utc.hour<17 and now_utc.weekday()<5)
         signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
     stamp=float(h1["timestamp"].iloc[-1])
     logger.info(

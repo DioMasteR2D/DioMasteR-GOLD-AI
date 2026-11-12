@@ -821,7 +821,8 @@ async def auto_cycle():
         mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
         sess_ok=(6<=datetime.now(timezone.utc).hour<20 and datetime.now(timezone.utc).weekday()<5)
         signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
-        signal.direction="HOLD"
+        # When there is no fresh crossover, retain the confirmed EMA trend direction.
+        # RSI, H4, SMC, fundamentals, news and the unified score still gate every entry.
     else:
         direction="BUY" if ema_buy else "SELL"
         rsi_ok=(direction=="BUY" and 50<ind["rsi"]<65) or (direction=="SELL" and 35<ind["rsi"]<50)

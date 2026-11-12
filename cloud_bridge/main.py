@@ -99,8 +99,8 @@ _stream_task=None
 STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
 async def live_tick_stream():
-    # Reconnect indefinitely with bounded exponential backoff. A clean server
-    # close must also retry (the old async-for path could reconnect too fast).
+    # Keep the TickerAll realtime stream alive, verify subscription acceptance,
+    # and reconnect if the socket is connected but stops delivering messages.
     retry_delay = 3
     max_retry_delay = 20
     while True:
@@ -112,75 +112,133 @@ async def live_tick_stream():
             symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
             symbols=symbols_data.get("symbols",[])
             symbol=choose_symbol(symbols)
-            STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None})
-            logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s",symbol)
+            account_id=str(row["id"])
+            correlation_id="diomaster-"+uuid.uuid4().hex[:12]
+            STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None,
+                                      "last_message_type":None})
+            logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s account_id=%s",
+                        symbol,account_id)
             url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
             async with websockets.connect(
-                url,
-                ping_interval=10,
-                ping_timeout=30,
-                close_timeout=5,
-                open_timeout=15,
-                max_queue=256
+                url, ping_interval=10, ping_timeout=30, close_timeout=5,
+                open_timeout=15, max_queue=256
             ) as ws:
                 connected = True
                 STREAM_DIAGNOSTIC.update({"state":"connected_subscribing","connected_at":time.time()})
-                logger.info("TickerAll WebSocket connected; sending tick subscription for %s",symbol)
-                await ws.send(json.dumps({"type":"subscribe","channels":[
-                    {"kind":"ticks","accountId":row["id"],"symbols":[symbol]}]}))
-                async for raw in ws:
+                subscribe={"type":"subscribe","channels":[
+                    {"kind":"ticks","accountId":account_id,"symbols":[symbol]}],
+                    "correlationId":correlation_id}
+                await ws.send(json.dumps(subscribe))
+                logger.info("TickerAll WebSocket subscription sent; symbol=%s correlation_id=%s",
+                            symbol,correlation_id)
+                last_rx=time.monotonic()
+                last_ping=last_rx
+                missed_heartbeats=0
+                subscribed=False
+                while True:
+                    try:
+                        raw=await asyncio.wait_for(ws.recv(),timeout=20)
+                    except asyncio.TimeoutError:
+                        # TickerAll supports an application-level ping/pong in
+                        # addition to WebSocket protocol pings.
+                        await ws.send(json.dumps({"type":"ping"}))
+                        missed_heartbeats+=1
+                        logger.warning("TickerAll stream heartbeat sent; symbol=%s missed=%s",
+                                       symbol,missed_heartbeats)
+                        if missed_heartbeats>=3:
+                            raise TimeoutError("TickerAll stream silent for 60 seconds")
+                        continue
+                    last_rx=time.monotonic()
+                    missed_heartbeats=0
                     msg=json.loads(raw)
+                    if not isinstance(msg,dict):
+                        logger.warning("TickerAll stream ignored non-object frame")
+                        continue
                     msg_type=str(msg.get("type") or msg.get("event") or "unknown")
                     STREAM_DIAGNOSTIC["last_message_type"]=msg_type
+                    if msg_type=="subscribed":
+                        accepted=msg.get("channels",[])
+                        rejected=msg.get("rejected",[])
+                        if rejected or not any(
+                            ch.get("kind")=="ticks" and str(ch.get("accountId"))==account_id
+                            and symbol in ch.get("symbols",[]) for ch in accepted if isinstance(ch,dict)
+                        ):
+                            detail=json.dumps({"accepted":accepted,"rejected":rejected},ensure_ascii=False)[:500]
+                            raise RuntimeError("TickerAll tick subscription not accepted: "+detail)
+                        subscribed=True
+                        STREAM_DIAGNOSTIC.update({"state":"subscribed_waiting_for_tick","last_error":None})
+                        logger.info("TickerAll tick subscription accepted; symbol=%s",symbol)
+                        continue
+                    if msg_type=="error":
+                        raise RuntimeError("TickerAll stream error: "+str(msg.get("code"))+" "+str(msg.get("message"))[:250])
+                    if msg_type=="ping":
+                        await ws.send(json.dumps({"type":"pong"}))
+                        continue
+                    if msg_type=="pong":
+                        last_ping=time.monotonic()
+                        STREAM_DIAGNOSTIC.update({"state":"heartbeat_ok"})
+                        continue
                     if msg_type!="tick":
-                        logger.info("TickerAll WebSocket message received; type=%s keys=%s",msg_type,sorted(msg.keys())[:20])
-                    if msg_type=="tick" and msg.get("symbol")==symbol:
-                        bid=float(msg.get("bid") or 0); ask=float(msg.get("ask") or 0)
-                        stamp=msg.get("timestamp")
-                        if isinstance(stamp,str):
-                            ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
-                        else: ts=float(stamp or 0)
-                        if bid>0 and ask>=bid and ts>0:
-                            now=time.time()
-                            LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
-                              "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
-                              "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
-                            record_live_m1_tick(symbol,ts,bid,ask)
-                            STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
-                            retry_delay = 3
-                        else:
-                            logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
-            # The server may close cleanly without raising. Treat that as a
-            # disconnect, invalidate the cached quote and reconnect slowly.
-            raise ConnectionError("TickerAll WebSocket closed the stream")
+                        logger.info("TickerAll WebSocket message received; type=%s keys=%s",
+                                    msg_type,sorted(msg.keys())[:20])
+                        continue
+                    if msg.get("symbol")!=symbol:
+                        continue
+                    if msg.get("accountId") and str(msg.get("accountId"))!=account_id:
+                        logger.warning("TickerAll tick ignored for unexpected account; symbol=%s",symbol)
+                        continue
+                    bid=float(msg.get("bid") or 0)
+                    ask=float(msg.get("ask") or 0)
+                    stamp=msg.get("timestamp")
+                    if isinstance(stamp,str):
+                        ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
+                    else:
+                        ts=float(stamp or 0)
+                    if bid<=0 or ask<bid or ts<=0:
+                        logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
+                        continue
+                    now=time.time()
+                    is_stale=bool(msg.get("stale",False))
+                    LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
+                      "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
+                      "stale":is_stale,"account_mode":"DEMO"}
+                    if not is_stale:
+                        record_live_m1_tick(symbol,ts,bid,ask)
+                        STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
+                        retry_delay=3
+                    else:
+                        STREAM_DIAGNOSTIC.update({"state":"stale_last_quote","last_error":"TickerAll sent stale last-known quote"})
+                    if not subscribed:
+                        logger.warning("TickerAll delivered a tick before subscription acknowledgement")
         except asyncio.CancelledError:
             STREAM_DIAGNOSTIC["state"]="stopped"
             raise
         except HTTPException as exc:
             if symbol:
-                LIVE_TICKS.pop(symbol, None)
-            recovery_error = None
-            if exc.status_code == 409:
+                LIVE_TICKS.pop(symbol,None)
+            recovery_error=None
+            if exc.status_code==409:
                 try:
                     await create_demo_session("TickerAll WebSocket rejected account with HTTP 409")
                 except Exception as recovery_exc:
-                    recovery_error = str(recovery_exc)[:200]
-            message = "HTTPException " + str(exc.status_code) + ": " + str(exc.detail)[:220]
+                    recovery_error=str(recovery_exc)[:200]
+            message="HTTPException "+str(exc.status_code)+": "+str(exc.detail)[:220]
             if recovery_error:
-                message += " | recovery: " + recovery_error
+                message+=" | recovery: "+recovery_error
             STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":message})
             logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
-                           connected, retry_delay, message)
+                           connected,retry_delay,message)
             await asyncio.sleep(retry_delay)
-            retry_delay = min(max_retry_delay, retry_delay * 2)
+            retry_delay=min(max_retry_delay,retry_delay*2)
         except Exception as exc:
             if symbol:
-                LIVE_TICKS.pop(symbol, None)
-            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":f"{type(exc).__name__}: {str(exc)[:300]}"})
+                LIVE_TICKS.pop(symbol,None)
+            message=f"{type(exc).__name__}: {str(exc)[:300]}"
+            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":message})
             logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
-                           connected, retry_delay, f"{type(exc).__name__}: {str(exc)[:200]}")
+                           connected,retry_delay,message)
             await asyncio.sleep(retry_delay)
-            retry_delay = min(max_retry_delay, retry_delay * 2)
+            retry_delay=min(max_retry_delay,retry_delay*2)
 
 @app.on_event("startup")
 async def start_live_stream():

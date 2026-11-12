@@ -687,6 +687,17 @@ async def auto_cycle():
         sess_ok=13<=datetime.now(timezone.utc).hour<17
         signal=await asyncio.to_thread(get_unified_signal,h1,h4,direction,rsi_ok,mtf_ok,sess_ok,MIN_UNIFIED_SCORE,d1,w1)
     stamp=float(h1["timestamp"].iloc[-1])
+    logger.info(
+      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,D1:%s,W1:%s bar=%s "
+      "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
+      "cross_buy=%s cross_sell=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
+      "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
+      "news_block=%s news_reason=%s details=%s",
+      symbol,len(h1),len(h4),len(d1),len(w1),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
+      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ema_buy,ema_sell,
+      ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
+      signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
+      signal.phase4_score,signal.news_block,signal.news_reason,signal.details)
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
       "last_signal":{"direction":signal.direction,"score":signal.total_score,"phase1":signal.phase1_score,
        "smc":signal.phase2_score,"fundamental":signal.phase4_score,"news_block":signal.news_block,
@@ -705,6 +716,9 @@ async def auto_cycle():
             AUTO_STATE["last_action"]=f"SMART_EXIT_{side}_{ticket}"
     if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
         if not bot: AUTO_STATE["last_action"]="HOLD"
+        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
+          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
+          signal.direction,signal.total_score,MIN_UNIFIED_SCORE,signal.news_block)
         return
     if bot: AUTO_STATE["last_action"]="POSITION_ALREADY_OPEN"; return
     if AUTO_STATE.get("last_entry_bar_time")==stamp:

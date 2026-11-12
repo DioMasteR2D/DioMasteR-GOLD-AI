@@ -155,10 +155,12 @@ def _fetch_fred_series(series_id: str, limit: int = 24) -> Optional[list]:
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            if not isinstance(data, list):
-                raise ValueError("ForexFactory calendar payload is not a list")
-            EVENTS_SOURCE_OK = True
-            obs = [o for o in data.get("observations", []) if o["value"] != "."]
+            if not isinstance(data, dict):
+                raise ValueError("FRED response is not a JSON object")
+            observations = data.get("observations", [])
+            if not isinstance(observations, list):
+                raise ValueError("FRED observations field is not a list")
+            obs = [o for o in observations if isinstance(o, dict) and o.get("value") not in (None, ".")]
             return obs
     except Exception as e:
         print(f"  ⚠️  FRED API error ({series_id}): {e}")
@@ -389,6 +391,9 @@ def get_upcoming_events() -> list[EconomicEvent]:
 
         if resp.status_code == 200:
             data = resp.json()
+            if not isinstance(data, list):
+                raise ValueError("ForexFactory calendar response is not a JSON list")
+            EVENTS_SOURCE_OK = True
             now_utc = datetime.now(timezone.utc)
 
             for item in data:

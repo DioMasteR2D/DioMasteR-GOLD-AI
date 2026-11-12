@@ -624,8 +624,17 @@ async def auto_cycle():
       strategy_frame(row["id"],symbol,"H4",8760),
       strategy_frame(row["id"],symbol,"D1",8760),
       strategy_frame(row["id"],symbol,"W1",8760))
-    if len(h1)<300 or len(h4)<50 or len(d1)<20 or len(w1)<10:
-        raise RuntimeError("Not enough closed H1/H4/D1/W1 candles for the full strategy")
+    # The broker may return fewer than 300 H1 bars for a one-year request
+    # (weekends/market closures and provider history limits). The strategy
+    # indicators need 21 bars; SMC detectors use a 50-bar H1 lookback.
+    # Keep conservative minimums per timeframe without demanding an
+    # arbitrary 300 H1 bars that the broker does not provide.
+    minimums = {"H1": 60, "H4": 50, "D1": 20, "W1": 10}
+    available = {"H1": len(h1), "H4": len(h4), "D1": len(d1), "W1": len(w1)}
+    missing = {tf: count for tf, count in available.items() if count < minimums[tf]}
+    if missing:
+        detail = ", ".join(f"{tf}={count}/{minimums[tf]}" for tf, count in missing.items())
+        raise RuntimeError(f"Insufficient completed broker candles: {detail}; available={available}")
     ind=strategy_indicators(h1); h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     ema_buy=ind["ema9"]>ind["ema21"] and ind["ema9_prev"]<=ind["ema21_prev"]
     ema_sell=ind["ema9"]<ind["ema21"] and ind["ema9_prev"]>=ind["ema21_prev"]

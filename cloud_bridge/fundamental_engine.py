@@ -233,7 +233,8 @@ def get_cpi_data() -> dict:
         else:
             result["details"] = f"CPI {latest:.2f} (MoM: {mom:+.3f}%)"
 
-    if result["value"] is not None:\n        _cache_set("cpi", result)
+    if result["value"] is not None:
+        _cache_set("cpi", result)
     return result
 
 
@@ -285,7 +286,8 @@ def get_fed_rate_data() -> dict:
                 result["signal"]  = "NEUTRAL"
                 result["details"] = f"Fed on hold at {current:.2f}%"
 
-    if result["rate"] is not None:\n        _cache_set("fomc", result)
+    if result["rate"] is not None:
+        _cache_set("fomc", result)
     return result
 
 
@@ -325,7 +327,8 @@ def get_nfp_data() -> dict:
             result["signal"]  = "NEUTRAL"
             result["details"] = f"NFP in-line (+{mom:.0f}k jobs) — neutral"
 
-    if result["value"] is not None:\n        _cache_set("nfp", result)
+    if result["value"] is not None:
+        _cache_set("nfp", result)
     return result
 
 # ─────────────────────────────────────────────
@@ -373,7 +376,8 @@ def get_dxy_data() -> dict:
             result["signal"] = "NEUTRAL"
             result["details"] = f"DXY flat ({pct_change_week:+.2f}% this week) — neutral"
 
-    if result["value"] is not None:\n        _cache_set("dxy", result)
+    if result["value"] is not None:
+        _cache_set("dxy", result)
     return result
 
 # ─────────────────────────────────────────────
@@ -538,7 +542,7 @@ def get_fundamental_signal() -> FundamentalSignal:
     nfp  = get_nfp_data()
     events = get_upcoming_events()
 
-    if (not FRED_API_KEY or any(x.get("value") is None for x in (dxy,cpi,fed,nfp)) or not EVENTS_SOURCE_OK):
+    if (any(x.get("value") is None for x in (dxy,cpi,nfp)) or fed.get("rate") is None or not EVENTS_SOURCE_OK):
         raise RuntimeError("Fundamental data incomplete or USD news calendar unavailable; entries blocked")
 
     # Score each signal

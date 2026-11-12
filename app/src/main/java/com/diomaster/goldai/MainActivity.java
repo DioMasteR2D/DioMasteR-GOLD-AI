@@ -1,6 +1,8 @@
 package com.diomaster.goldai;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Canvas;
@@ -739,10 +741,28 @@ public class MainActivity extends Activity {
         String[] statusLabels = {"● LIVE", "☁ Render", "✦ AI Agent", "▤ MT5 DEMO"};
         int[] statusColors = {quoteFresh() ? GREEN : RED, 0xFFE8E8EA, aiEngineStarted ? GREEN : GOLD, mt5Connected ? GREEN : RED};
         for (int i=0;i<statusLabels.length;i++) {
+            final int statusIndex = i;
             TextView pill = text(statusLabels[i], 9, statusColors[i], true);
             pill.setGravity(Gravity.CENTER);
             pill.setPadding(dp(3), dp(9), dp(3), dp(9));
             pill.setBackground(goldShell(0xFF090909, 0xFF74541B));
+            pill.setClickable(true);
+            pill.setFocusable(true);
+            pill.setOnClickListener(v -> {
+                switch (statusIndex) {
+                    case 0: configureMt5Bridge(); break;
+                    case 1:
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://diomaster-gold-ai-metaapi-demo.onrender.com/health")));
+                        } catch (Exception e) {
+                            Toast.makeText(this, "Δεν είναι διαθέσιμο το πρόγραμμα περιήγησης.", Toast.LENGTH_SHORT).show();
+                        }
+                        break;
+                    case 2: scrollToSection(agentSection); break;
+                    case 3: showMt5Positions(); break;
+                }
+            });
+            pill.setContentDescription(statusLabels[i] + " — πάτησε για λεπτομέρειες");
             LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(0, -2, 1);
             pl.setMargins(dp(2), 0, dp(2), 0);
             statusStrip.addView(pill, pl);

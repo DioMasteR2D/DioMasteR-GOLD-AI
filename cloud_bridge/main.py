@@ -864,42 +864,41 @@ async def auto_cycle():
                              {"stopLoss":lock_price},idem=True)
                     logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s entry=%.5f stop=%.5f locked_R=0.5",
                                 ticket,entry,lock_price)
-    # FAST sniper management: lock a small profit after +0.65R, then
-    # close on a confirmed H1 momentum reversal while the trade is green.
-    # Broker SL/TP remain the hard protective exits at all times.
-    for p in bot:
-        if "RUNNER" in str(p.get("comment","")).upper():
-            continue  # Legacy RUNNER positions retain their original broker SL/TP.
-        side=str(p.get("side","")).upper()
-        entry=float(p.get("entryPrice") or 0)
-        current=float(p.get("currentPrice") or 0)
-        tp_existing=float(p.get("takeProfit") or 0)
-        sl_existing=float(p.get("stopLoss") or 0)
-        profit=float(p.get("profit") or 0)
-        one_r=abs(tp_existing-entry) if entry>0 and tp_existing>0 else 0.0
-        if side in ("BUY","SELL") and entry>0 and current>0 and one_r>0:
+    # Three FAST legs are managed as one basket.
+    fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
+    basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
+    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
+    opposite=(basket_side=="BUY" and ind["ema9"]<ind["ema21"]) or (basket_side=="SELL" and ind["ema9"]>ind["ema21"])
+    reversal=(basket_side=="BUY" and ind["rsi"]>=70) or (basket_side=="SELL" and ind["rsi"]<=30)
+    for p in fast_bot:
+        side=str(p.get("side") or "").upper()
+        entry=float(p.get("entryPrice") or 0); current=float(p.get("currentPrice") or 0)
+        tp=float(p.get("takeProfit") or 0); sl_now=float(p.get("stopLoss") or 0)
+        one_r=abs(tp-entry) if entry>0 and tp>0 else 0.0
+        if side in ("BUY","SELL") and one_r>0 and current>0:
             reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
-            lock_price=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
-            already_locked=(sl_existing>=lock_price if side=="BUY" else sl_existing<=lock_price)
-            if reached and not already_locked:
+            lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
+            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
+            if reached and not locked:
                 ticket=int(p.get("ticket") or 0)
-                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",
-                         {"stopLoss":lock_price},idem=True)
-                logger.info("AUTO_FAST_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
-        opposite=(side=="BUY" and ind["ema9"]<ind["ema21"]) or (side=="SELL" and ind["ema9"]>ind["ema21"])
-        reversal=(side=="BUY" and ind["rsi"]>=70) or (side=="SELL" and ind["rsi"]<=30)
-        if profit>0 and (opposite or reversal):
+                await ta("PATCH","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{"stopLoss":lock},idem=True)
+                logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s",ticket)
+    if fast_bot and basket_profit>0 and (opposite or reversal):
+        closed_tickets=[]
+        for p in fast_bot:
             ticket=int(p.get("ticket") or 0)
-            await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
-            AUTO_STATE["last_action"]=f"SMART_EXIT_{side}_{ticket}"
+            await ta("DELETE","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{},idem=True)
+            closed_tickets.append(ticket)
+        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
+        logger.info("AUTO_FAST_BASKET_CLOSED tickets=%s basket_profit=%.2f",closed_tickets,basket_profit)
     if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
         if not bot: AUTO_STATE["last_action"]="HOLD"
         logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
           "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
           signal.direction,signal.total_score,MIN_UNIFIED_SCORE,signal.news_block)
         return
-    if len(bot)>=MAX_BOT_POSITIONS:
-        AUTO_STATE["last_action"]="MAX_THREE_FAST_POSITIONS"; return
+    if bot:
+        AUTO_STATE["last_action"]="FAST_BASKET_ALREADY_OPEN"; return
     if AUTO_STATE.get("last_entry_bar_time")==stamp:
         AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_M5_BAR"; return
     if not EXECUTION_ENABLED:
@@ -954,19 +953,34 @@ async def auto_cycle():
     sl=float(signal.stop_loss)
     fast_tp=price+risk_distance if signal.direction=="BUY" else price-risk_distance
     per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
-    if per_leg_risk>equity*MAX_RISK_FRACTION:
-        AUTO_STATE["last_action"]="BLOCKED_FAST_RISK_CAP"; return
-    if AUTO_STATE["trades_today"]+1>AUTO_MAX_TRADES_PER_DAY:
+    if per_leg_risk*3>equity*MAX_RISK_FRACTION:
+        AUTO_STATE["last_action"]="BLOCKED_THREE_LEG_AGGREGATE_RISK_CAP"; return
+    if AUTO_STATE["trades_today"]+3>AUTO_MAX_TRADES_PER_DAY:
         AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
-    fast_req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
-      client_order_id="AUTOFAST"+uuid.uuid4().hex[:12],order_origin="AUTO")
-    fast_result=await order(fast_req,authorization="Bearer "+BRIDGE_TOKEN)
-    AUTO_STATE["trades_today"]+=1
-    AUTO_STATE["last_entry_bar_time"]=stamp
-    AUTO_STATE["last_action"]="OPENED_FAST_"+signal.direction
-    AUTO_STATE["last_order"]={"fast":fast_result,"volume":volume,
-                              "target_R":1.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10,
-                              "max_auto_positions":MAX_BOT_POSITIONS}
+    opened=[]
+    try:
+        for leg in range(3):
+            req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
+              client_order_id="AUTOFAST"+uuid.uuid4().hex[:12],order_origin="AUTO")
+            opened.append(await order(req,authorization="Bearer "+BRIDGE_TOKEN))
+    except Exception as exc:
+        rollback_errors=[]
+        for result in reversed(opened):
+            ticket=int(result.get("order") or 0)
+            if ticket:
+                try: await ta("DELETE","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{},idem=True)
+                except Exception as rollback_exc: rollback_errors.append(str(rollback_exc)[:120])
+            else: rollback_errors.append("opened leg ticket missing")
+        AUTO_STATE["last_action"]="FAST_BASKET_ENTRY_ROLLED_BACK" if not rollback_errors else "FAST_BASKET_PARTIAL_ROLLBACK_UNCONFIRMED"
+        AUTO_STATE["last_error"]=str(exc)[:180]+((" | rollback: "+"; ".join(rollback_errors)) if rollback_errors else "")
+        AUTO_STATE["last_order"]={"opened_legs":opened,"rollback_errors":rollback_errors}
+        AUTO_STATE["trades_today"]+=len(opened); AUTO_STATE["last_entry_bar_time"]=stamp
+        return
+    AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
+    AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
+    AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
+      "aggregate_volume":round(volume*3,4),"target_R":1.0,"profit_lock_at_R":0.65,
+      "locked_profit_R":0.10,"max_auto_positions":3}
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):

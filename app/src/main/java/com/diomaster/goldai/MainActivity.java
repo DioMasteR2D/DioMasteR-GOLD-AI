@@ -1083,6 +1083,16 @@ public class MainActivity extends Activity {
         addRow(homeStats,"Win Rate",homeWinRate,GOLD);
         addRow(homeStats,"Καθαρό P/L",PaperTradingEngine.money(homeNet),homeNet>=0?GREEN:RED);
         if(useBrokerAccount && homeTrades==0) homeStats.addView(text("Δεν έχουν επιστραφεί κλεισμένες συναλλαγές MT5 ακόμη. Οι ανοιχτές θέσεις δεν υπολογίζονται.",9,MUTED,false));
+        if(useBrokerAccount && homeClosed.length()>0) {
+            addDivider(homeStats);
+            addLabel(homeStats,"ΠΡΟΣΦΑΤΑ ΚΛΕΙΣΙΜΑΤΑ MT5");
+            for(int n=0;n<Math.min(3,homeClosed.length());n++) {
+                JSONObject tr=homeClosed.optJSONObject(n); if(tr==null) continue;
+                double result=tr.optDouble("profit",0.0);
+                addRow(homeStats,"#"+tr.optString("ticket")+" "+tr.optString("side")+" · "+tr.optString("closeTime",tr.optString("close_time","")),
+                        PaperTradingEngine.money(result),result>=0?GREEN:RED);
+            }
+        }
         LinearLayout.LayoutParams overviewHalf=new LinearLayout.LayoutParams(0,-2,1);
         overviewHalf.setMargins(dp(2),0,dp(4),0);
         overviewRow.addView(homePositions,overviewHalf);
@@ -1209,7 +1219,7 @@ public class MainActivity extends Activity {
         LinearLayout history = card();
         historySection = history;
         addLabel(history, mt5Status != null && mt5Status.startsWith("DEMO") ? "ΙΣΤΟΡΙΚΟ MT5 DEMO · ΑΠΟΔΟΣΗ" : "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
-        JSONArray closed = snap.optJSONArray("history");
+        JSONArray closed = (mt5Status != null && mt5Status.startsWith("DEMO")) ? mt5ClosedHistory : snap.optJSONArray("history");
         if (closed == null) closed = new JSONArray();
         int winCount = 0, lossCount = 0;
         double netClosedPnl = 0.0;
@@ -1229,12 +1239,12 @@ public class MainActivity extends Activity {
         addSpace(5);
         LinearLayout historyStatsBottom = new LinearLayout(this);
         historyStatsBottom.setOrientation(LinearLayout.HORIZONTAL);
-        historyStatsBottom.addView(metric("NET PAPER P/L", PaperTradingEngine.money(netClosedPnl), netClosedPnl >= 0 ? GREEN : RED), weight());
+        historyStatsBottom.addView(metric(mt5Status != null && mt5Status.startsWith("DEMO") ? "NET MT5 P/L" : "NET PAPER P/L", PaperTradingEngine.money(netClosedPnl), netClosedPnl >= 0 ? GREEN : RED), weight());
         String winRate = (winCount + lossCount) > 0 ? String.format(Locale.US, "%.1f%%", 100.0 * winCount / (winCount + lossCount)) : "—";
         historyStatsBottom.addView(metric("WIN RATE", winRate, GOLD), weight());
         history.addView(historyStatsBottom);
         addSpace(8);
-        addLabel(history, "ΠΡΟΣΦΑΤΕΣ PAPER ΣΥΝΑΛΛΑΓΕΣ");
+        addLabel(history, mt5Status != null && mt5Status.startsWith("DEMO") ? "ΠΡΟΣΦΑΤΕΣ MT5 DEMO ΣΥΝΑΛΛΑΓΕΣ" : "ΠΡΟΣΦΑΤΕΣ PAPER ΣΥΝΑΛΛΑΓΕΣ");
         if (closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη. Τα στατιστικά θα ενημερωθούν μετά τις πρώτες πραγματικές PAPER συναλλαγές.", 12, MUTED, false));
         else {
             for (int i = 0; i < Math.min(8, closed.length()); i++) {

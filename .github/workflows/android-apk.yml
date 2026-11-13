@@ -1,7 +1,7 @@
 name: Build Android APK
 on:
   push:
-    branches: [main]
+    branches: [main, strategy/ema-9-21-h1-mtf-demo]
   pull_request:
     paths:
       - 'app/**'
@@ -20,6 +20,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up Python for cloud strategy checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend strategy dependencies
+        run: python -m pip install -r cloud_bridge/requirements.txt
+      - name: Compile and test cloud strategy
+        run: |
+          python -m compileall -q cloud_bridge
+          cd cloud_bridge
+          python -m unittest -v test_strategy test_adaptive_strategy
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -46,3 +57,7 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+# Includes backend strategy engine compilation and unit tests before APK packaging.
+
+# CI reruns against the latest cloud strategy branch head.

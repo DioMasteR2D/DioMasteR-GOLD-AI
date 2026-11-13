@@ -1,6 +1,8 @@
 package com.diomaster.goldai;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Canvas;
@@ -56,6 +58,8 @@ public class MainActivity extends Activity {
     private boolean fetching = false;
     private boolean pendingRefresh = false;
     private long lastMtfDiagnosticsAt = 0L;
+    private volatile long lastAccountRefreshAt = 0L;
+    private volatile boolean accountRefreshInFlight = false;
     private boolean activityResumed = false;
     private int fetchSequence = 0;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
@@ -70,6 +74,7 @@ public class MainActivity extends Activity {
     private double mt5Equity = 0.0;
     private boolean aiEngineStarted = false;
     private boolean autoOrderInFlight = false;
+    private boolean autoStartInFlight = false;
     private long lastAutoSignalBar = 0L;
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
@@ -113,8 +118,13 @@ public class MainActivity extends Activity {
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
-            if (activityResumed) fetchPrice();
-            if (activityResumed) handler.postDelayed(this, 30000L);
+            if (activityResumed) {
+                fetchPrice();
+                // Keep broker positions, floating P/L and closed history synchronized
+                // independently of the chart refresh and without starting/stopping AUTO.
+                if (mt5Status != null && mt5Status.startsWith("DEMO")) loadMt5AccountData();
+            }
+            if (activityResumed) handler.postDelayed(this, 3000L);
         }
     };
 
@@ -136,6 +146,7 @@ public class MainActivity extends Activity {
         mt5Currency = mt5Prefs.getString("currency", "USD");
         mt5Balance = Double.longBitsToDouble(mt5Prefs.getLong("balance_bits", Double.doubleToRawLongBits(0.0)));
         mt5Equity = Double.longBitsToDouble(mt5Prefs.getLong("equity_bits", Double.doubleToRawLongBits(0.0)));
+        restoreBackgroundMarketCache();
         startBackgroundMonitor();
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -145,6 +156,55 @@ public class MainActivity extends Activity {
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()) autoConnectMt5();
     }
 
+
+    private void restoreBackgroundMarketCache() {
+        try {
+            android.content.SharedPreferences cache = getSharedPreferences("diomaster_background_market", MODE_PRIVATE);
+            long updated = cache.getLong("updated_at", 0L);
+            if (updated <= 0L) return;
+            double mid = Double.longBitsToDouble(cache.getLong("mid_bits", Double.doubleToRawLongBits(0.0)));
+            long tick = cache.getLong("quote_at", 0L);
+            String cachedSymbol = cache.getString("symbol", mt5Symbol);
+            String cachedFrame = cache.getString("timeframe", selectedTimeframe);
+            String candles = cache.getString("candles", "");
+            if (mid > 0 && tick > 0) {
+                price = mid;
+                quoteAt = tick;
+                mt5Symbol = cachedSymbol;
+                brokerChartActive = true;
+                feedMessage = "ΤΕΛΕΥΤΑΙΑ ΑΠΟΘΗΚΕΥΜΕΝΑ BROKER ΔΕΔΟΜΕΝΑ · ΓΙΝΕΤΑΙ ΑΝΑΝΕΩΣΗ";
+            }
+            if (candles != null && !candles.isEmpty()) {
+                JSONArray rows = new JSONArray(candles);
+                if (rows.length() >= 2) {
+                    brokerCandles = rows;
+                    chartPrices.clear();
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject bar = rows.optJSONObject(i);
+                        if (bar != null && bar.optDouble("close", 0) > 0) chartPrices.add(bar.optDouble("close"));
+                    }
+                    selectedTimeframe = cachedFrame;
+                }
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void refreshCloudAutoState() {
+        if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
+                boolean running = status.optBoolean("running", false);
+                runOnUiThread(() -> {
+                    aiEngineStarted = running;
+                    autoExecutionMessage = running
+                            ? "CLOUD AUTO ΕΝΕΡΓΟ · συνεχίζει στον server DEMO"
+                            : "Cloud AUTO σταματημένο · DEMO";
+                    render();
+                });
+            } catch (Exception ignored) { }
+        }, "DioMasteR-auto-state").start();
+    }
 
     private void startBackgroundMonitor() {
         if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
@@ -206,9 +266,12 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         activityResumed = true;
+        restoreBackgroundMarketCache();
+        startBackgroundMonitor();
+        refreshCloudAutoState();
         handler.removeCallbacks(refreshLoop);
         fetchPrice(true);
-        handler.postDelayed(refreshLoop, 30000L);
+        handler.postDelayed(refreshLoop, 3000L);
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()
                 && (mt5Status == null || !mt5Status.startsWith("DEMO"))) autoConnectMt5();
     }
@@ -227,16 +290,16 @@ public class MainActivity extends Activity {
 
 
     private void startAutoTradingOnLaunch() {
+        // Never auto-start trading merely because the APK was opened.
+        // Cloud AUTO must be explicitly started by the user.
         new Thread(() -> {
             String result;
             try {
-                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                JSONObject status = client.status();
-                if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected") || !status.optBoolean("execution_enabled"))
-                    throw new IllegalStateException("Το MT5 δεν είναι συνδεδεμένο σε ενεργό DEMO execution.");
-                JSONObject started = client.autoStart();
-                result = started.optBoolean("running") ? "DioMasteR AI AUTO ξεκίνησε στο Vantage DEMO." : "Η αυτόματη λειτουργία δεν ξεκίνησε.";
-            } catch(Exception e) { result = "AI AUTO σε αναμονή: " + e.getMessage(); }
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
+                result = status.optBoolean("running")
+                        ? "Cloud AUTO DEMO συνεχίζει ήδη στον server."
+                        : "Cloud AUTO παραμένει σταματημένο μέχρι να το ξεκινήσεις.";
+            } catch(Exception e) { result = "Cloud AUTO: " + e.getMessage(); }
             final String message = result;
             runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
         }).start();
@@ -263,6 +326,13 @@ public class MainActivity extends Activity {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
                     // Load the selected execution timeframe first, then obtain the freshest broker tick.
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
+                    // Independent strategy feeds: fixed H1 entry timeframe and H4 trend filter.
+                    JSONObject strategyH1Data = client.candles(mt5Symbol, "H1", 400);
+                    JSONObject strategyH4Data = client.candles(mt5Symbol, "H4", 1200);
+                    JSONArray strategyH1 = strategyH1Data.optJSONArray("candles");
+                    JSONArray strategyH4 = strategyH4Data.optJSONArray("candles");
+                    if (strategyH1 == null || strategyH4 == null)
+                        throw new IllegalStateException("Λείπουν τα H1/H4 candles της στρατηγικής.");
                     JSONArray rows = candleData.optJSONArray("candles");
                     if (rows == null || rows.length() < 2)
                         throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
@@ -278,6 +348,8 @@ public class MainActivity extends Activity {
                         throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
                     double latest = (bid + ask) / 2.0;
                     final JSONArray bars = rows;
+                    final JSONArray h1Bars = strategyH1;
+                    final JSONArray h4Bars = strategyH4;
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
@@ -292,6 +364,13 @@ public class MainActivity extends Activity {
                             return;
                         }
                         price = latest; quoteAt = receivedAt;
+                        getSharedPreferences("diomaster_background_market", MODE_PRIVATE).edit()
+                                .putString("symbol", mt5Symbol).putString("timeframe", effectiveTimeframe)
+                                .putLong("mid_bits", Double.doubleToRawLongBits(latest))
+                                .putLong("bid_bits", Double.doubleToRawLongBits(bid))
+                                .putLong("ask_bits", Double.doubleToRawLongBits(ask))
+                                .putLong("quote_at", receivedAt).putLong("updated_at", System.currentTimeMillis())
+                                .putBoolean("connected", true).putString("candles", bars.toString()).apply();
                         brokerCandles = bars; brokerChartActive = true;
                         chartPrices.clear();
                         for (int i=0;i<bars.length();i++) {
@@ -301,10 +380,10 @@ public class MainActivity extends Activity {
                         feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + effectiveTimeframe +
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
-                        aiSignal = GoldAiAgent.analyze(chartPrices, latest);
+                        aiSignal = GoldAiAgent.analyze(h1Bars, h4Bars, latest);
                         engine.onQuote(latest);
-                        // Trading analysis uses ONLY the currently selected timeframe, exactly as before.
-                        if (aiEngineStarted) evaluateAutoSignal(bars, receivedAt);
+                        // AUTO strategy always uses the original H1 setup; selected chart timeframe is display-only.
+                        if (aiEngineStarted) evaluateAutoSignal(h1Bars, h4Bars, receivedAt);
                         render();
                     });
                     // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
@@ -414,7 +493,7 @@ public class MainActivity extends Activity {
 
     private boolean quoteFresh() {
         long age = System.currentTimeMillis() - quoteAt;
-        return price > 0 && quoteAt > 0 && age >= -5000L && age <= 15000L;
+        return price > 0 && quoteAt > 0 && age >= -5000L && age <= 45000L;
     }
 
     private void openTrade(String side) {
@@ -503,16 +582,26 @@ public class MainActivity extends Activity {
 
     private void loadMt5AccountData() {
         if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || mt5Status == null || !mt5Status.startsWith("DEMO")) return;
+        long now = System.currentTimeMillis();
+        if (accountRefreshInFlight || now - lastAccountRefreshAt < 7000L) return;
+        accountRefreshInFlight = true;
+        lastAccountRefreshAt = now;
         new Thread(() -> {
             try {
                 Mt5DemoClient client=new Mt5DemoClient(mt5BaseUrl,mt5Token);
+                JSONObject status=client.status();
                 JSONObject open=client.positions();
-                JSONObject history=client.history(mt5Symbol,50);
+                JSONObject history=client.history(mt5Symbol,100);
                 JSONArray openRows=open.optJSONArray("positions");
                 JSONArray closedRows=history.optJSONArray("history");
                 runOnUiThread(() -> {
                     mt5OpenPositions=openRows==null?new JSONArray():openRows;
                     mt5ClosedHistory=closedRows==null?new JSONArray():closedRows;
+                    mt5Balance=status.optDouble("balance",mt5Balance);
+                    mt5Equity=status.optDouble("equity",mt5Equity);
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                            .putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance))
+                            .putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity)).apply();
                     render();
                 });
             } catch(Exception e) {
@@ -520,8 +609,10 @@ public class MainActivity extends Activity {
                     feedMessage="MT5 account data: "+(e.getMessage()==null?"unavailable":e.getMessage());
                     render();
                 });
+            } finally {
+                accountRefreshInFlight = false;
             }
-        }).start();
+        }, "DioMasteR-MT5-account-sync").start();
     }
 
     private void showMt5Positions() {
@@ -730,10 +821,28 @@ public class MainActivity extends Activity {
         String[] statusLabels = {"● LIVE", "☁ Render", "✦ AI Agent", "▤ MT5 DEMO"};
         int[] statusColors = {quoteFresh() ? GREEN : RED, 0xFFE8E8EA, aiEngineStarted ? GREEN : GOLD, mt5Connected ? GREEN : RED};
         for (int i=0;i<statusLabels.length;i++) {
+            final int statusIndex = i;
             TextView pill = text(statusLabels[i], 9, statusColors[i], true);
             pill.setGravity(Gravity.CENTER);
             pill.setPadding(dp(3), dp(9), dp(3), dp(9));
             pill.setBackground(goldShell(0xFF090909, 0xFF74541B));
+            pill.setClickable(true);
+            pill.setFocusable(true);
+            pill.setOnClickListener(v -> {
+                switch (statusIndex) {
+                    case 0: configureMt5Bridge(); break;
+                    case 1:
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://diomaster-gold-ai-metaapi-demo.onrender.com/health")));
+                        } catch (Exception e) {
+                            Toast.makeText(this, "Δεν είναι διαθέσιμο το πρόγραμμα περιήγησης.", Toast.LENGTH_SHORT).show();
+                        }
+                        break;
+                    case 2: scrollToSection(agentSection); break;
+                    case 3: showMt5Positions(); break;
+                }
+            });
+            pill.setContentDescription(statusLabels[i] + " — πάτησε για λεπτομέρειες");
             LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(0, -2, 1);
             pl.setMargins(dp(2), 0, dp(2), 0);
             statusStrip.addView(pill, pl);
@@ -825,8 +934,8 @@ public class MainActivity extends Activity {
         market.addView(periods);
         LinearLayout chartLegend=new LinearLayout(this);
         chartLegend.setOrientation(LinearLayout.HORIZONTAL);
-        chartLegend.addView(text("● EMA 6",10,0xFF28B8FF,true));
-        TextView ema21Legend=text("● EMA 15",10,GOLD,true);
+        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
+        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
         ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
         market.addView(chartLegend);
         addSpace(5);
@@ -840,13 +949,13 @@ public class MainActivity extends Activity {
         indicators.setOrientation(LinearLayout.HORIZONTAL);
         boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
-        double emaFast=calcEma(6), emaSlow=calcEma(15);
+        double emaFast=calcEma(9), emaSlow=calcEma(21);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
         indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
-        indicators.addView(metric("Τάση EMA",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
+        indicators.addView(metric("Τάση EMA 9/21",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Πραγματικά OHLC candles από Vantage MT5 DEMO · EMA 6 / EMA 15." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "Στρατηγική AUTO: H1 EMA 9 / 21 · H4 EMA 50." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);
@@ -903,7 +1012,8 @@ public class MainActivity extends Activity {
 
         LinearLayout quickActions = new LinearLayout(this);
         quickActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button autoTrade = actionButton(aiEngineStarted ? "Ⅱ  STOP AUTO · DEMO" : "▶  START AUTO · DEMO", GREEN, this::startAiEngine);
+        Button autoTrade = actionButton(autoStartInFlight ? "ΕΛΕΓΧΟΣ CLOUD AUTO…" : (aiEngineStarted ? "Ⅱ  STOP AUTO · DEMO" : "▶  START AUTO · DEMO"), GREEN, this::toggleAutoEngine);
+        autoTrade.setEnabled(!autoStartInFlight);
         autoTrade.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
         Button analysis = actionButton("⌁  ΑΝΑΛΥΣΗ", GOLD, () -> scrollToSection(marketSection));
         analysis.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));
@@ -935,7 +1045,7 @@ public class MainActivity extends Activity {
         addLabel(homePositions,"▣  ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
         JSONArray homeOpen = useBrokerAccount ? mt5OpenPositions : homeSnap.optJSONArray("positions");
         if (homeOpen == null || homeOpen.length() == 0) {
-            homePositions.addView(text("Δεν υπάρχουν ανοιχτές θέσεις.",11,MUTED,false));
+            homePositions.addView(text(useBrokerAccount ? "Ο broker δεν αναφέρει ανοιχτές θέσεις αυτή τη στιγμή." : "Δεν υπάρχουν ανοιχτές θέσεις.",11,MUTED,false));
         } else {
             for (int n=0; n<Math.min(3,homeOpen.length()); n++) {
                 JSONObject pos=homeOpen.optJSONObject(n); if(pos==null) continue;
@@ -943,8 +1053,14 @@ public class MainActivity extends Activity {
                 double pnl=pos.optDouble("profit",0);
                 String symbol=pos.optString("symbol",mt5Symbol);
                 String size=useBrokerAccount?String.format(Locale.US,"%.2f lot",pos.optDouble("volume")):String.format(Locale.US,"%.2f oz",pos.optDouble("oz"));
-                addRow(homePositions,symbol+"  "+side+"  "+size,
-                        useBrokerAccount?PaperTradingEngine.money(pnl):PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+                String ticket = pos.optString("ticket", "—");
+                addRow(homePositions,"#"+ticket+"  "+symbol+"  "+side+"  "+size,
+                        PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+                if (useBrokerAccount) {
+                    addRow(homePositions,"Entry "+String.format(Locale.US,"%.2f",pos.optDouble("price_open",0))+
+                            " · SL "+String.format(Locale.US,"%.2f",pos.optDouble("sl",0))+
+                            " · TP "+String.format(Locale.US,"%.2f",pos.optDouble("tp",0)), "LIVE MT5", MUTED);
+                }
             }
         }
         LinearLayout homeStats = card();
@@ -967,6 +1083,16 @@ public class MainActivity extends Activity {
         addRow(homeStats,"Win Rate",homeWinRate,GOLD);
         addRow(homeStats,"Καθαρό P/L",PaperTradingEngine.money(homeNet),homeNet>=0?GREEN:RED);
         if(useBrokerAccount && homeTrades==0) homeStats.addView(text("Δεν έχουν επιστραφεί κλεισμένες συναλλαγές MT5 ακόμη. Οι ανοιχτές θέσεις δεν υπολογίζονται.",9,MUTED,false));
+        if(useBrokerAccount && homeClosed.length()>0) {
+            addDivider(homeStats);
+            addLabel(homeStats,"ΠΡΟΣΦΑΤΑ ΚΛΕΙΣΙΜΑΤΑ MT5");
+            for(int n=0;n<Math.min(3,homeClosed.length());n++) {
+                JSONObject tr=homeClosed.optJSONObject(n); if(tr==null) continue;
+                double result=tr.optDouble("profit",0.0);
+                addRow(homeStats,"#"+tr.optString("ticket")+" "+tr.optString("side")+" · "+tr.optString("closeTime",tr.optString("close_time","")),
+                        PaperTradingEngine.money(result),result>=0?GREEN:RED);
+            }
+        }
         LinearLayout.LayoutParams overviewHalf=new LinearLayout.LayoutParams(0,-2,1);
         overviewHalf.setMargins(dp(2),0,dp(4),0);
         overviewRow.addView(homePositions,overviewHalf);
@@ -1092,8 +1218,8 @@ public class MainActivity extends Activity {
         historyPageStart = root.getChildCount();
         LinearLayout history = card();
         historySection = history;
-        addLabel(history, "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
-        JSONArray closed = snap.optJSONArray("history");
+        addLabel(history, mt5Status != null && mt5Status.startsWith("DEMO") ? "ΙΣΤΟΡΙΚΟ MT5 DEMO · ΑΠΟΔΟΣΗ" : "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
+        JSONArray closed = (mt5Status != null && mt5Status.startsWith("DEMO")) ? mt5ClosedHistory : snap.optJSONArray("history");
         if (closed == null) closed = new JSONArray();
         int winCount = 0, lossCount = 0;
         double netClosedPnl = 0.0;
@@ -1113,12 +1239,12 @@ public class MainActivity extends Activity {
         addSpace(5);
         LinearLayout historyStatsBottom = new LinearLayout(this);
         historyStatsBottom.setOrientation(LinearLayout.HORIZONTAL);
-        historyStatsBottom.addView(metric("NET PAPER P/L", PaperTradingEngine.money(netClosedPnl), netClosedPnl >= 0 ? GREEN : RED), weight());
+        historyStatsBottom.addView(metric(mt5Status != null && mt5Status.startsWith("DEMO") ? "NET MT5 P/L" : "NET PAPER P/L", PaperTradingEngine.money(netClosedPnl), netClosedPnl >= 0 ? GREEN : RED), weight());
         String winRate = (winCount + lossCount) > 0 ? String.format(Locale.US, "%.1f%%", 100.0 * winCount / (winCount + lossCount)) : "—";
         historyStatsBottom.addView(metric("WIN RATE", winRate, GOLD), weight());
         history.addView(historyStatsBottom);
         addSpace(8);
-        addLabel(history, "ΠΡΟΣΦΑΤΕΣ PAPER ΣΥΝΑΛΛΑΓΕΣ");
+        addLabel(history, mt5Status != null && mt5Status.startsWith("DEMO") ? "ΠΡΟΣΦΑΤΕΣ MT5 DEMO ΣΥΝΑΛΛΑΓΕΣ" : "ΠΡΟΣΦΑΤΕΣ PAPER ΣΥΝΑΛΛΑΓΕΣ");
         if (closed.length() == 0) history.addView(text("Δεν υπάρχουν κλεισμένες συναλλαγές ακόμη. Τα στατιστικά θα ενημερωθούν μετά τις πρώτες πραγματικές PAPER συναλλαγές.", 12, MUTED, false));
         else {
             for (int i = 0; i < Math.min(8, closed.length()); i++) {
@@ -1196,12 +1322,13 @@ public class MainActivity extends Activity {
         addRow(connections, "Γέφυρα MT5 Demo", mt5Status, mt5Status.startsWith("DEMO") ? GREEN : MUTED);
         addRow(connections, "Μηχανή σημάτων AI", aiEngineStarted ? (aiSignal.ready ? aiSignal.side + " · " + aiSignal.confidence + "%" : "ΕΝΕΡΓΗ · ΣΥΛΛΟΓΗ ΔΕΔΟΜΕΝΩΝ") : "ΑΝΑΜΟΝΗ START AI", aiEngineStarted ? GOLD : MUTED);
         addRow(connections, "Εντολές MT5 DEMO", mt5ExecutionEnabled ? "ΕΝΕΡΓΕΣ · ΜΟΝΟ ΜΕ ΕΠΙΒΕΒΑΙΩΣΗ DEMO" : "ΑΝΑΜΟΝΗ ΣΥΝΔΕΣΗΣ", mt5ExecutionEnabled ? GREEN : GOLD);
-        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς τον Vantage MT5 DEMO. Ο server ελέγχει ότι ο λογαριασμός είναι DEMO. Η τιμή αναφοράς για εντολές προέρχεται από το τελευταίο M1 candle και όχι από live bid/ask tick. Οι εντολές παραμένουν απενεργοποιημένες μέχρι να ολοκληρωθούν οι έλεγχοι. Η αυτόματη στρατηγική cloud δεν έχει υλοποιηθεί ακόμη.", 10, MUTED, false);
+        TextView bridgeNote = text("Η σύνδεση γίνεται μέσω TickerAll API προς Vantage MT5 DEMO. Το Cloud AUTO εκτελεί την εγκεκριμένη στρατηγική μόνο σε DEMO, με όρια κινδύνου και χωρίς εξαναγκασμένες συναλλαγές. Αν κάποιος έλεγχος αποτύχει, η αιτία εμφανίζεται παρακάτω.", 10, MUTED, false);
         bridgeNote.setPadding(0, dp(8), 0, dp(8));
         connections.addView(bridgeNote);
         Button bridgeInfo = actionButton("ΣΥΝΔΕΣΗ TICKERALL API · VANTAGE DEMO", 0xFF292C34, this::configureMt5Bridge);
         connections.addView(bridgeInfo);
-        Button startAi = actionButton(aiEngineStarted ? "STOP AUTO · ΔΙΑΚΟΠΗ ΝΕΩΝ ΕΝΤΟΛΩΝ" : "START AUTO · MT5 DEMO", 0xFFB58A35, aiEngineStarted ? this::stopAiEngine : this::startAiEngine);
+        Button startAi = actionButton(autoStartInFlight ? "ΕΛΕΓΧΟΣ CLOUD AUTO…" : (aiEngineStarted ? "STOP AUTO · ΔΙΑΚΟΠΗ ΝΕΩΝ ΕΝΤΟΛΩΝ" : "START AUTO · MT5 DEMO"), 0xFFB58A35, this::toggleAutoEngine);
+        startAi.setEnabled(!autoStartInFlight);
         connections.addView(startAi);
         addRow(connections, "Αυτόματη εκτέλεση", autoExecutionMessage, aiEngineStarted ? GREEN : MUTED);
         Button mt5Positions = actionButton("ΠΡΟΒΟΛΗ / ΚΛΕΙΣΙΜΟ ΘΕΣΕΩΝ MT5 DEMO", 0xFF292C34, this::showMt5Positions);
@@ -1220,7 +1347,7 @@ public class MainActivity extends Activity {
         bottomNav.setGravity(Gravity.CENTER);
         bottomNav.setPadding(dp(5),dp(5),dp(5),dp(5));
         bottomNav.setBackground(goldShell(0xFF080707,0xFFFFC83D));
-        String[] bottomLabels={"⌂\nΑρχική","▤\nΘέσεις","◷\nΙστορικό","⚙\nΡυθμίσεις"};
+        String[] bottomLabels={"⌂\\nΑρχική","▤\\nΘέσεις","◷\\nΙστορικό","⚙\\nΡυθμίσεις"};
         for(int i=0;i<bottomLabels.length;i++){
             final int index=i;
             boolean active=index==selectedBottomTab;
@@ -1273,38 +1400,50 @@ public class MainActivity extends Activity {
     }
 
     // Local execution loop: strategy stays in GoldAiAgent; broker execution is DEMO-only.
+    private void toggleAutoEngine() {
+        if (autoStartInFlight) return;
+        if (aiEngineStarted) stopAiEngine(); else startAiEngine();
+    }
+
     private void startAiEngine() {
+        if (autoStartInFlight) return;
         if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty()) {
             Toast.makeText(this, "Πρώτα σύνδεσε τον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
             return;
         }
-        autoExecutionMessage = "Έλεγχος Vantage MT5 DEMO και δικαιώματος εντολών…";
+        autoStartInFlight = true;
+        autoExecutionMessage = "ΕΚΚΙΝΗΣΗ: έλεγχος σύνδεσης, DEMO και Cloud AUTO…";
+        logAgentActivity("CLOUD AUTO", "START_REQUESTED", "Ο χρήστης πάτησε START AUTO · DEMO");
+        Toast.makeText(this, "Έγινε λήψη εντολής. Ελέγχω το DEMO και τον server…", Toast.LENGTH_SHORT).show();
         render();
         new Thread(() -> {
             String failure = null;
             try {
-                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).status();
+                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
+                JSONObject status = client.status();
                 if (!"DEMO".equals(status.optString("account_mode"))
                         || !status.optBoolean("terminal_connected")
-                        || !status.optBoolean("execution_enabled")) {
-                    throw new IllegalStateException("Απαιτείται συνδεδεμένος Vantage MT5 DEMO με ενεργό server-side DEMO execution.");
-                }
+                        || !status.optBoolean("execution_enabled"))
+                    throw new IllegalStateException("Απαιτείται επαληθευμένος Vantage MT5 DEMO και ενεργό server-side DEMO execution.");
                 String server = status.optString("server", "");
-                if (!server.toLowerCase(Locale.US).contains("vantage") || !server.toLowerCase(Locale.US).contains("demo")) {
-                    throw new IllegalStateException("Ο broker server δεν επιβεβαιώθηκε ως Vantage DEMO.");
-                }
-            } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία ελέγχου MT5" : e.getMessage(); }
+                if (!server.toLowerCase(Locale.US).contains("vantage") || !server.toLowerCase(Locale.US).contains("demo"))
+                    throw new IllegalStateException("Ο broker δεν επιβεβαιώθηκε ως Vantage DEMO.");
+                JSONObject started = client.autoStart();
+                if (!started.optBoolean("running")) throw new IllegalStateException("Ο cloud AUTO δεν ξεκίνησε.");
+            } catch (Exception e) { failure = e.getMessage() == null ? "Αποτυχία εκκίνησης Cloud AUTO" : e.getMessage(); }
             final String error = failure;
             runOnUiThread(() -> {
+                autoStartInFlight = false;
                 if (error != null) {
                     aiEngineStarted = false;
+                    logAgentActivity("CLOUD AUTO", "START_BLOCKED", error);
                     autoExecutionMessage = "ΜΠΛΟΚΑΡΙΣΜΕΝΟ · " + error;
                     Toast.makeText(this, autoExecutionMessage, Toast.LENGTH_LONG).show();
                 } else {
                     aiEngineStarted = true;
-                    autoExecutionMessage = "ΕΝΕΡΓΟ · εντολές μόνο στον Vantage MT5 DEMO";
-                    Toast.makeText(this, "AUTO ενεργό στον υπάρχοντα Vantage MT5 DEMO.", Toast.LENGTH_LONG).show();
-                    fetchPrice();
+                    logAgentActivity("CLOUD AUTO", "START_CONFIRMED", "Ο server επιβεβαίωσε running=true · DEMO");
+                    autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · Unified 8/10 · DEMO";
+                    Toast.makeText(this, "Cloud AUTO ξεκίνησε στον server DEMO.", Toast.LENGTH_LONG).show();
                 }
                 render();
             });
@@ -1312,10 +1451,19 @@ public class MainActivity extends Activity {
     }
 
     private void stopAiEngine() {
+        if (autoStartInFlight) return;
         aiEngineStarted = false;
-        autoExecutionMessage = "STOP · δεν θα σταλούν νέες εντολές· οι ανοιχτές θέσεις μένουν στο MT5 με τα SL/TP τους";
-        Toast.makeText(this, "Auto σταμάτησε. Δεν θα ανοίξουν νέες θέσεις.", Toast.LENGTH_LONG).show();
+        autoExecutionMessage = "Αποστολή εντολής STOP στο Cloud AUTO…";
         render();
+        new Thread(() -> {
+            String result;
+            try {
+                new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStop();
+                result = "STOP · Cloud AUTO σταμάτησε. Οι ανοιχτές θέσεις διατηρούν τα SL/TP.";
+            } catch (Exception e) { result = "STOP ERROR · " + e.getMessage(); }
+            final String message = result;
+            runOnUiThread(() -> { autoExecutionMessage = message; Toast.makeText(this,message,Toast.LENGTH_LONG).show(); render(); });
+        }).start();
     }
 
     private void setAutoDiagnostic(String message) {
@@ -1330,204 +1478,18 @@ public class MainActivity extends Activity {
         render();
     }
 
-    // Diagnostics explain every local gate; GoldAiAgent strategy and thresholds remain unchanged.
-    private void evaluateAutoSignal(JSONArray bars, long quoteTimestamp) {
+    // Diagnostics explain every local gate; Original EMA 9/21 H1 strategy diagnostics.
+    private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
         if (!aiEngineStarted) return;
-        if (autoOrderInFlight) { setAutoDiagnostic("ΕΛΕΓΧΟΣ · προηγούμενη εντολή ακόμη σε εξέλιξη"); return; }
-        if (!brokerChartActive) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · δεν έχουν φορτωθεί broker OHLC candles"); return; }
-        if (!quoteFresh()) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · η τιμή broker είναι παλιά ή εκτός ορίου 15 δευτ."); return; }
-        if (!mt5ExecutionEnabled) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · ο server δεν επιτρέπει DEMO εντολές"); return; }
-        if (bars == null || bars.length() < 2) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · ανεπαρκή OHLC candles · timeframe=" + selectedTimeframe); return; }
-        if (!aiSignal.ready) { setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.reason); return; }
-        if (!("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))) {
-            setAutoDiagnostic("ΑΝΑΜΟΝΗ ΣΗΜΑΤΟΣ · timeframe=" + selectedTimeframe + " · candles=" + chartPrices.size() + " · " + aiSignal.side + " · " + aiSignal.reason);
-            return;
-        }
-        if (aiSignal.stopLoss <= 0 || aiSignal.takeProfit <= 0) {
-            setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · το σήμα δεν έχει έγκυρα SL/TP");
-            return;
-        }
-        JSONObject latestBar = bars.optJSONObject(bars.length() - 1);
-        if (latestBar == null) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · λείπει το τελευταίο OHLC candle"); return; }        long barTime = (long)(latestBar.optDouble("timestamp", 0) * 1000L);
-        if (barTime <= 0) { setAutoDiagnostic("ΜΠΛΟΚΑΡΙΣΜΕΝΟ · μη έγκυρη χρονική σήμανση candle"); return; }
-        if (barTime == lastAutoSignalBar) { setAutoDiagnostic("ΑΝΑΜΟΝΗ · το σήμα αυτού του candle έχει ήδη εκτελεστεί ή επιχειρηθεί"); return; }
-
-        // Reserve this candle BEFORE any broker request. If Android recreates the Activity
-        // or a network response is lost, the same M15 signal cannot submit a duplicate order.
-        lastAutoSignalBar = barTime;
-        getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
-                .putLong("last_auto_signal_bar", barTime).apply();
-
-        // Audit-only trace: records the exact local strategy decision before any broker request.
-        // This does not alter signal rules, thresholds, sizing, SL/TP, or order flow.
-        logAgentActivity("SIGNAL TRACE", "VALID_SIGNAL",
-                "timeframe=" + selectedTimeframe
-                        + " · candleTime=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(barTime))
-                        + " · side=" + aiSignal.side
-                        + " · confidence=" + aiSignal.confidence
-                        + " · quote=" + String.format(Locale.US, "%.5f", price)
-                        + " · quoteAge=" + Math.max(0L, (System.currentTimeMillis() - quoteAt) / 1000L) + "s"
-                        + " · entry=" + String.format(Locale.US, "%.5f", aiSignal.entry)
-                        + " · SL=" + String.format(Locale.US, "%.5f", aiSignal.stopLoss)
-                        + " · TP=" + String.format(Locale.US, "%.5f", aiSignal.takeProfit)
-                        + " · " + aiSignal.reason);
-        final long signalCreatedAt = System.currentTimeMillis();
-        final String signalTimeframe = selectedTimeframe;
-        final int signalConfidence = aiSignal.confidence;
-        final double signalEntry = aiSignal.entry;
-        autoOrderInFlight = true;
-        autoExecutionMessage = "Έλεγχος θέσεων και σήματος " + aiSignal.side + "…";
-        final String side = aiSignal.side;
-        final double sl = aiSignal.stopLoss;
-        final double tp = aiSignal.takeProfit;
-        final long signalBar = barTime;
-        render();
-        new Thread(() -> {
-            String resultMessage;
-            boolean submitted = false;
-            long statusMs = -1L, positionsMs = -1L, quoteMs = -1L, orderMs = -1L;
-            long orderAcceptedAt = 0L;
-            long reversalMs = 0L;
-            try {
-                Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                long stageAt = System.currentTimeMillis();
-                JSONObject status = client.status();
-                statusMs = System.currentTimeMillis() - stageAt;
-                if (!"DEMO".equals(status.optString("account_mode"))
-                        || !status.optBoolean("terminal_connected")
-                        || !status.optBoolean("execution_enabled")) {
-                    throw new IllegalStateException("DEMO execution/σύνδεση δεν επιβεβαιώθηκε ξανά.");
-                }
-
-                // Reverse only bot-owned positions on this symbol; never touch manual trades.
-                stageAt = System.currentTimeMillis();
-                JSONObject posResponse = client.positions();
-                positionsMs = System.currentTimeMillis() - stageAt;
-                JSONArray positions = posResponse.optJSONArray("positions");
-                int sameSide = 0;
-                int closedOpposite = 0;
-                if (positions != null) {
-                    for (int i = 0; i < positions.length(); i++) {
-                        JSONObject p = positions.optJSONObject(i);
-                        if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
-                                || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
-                        String openSide = p.optString("side",
-                                p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
-                        if (side.equals(openSide)) {
-                            sameSide++;
-                        } else if (("BUY".equals(openSide) || "SELL".equals(openSide))
-                                && p.optLong("ticket", 0) > 0) {
-                            long closeAt = System.currentTimeMillis();
-                            JSONObject closeResult = client.close(p.optLong("ticket"));
-                            reversalMs += System.currentTimeMillis() - closeAt;
-                            if (!closeResult.optBoolean("ok")) {
-                                throw new IllegalStateException("Δεν επιβεβαιώθηκε κλείσιμο αντίθετης θέσης #" + p.optLong("ticket"));
-                            }
-                            closedOpposite++;
-                        }
-                    }
-                }
-
-                // Confirm broker-side closure before allowing the reversal order.
-                if (closedOpposite > 0) {
-                    JSONObject verify = client.positions();
-                    JSONArray remaining = verify.optJSONArray("positions");
-                    if (remaining != null) {
-                        for (int i = 0; i < remaining.length(); i++) {
-                            JSONObject p = remaining.optJSONObject(i);
-                            if (p == null || !p.optString("comment", "").startsWith("DioMasteR")
-                                    || !mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) continue;
-                            String openSide = p.optString("side",
-                                    p.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
-                            if (!side.equals(openSide)) {
-                                throw new IllegalStateException("Η αντίθετη θέση #" + p.optLong("ticket") + " παραμένει ανοιχτή· δεν στάλθηκε νέα εντολή.");
-                            }
-                        }
-                    }
-                }
-
-                // Keep at most two AUTO positions open. Manual positions never consume this quota.
-                JSONObject refreshed = client.positions();
-                JSONArray current = refreshed.optJSONArray("positions");
-                int botOpen = 0;
-                if (current != null) {
-                    for (int i = 0; i < current.length(); i++) {
-                        JSONObject p = current.optJSONObject(i);
-                        String comment = p == null ? "" : p.optString("comment", "");
-                        if (p != null && comment.startsWith("DioMasteR")
-                                && !comment.startsWith("DioMasteR MANUAL")
-                                && mt5Symbol.equalsIgnoreCase(p.optString("symbol", mt5Symbol))) botOpen++;
-                    }
-                }
-                if (botOpen >= 2) {
-                    resultMessage = "ΑΝΑΜΟΝΗ · υπάρχουν ήδη 2 αυτόματες θέσεις DioMasteR στο " + mt5Symbol;
-                } else {
-                    stageAt = System.currentTimeMillis();
-                    JSONObject q = client.quote(mt5Symbol);
-                    quoteMs = System.currentTimeMillis() - stageAt;
-                    String quoteSource = q.optString("quote_source", "");
-                    double bid = q.optDouble("bid", 0);
-                    double ask = q.optDouble("ask", 0);
-                    long qTime = (long)(q.optDouble("time", 0) * 1000L);
-                    long quoteAge = System.currentTimeMillis() - qTime;
-                    if (!"tickerall_live_websocket_tick".equals(quoteSource))
-                        throw new IllegalStateException("Δεν υπάρχει πραγματικό LIVE tick TickerAll. Πιθανή κλειστή αγορά ή feed μη διαθέσιμο.");
-                    if (bid <= 0 || ask <= 0 || ask < bid || qTime <= 0
-                            || quoteAge < -5000L || quoteAge > 15000L)
-                        throw new IllegalStateException("Το LIVE tick είναι παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Η εντολή μπλοκαρίστηκε.");
-                    if (!"BUY".equals(side) && !"SELL".equals(side))
-                        throw new IllegalStateException("Μη έγκυρη κατεύθυνση σήματος.");
-                    // Validate protective levels against the executable side of the spread.
-                    double executableEntry = "BUY".equals(side) ? ask : bid;
-                    if (("BUY".equals(side) && !(sl < executableEntry && executableEntry < tp))
-                            || ("SELL".equals(side) && !(tp < executableEntry && executableEntry < sl)))
-                        throw new IllegalStateException("Το SL/TP δεν συμφωνεί με την εκτελέσιμη BID/ASK τιμή.");
-                    stageAt = System.currentTimeMillis();
-                    JSONObject order = client.order(mt5Symbol, side, 0.01, sl, tp);
-                    orderMs = System.currentTimeMillis() - stageAt;
-                    orderAcceptedAt = System.currentTimeMillis();
-                    submitted = true;
-                    resultMessage = (closedOpposite > 0 ? "ΑΝΤΙΣΤΡΟΦΗ · έκλεισαν " + closedOpposite + " αντίθετες θέσεις · " : "")
-                            + "ΕΝΤΟΛΗ DEMO " + side + " · " + mt5Symbol + " · 0.01 lot · "
-                            + (sameSide > 0 ? "πρόσθετη θέση · " : "") + "ticket #" + order.optLong("order");
-                }
-            } catch (Exception e) {
-                resultMessage = "Η εντολή DEMO μπλοκαρίστηκε: " + (e.getMessage() == null ? "άγνωστο σφάλμα" : e.getMessage());
-            }
-            final String message = resultMessage;
-            final boolean sent = submitted;
-            final long completedAt = System.currentTimeMillis();
-            final long statusDuration = statusMs, positionsDuration = positionsMs;
-            final long quoteDuration = quoteMs, orderDuration = orderMs, reversalDuration = reversalMs;
-            final long brokerAckAt = orderAcceptedAt;
-            runOnUiThread(() -> {
-                autoOrderInFlight = false;
-                if (sent) lastAutoSignalBar = signalBar;
-                autoExecutionMessage = message;
-                long totalMs = completedAt - signalCreatedAt;
-                logAgentActivity("EXECUTION TIMING", sent ? "ORDER_ACCEPTED" : "NOT_SENT",
-                        "timeframe=" + signalTimeframe + " · side=" + side + " · confidence=" + signalConfidence
-                                + " · signalToResult=" + totalMs + "ms"
-                                + " · status=" + statusDuration + "ms · positions=" + positionsDuration + "ms"
-                                + " · reversal=" + reversalDuration + "ms · quote=" + quoteDuration + "ms · order=" + orderDuration + "ms"
-                                + (brokerAckAt > 0 ? " · signalToBrokerAck=" + (brokerAckAt - signalCreatedAt) + "ms" : "")
-                                + " · entry=" + String.format(Locale.US, "%.5f", signalEntry)
-                                + " · SL=" + String.format(Locale.US, "%.5f", sl)
-                                + " · TP=" + String.format(Locale.US, "%.5f", tp)
-                                + " · " + message);
-                logAgentActivity("AUTO EXECUTION", sent ? "ORDER_SENT" : "WAIT_OR_BLOCKED", message);
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-                loadMt5AccountData();
-                render();
-            });
-        }).start();
+        // AUTO decisions and orders are exclusively handled by the cloud Unified 8/10 engine.
+        setAutoDiagnostic("CLOUD AUTO · Adaptive Liquidity Hunter · H4/H1 + M15 + M5 · DEMO.");
     }
 
     private String cleanBridgeToken(String value) {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\r\n\\t ]+", "");
+        return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
     }
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);
@@ -1609,6 +1571,7 @@ public class MainActivity extends Activity {
                     String display = "DEMO · " + status.optString("server", "MT5") + " · #" + status.optString("account_login") + (execEnabled ? " · ORDERS ON" : " · READ ONLY");
                     getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).putBoolean("execution_enabled",execEnabled).putString("status",display).apply();
                     mt5BaseUrl=base; mt5Token=secret; mt5Symbol=selectedSymbol; mt5ExecutionEnabled=execEnabled;
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit().putString("base",base).putString("token",secret).putString("symbol",selectedSymbol).apply();
                     mt5Login=status.optString("account_login",""); mt5Currency=status.optString("currency","USD"); mt5Balance=status.optDouble("balance",0); mt5Equity=status.optDouble("equity",mt5Balance);
                     getSharedPreferences("diomaster_mt5_demo",MODE_PRIVATE).edit().putString("login",mt5Login).putString("currency",mt5Currency).putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance)).putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity)).apply();
                     result = display;
@@ -1620,6 +1583,7 @@ public class MainActivity extends Activity {
                 final String finalResult = result;
                 runOnUiThread(() -> {
                     mt5Status = finalResult;
+                    if (finalResult.startsWith("DEMO")) startBackgroundMonitor();
                     Toast.makeText(this, finalResult, Toast.LENGTH_LONG).show();
                     render();
                 });
@@ -1814,3 +1778,5 @@ public class MainActivity extends Activity {
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
     private String money(double value) { return "$" + String.format(Locale.US, "%,.2f", value); }
 }
+
+

@@ -22,7 +22,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=2  # Exactly two concurrent AUTO positions; MANUAL orders are excluded.
+MAX_BOT_POSITIONS=3  # Maximum three concurrent AUTO FAST sniper positions; MANUAL orders excluded.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
@@ -99,8 +99,8 @@ _stream_task=None
 STREAM_DIAGNOSTIC={"state":"starting","last_error":None,"last_message_type":None,"symbol":None,"connected_at":None,"last_tick_at":None}
 
 async def live_tick_stream():
-    # Reconnect indefinitely with bounded exponential backoff. A clean server
-    # close must also retry (the old async-for path could reconnect too fast).
+    # Keep the TickerAll realtime stream alive, verify subscription acceptance,
+    # and reconnect if the socket is connected but stops delivering messages.
     retry_delay = 3
     max_retry_delay = 20
     while True:
@@ -112,75 +112,133 @@ async def live_tick_stream():
             symbols_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols")
             symbols=symbols_data.get("symbols",[])
             symbol=choose_symbol(symbols)
-            STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None})
-            logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s",symbol)
+            account_id=str(row["id"])
+            correlation_id="diomaster-"+uuid.uuid4().hex[:12]
+            STREAM_DIAGNOSTIC.update({"state":"connecting","symbol":symbol,"last_error":None,
+                                      "last_message_type":None})
+            logger.info("TickerAll stream: connecting for verified DEMO account; symbol=%s account_id=%s",
+                        symbol,account_id)
             url="wss://api.tickerall.com/v1/stream?token="+TA_TOKEN
             async with websockets.connect(
-                url,
-                ping_interval=10,
-                ping_timeout=30,
-                close_timeout=5,
-                open_timeout=15,
-                max_queue=256
+                url, ping_interval=10, ping_timeout=30, close_timeout=5,
+                open_timeout=15, max_queue=256
             ) as ws:
                 connected = True
                 STREAM_DIAGNOSTIC.update({"state":"connected_subscribing","connected_at":time.time()})
-                logger.info("TickerAll WebSocket connected; sending tick subscription for %s",symbol)
-                await ws.send(json.dumps({"type":"subscribe","channels":[
-                    {"kind":"ticks","accountId":row["id"],"symbols":[symbol]}]}))
-                async for raw in ws:
+                subscribe={"type":"subscribe","channels":[
+                    {"kind":"ticks","accountId":account_id,"symbols":[symbol]}],
+                    "correlationId":correlation_id}
+                await ws.send(json.dumps(subscribe))
+                logger.info("TickerAll WebSocket subscription sent; symbol=%s correlation_id=%s",
+                            symbol,correlation_id)
+                last_rx=time.monotonic()
+                last_ping=last_rx
+                missed_heartbeats=0
+                subscribed=False
+                while True:
+                    try:
+                        raw=await asyncio.wait_for(ws.recv(),timeout=20)
+                    except asyncio.TimeoutError:
+                        # TickerAll supports an application-level ping/pong in
+                        # addition to WebSocket protocol pings.
+                        await ws.send(json.dumps({"type":"ping"}))
+                        missed_heartbeats+=1
+                        logger.warning("TickerAll stream heartbeat sent; symbol=%s missed=%s",
+                                       symbol,missed_heartbeats)
+                        if missed_heartbeats>=3:
+                            raise TimeoutError("TickerAll stream silent for 60 seconds")
+                        continue
+                    last_rx=time.monotonic()
+                    missed_heartbeats=0
                     msg=json.loads(raw)
+                    if not isinstance(msg,dict):
+                        logger.warning("TickerAll stream ignored non-object frame")
+                        continue
                     msg_type=str(msg.get("type") or msg.get("event") or "unknown")
                     STREAM_DIAGNOSTIC["last_message_type"]=msg_type
+                    if msg_type=="subscribed":
+                        accepted=msg.get("channels",[])
+                        rejected=msg.get("rejected",[])
+                        if rejected or not any(
+                            ch.get("kind")=="ticks" and str(ch.get("accountId"))==account_id
+                            and symbol in ch.get("symbols",[]) for ch in accepted if isinstance(ch,dict)
+                        ):
+                            detail=json.dumps({"accepted":accepted,"rejected":rejected},ensure_ascii=False)[:500]
+                            raise RuntimeError("TickerAll tick subscription not accepted: "+detail)
+                        subscribed=True
+                        STREAM_DIAGNOSTIC.update({"state":"subscribed_waiting_for_tick","last_error":None})
+                        logger.info("TickerAll tick subscription accepted; symbol=%s",symbol)
+                        continue
+                    if msg_type=="error":
+                        raise RuntimeError("TickerAll stream error: "+str(msg.get("code"))+" "+str(msg.get("message"))[:250])
+                    if msg_type=="ping":
+                        await ws.send(json.dumps({"type":"pong"}))
+                        continue
+                    if msg_type=="pong":
+                        last_ping=time.monotonic()
+                        STREAM_DIAGNOSTIC.update({"state":"heartbeat_ok"})
+                        continue
                     if msg_type!="tick":
-                        logger.info("TickerAll WebSocket message received; type=%s keys=%s",msg_type,sorted(msg.keys())[:20])
-                    if msg_type=="tick" and msg.get("symbol")==symbol:
-                        bid=float(msg.get("bid") or 0); ask=float(msg.get("ask") or 0)
-                        stamp=msg.get("timestamp")
-                        if isinstance(stamp,str):
-                            ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
-                        else: ts=float(stamp or 0)
-                        if bid>0 and ask>=bid and ts>0:
-                            now=time.time()
-                            LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
-                              "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
-                              "stale":bool(msg.get("stale",False)),"account_mode":"DEMO"}
-                            record_live_m1_tick(symbol,ts,bid,ask)
-                            STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
-                            retry_delay = 3
-                        else:
-                            logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
-            # The server may close cleanly without raising. Treat that as a
-            # disconnect, invalidate the cached quote and reconnect slowly.
-            raise ConnectionError("TickerAll WebSocket closed the stream")
+                        logger.info("TickerAll WebSocket message received; type=%s keys=%s",
+                                    msg_type,sorted(msg.keys())[:20])
+                        continue
+                    if msg.get("symbol")!=symbol:
+                        continue
+                    if msg.get("accountId") and str(msg.get("accountId"))!=account_id:
+                        logger.warning("TickerAll tick ignored for unexpected account; symbol=%s",symbol)
+                        continue
+                    bid=float(msg.get("bid") or 0)
+                    ask=float(msg.get("ask") or 0)
+                    stamp=msg.get("timestamp")
+                    if isinstance(stamp,str):
+                        ts=datetime.fromisoformat(stamp.replace("Z","+00:00")).timestamp()
+                    else:
+                        ts=float(stamp or 0)
+                    if bid<=0 or ask<bid or ts<=0:
+                        logger.warning("TickerAll tick rejected: invalid bid/ask/timestamp; symbol=%s",symbol)
+                        continue
+                    now=time.time()
+                    is_stale=bool(msg.get("stale",False))
+                    LIVE_TICKS[symbol]={"symbol":symbol,"bid":bid,"ask":ask,
+                      "time":ts,"received_at":now,"quote_source":"tickerall_live_websocket_tick",
+                      "stale":is_stale,"account_mode":"DEMO"}
+                    if not is_stale:
+                        record_live_m1_tick(symbol,ts,bid,ask)
+                        STREAM_DIAGNOSTIC.update({"state":"receiving_ticks","last_tick_at":now,"last_error":None})
+                        retry_delay=3
+                    else:
+                        STREAM_DIAGNOSTIC.update({"state":"stale_last_quote","last_error":"TickerAll sent stale last-known quote"})
+                    if not subscribed:
+                        logger.warning("TickerAll delivered a tick before subscription acknowledgement")
         except asyncio.CancelledError:
             STREAM_DIAGNOSTIC["state"]="stopped"
             raise
         except HTTPException as exc:
             if symbol:
-                LIVE_TICKS.pop(symbol, None)
-            recovery_error = None
-            if exc.status_code == 409:
+                LIVE_TICKS.pop(symbol,None)
+            recovery_error=None
+            if exc.status_code==409:
                 try:
                     await create_demo_session("TickerAll WebSocket rejected account with HTTP 409")
                 except Exception as recovery_exc:
-                    recovery_error = str(recovery_exc)[:200]
-            message = "HTTPException " + str(exc.status_code) + ": " + str(exc.detail)[:220]
+                    recovery_error=str(recovery_exc)[:200]
+            message="HTTPException "+str(exc.status_code)+": "+str(exc.detail)[:220]
             if recovery_error:
-                message += " | recovery: " + recovery_error
+                message+=" | recovery: "+recovery_error
             STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":message})
             logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
-                           connected, retry_delay, message)
+                           connected,retry_delay,message)
             await asyncio.sleep(retry_delay)
-            retry_delay = min(max_retry_delay, retry_delay * 2)
+            retry_delay=min(max_retry_delay,retry_delay*2)
         except Exception as exc:
             if symbol:
-                LIVE_TICKS.pop(symbol, None)
-            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":f"{type(exc).__name__}: {str(exc)[:300]}"})
+                LIVE_TICKS.pop(symbol,None)
+            message=f"{type(exc).__name__}: {str(exc)[:300]}"
+            STREAM_DIAGNOSTIC.update({"state":"error_retrying","last_error":message})
             logger.warning("TickerAll live stream disconnected; connected=%s retry_in=%ss error=%s",
-                           connected, retry_delay, f"{type(exc).__name__}: {str(exc)[:200]}")
+                           connected,retry_delay,message)
             await asyncio.sleep(retry_delay)
-            retry_delay = min(max_retry_delay, retry_delay * 2)
+            retry_delay=min(max_retry_delay,retry_delay*2)
 
 @app.on_event("startup")
 async def start_live_stream():
@@ -389,7 +447,9 @@ async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
 # in the background so switching timeframes does not block the Android UI.
 CANDLE_CACHE={}
 CANDLE_REFRESH_TASKS={}
-CANDLE_CACHE_TTL={"M1":15,"M5":20,"M15":30,"M30":45,"H1":60,"H4":90,"D1":120,"W1":180,"MN1":300}
+AUTO_STRATEGY_CACHE={}
+AUTO_STRATEGY_CACHE_TTL={"M1":2,"M5":3,"M15":5,"H1":20,"H4":45}
+CANDLE_CACHE_TTL={"M1":3,"M5":5,"M15":10,"M30":20,"H1":30,"H4":60,"D1":120,"W1":180,"MN1":300}
 
 async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
     try:
@@ -544,10 +604,12 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
              and not str(p.get("comment","")).startswith("DioMasteR MANUAL")]
         if len(bot)>=MAX_BOT_POSITIONS:
             raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
+    leg_tag=(" FAST" if "FAST" in req.client_order_id.upper() else
+             " RUNNER" if "RUNNER" in req.client_order_id.upper() else "")
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
       "stopLoss":sl,"takeProfit":tp,
       "comment":"DioMasteR MANUAL "+req.client_order_id[-14:] if origin=="MANUAL"
-                else "DioMasteR AUTO "+req.client_order_id[-16:]}
+                else "DioMasteR AUTO"+leg_tag}
     result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
       "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,
@@ -567,20 +629,483 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
     return {"ok":bool(result.get("closed")),"account_mode":"DEMO","ticket":ticket,
       "deal":result.get("dealTicket"),"result":result}
 
+# Cloud strategy loop: all decisions are made on completed broker candles.
+import pandas as pd
+from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
+MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
+AUTO_TASK=None
+AUTO_MANAGE_TASK=None
+AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
+AUTO_LOCK=asyncio.Lock()
+AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
+AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
+AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
+
+async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
+    cache_key=(symbol,timeframe)
+    cached_frame=AUTO_STRATEGY_CACHE.get(cache_key)
+    if cached_frame and time.time()-cached_frame["at"]<AUTO_STRATEGY_CACHE_TTL.get(timeframe,15):
+        return cached_frame["frame"].copy()
+    # Reuse the bridge's recently verified broker-candle cache before making
+    # another upstream request. The Android chart and AUTO share this cache.
+    # Only genuine broker OHLC is used; the forming candle is always excluded.
+    required={"H1":60,"H4":50}.get(timeframe,2)
+    bridge_cache_key=(symbol,timeframe,hours)
+    cached=CANDLE_CACHE.get(bridge_cache_key)
+    best=[]
+    if cached:
+        age=max(0.0,time.time()-float(cached.get("fetched_at",0)))
+        max_age=max(120.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
+        cached_rows=cached.get("candles",[])
+        if age<=max_age and isinstance(cached_rows,list):
+            parsed=[]
+            for x in cached_rows:
+                try:
+                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),
+                      "high":float(x["high"]),"low":float(x["low"]),"close":float(x["close"]),
+                      "tick_volume":float(x.get("tick_volume") or 0)})
+                except (KeyError,TypeError,ValueError):
+                    continue
+            parsed.sort(key=lambda x:x["timestamp"])
+            completed=parsed[:-1] if len(parsed)>1 else parsed
+            best=completed
+            if len(completed)>=required:
+                logger.info("AUTO candle cache hit symbol=%s timeframe=%s bars=%s age_seconds=%.1f",
+                            symbol,timeframe,len(completed),age)
+                frame=pd.DataFrame(completed)
+                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+                return frame
+            logger.info("AUTO candle cache insufficient symbol=%s timeframe=%s bars=%s required=%s age_seconds=%.1f",
+                        symbol,timeframe,len(completed),required,age)
+
+    # Retry the full lookback once, then use progressively shorter broker
+    # history windows. This avoids long stalls on TickerAll empty batches.
+    windows=[hours]
+    if not allow_insufficient and hours>=200:
+        windows.extend(sorted({max(100,hours//2),max(100,hours//4)},reverse=True))
+    last_payload=None
+    for window_index,window_hours in enumerate(windows):
+        attempts=2 if window_index==0 else 1
+        for attempt in range(attempts):
+            payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={window_hours}")
+            last_payload=payload
+            rows=payload.get("candles",[]) if isinstance(payload,dict) else []
+            if not isinstance(rows,list):
+                raise RuntimeError(f"{timeframe} candle payload invalid")
+            parsed=[]
+            for x in rows:
+                try:
+                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),"high":float(x["high"]),
+                      "low":float(x["low"]),"close":float(x["close"]),"tick_volume":float(x.get("tickVolume") or 0)})
+                except (KeyError,TypeError,ValueError):
+                    continue
+            parsed.sort(key=lambda x:x["timestamp"])
+            # TickerAll includes the currently forming candle; exclude it.
+            clean=parsed[:-1] if len(parsed)>1 else parsed
+            if len(clean)>len(best):
+                best=clean
+            if len(clean)>=required:
+                if window_index or attempt:
+                    logger.info("AUTO candle history recovered symbol=%s timeframe=%s requested_hours=%s used_hours=%s bars=%s",
+                                symbol,timeframe,hours,window_hours,len(clean))
+                frame=pd.DataFrame(clean)
+                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+                return frame
+            if attempt<attempts-1:
+                logger.warning("AUTO candle retry symbol=%s timeframe=%s hours=%s attempt=%s raw=%s valid=%s stop=%s",
+                    symbol,timeframe,window_hours,attempt+1,len(rows),len(parsed),
+                    (payload.get("stopReason") if isinstance(payload,dict) else "invalid_payload"))
+                await asyncio.sleep(0.5)
+        if window_index+1<len(windows):
+            logger.warning("AUTO candle lookback fallback symbol=%s timeframe=%s hours=%s next_hours=%s best_completed=%s",
+                           symbol,timeframe,window_hours,windows[window_index+1],len(best))
+    if len(best)<2 and not allow_insufficient:
+        stop=(last_payload.get("stopReason") if isinstance(last_payload,dict) else "invalid_payload")
+        raise RuntimeError(f"Insufficient completed {timeframe} candles after cache/retries/fallback: {len(best)}; stop={stop}")
+    frame=pd.DataFrame(best)
+    if not frame.empty:
+        AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+    return frame
+
+def strategy_indicators(df):
+    close=df["close"]
+    delta=close.diff()
+    gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    rs=gain/loss.replace(0,float("nan"))
+    rsi=(100-(100/(1+rs))).fillna(50)
+    tr=pd.concat([(df["high"]-df["low"]), (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()],axis=1).max(axis=1)
+    atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
+    ema9=close.ewm(span=9,adjust=False).mean()
+    ema21=close.ewm(span=21,adjust=False).mean()
+    # Keep the original EMA9/21 crossover rule, but recognize a confirmed
+    # crossover on any of the latest 3 CLOSED H1 candles. The current EMA
+    # relationship must still agree with that crossover direction.
+    cross_age=None
+    cross_direction=None
+    for offset in range(0, min(3, len(close)-1)):
+        idx=len(close)-1-offset
+        prev=idx-1
+        if ema9.iloc[idx]>ema21.iloc[idx] and ema9.iloc[prev]<=ema21.iloc[prev]:
+            cross_age=offset
+            cross_direction="BUY"
+            break
+        if ema9.iloc[idx]<ema21.iloc[idx] and ema9.iloc[prev]>=ema21.iloc[prev]:
+            cross_age=offset
+            cross_direction="SELL"
+            break
+    if cross_direction=="BUY" and not (ema9.iloc[-1]>ema21.iloc[-1]):
+        cross_direction=None; cross_age=None
+    if cross_direction=="SELL" and not (ema9.iloc[-1]<ema21.iloc[-1]):
+        cross_direction=None; cross_age=None
+    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
+      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2]),
+      "cross_age":cross_age,"cross_direction":cross_direction}
+
+def aggregate_h4_history(h4, timeframe):
+    """Build genuine D1/W1 OHLC from completed broker H4 bars when native history is short."""
+    if timeframe not in ("D1", "W1") or h4.empty:
+        return pd.DataFrame(columns=["timestamp","open","high","low","close","tick_volume"])
+    groups={}
+    for bar in h4.to_dict("records"):
+        stamp=float(bar["timestamp"])
+        dt=datetime.fromtimestamp(stamp, timezone.utc)
+        key=dt.date().isoformat() if timeframe=="D1" else f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+        groups.setdefault(key,[]).append(bar)
+    result=[]
+    minimum_bars=4 if timeframe=="D1" else 20
+    for key in sorted(groups):
+        rows=sorted(groups[key],key=lambda x:float(x["timestamp"]))
+        # Require at least four completed H4 bars per trading day and twenty per
+        # trading week. This excludes partial sessions/weeks rather than inventing OHLC.
+        if len(rows)<minimum_bars:
+            continue
+        result.append({
+            "timestamp":float(rows[0]["timestamp"]),
+            "open":float(rows[0]["open"]),
+            "high":max(float(x["high"]) for x in rows),
+            "low":min(float(x["low"]) for x in rows),
+            "close":float(rows[-1]["close"]),
+            "tick_volume":sum(float(x.get("tick_volume",0)) for x in rows),
+        })
+    return pd.DataFrame(result)
+
+async def auto_manage_positions():
+    """Fast independent position manager; never waits for the full signal/candle pipeline."""
+    row,_=await account_detail()
+    pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
+    bot=[p for p in positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
+    cached=AUTO_STATE.get("management_indicators") or {}
+    fresh=(time.time()-float(cached.get("updated_at",0)))<=90
+    ind=cached if fresh else {}
+    AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
+    AUTO_STATE["position_manager_positions"]=len(bot)
+    for p in bot:
+        comment=str(p.get("comment","")).upper()
+        side=str(p.get("side","")).upper()
+        entry=float(p.get("entryPrice") or 0)
+        current=float(p.get("currentPrice") or 0)
+        tp=float(p.get("takeProfit") or 0)
+        sl_now=float(p.get("stopLoss") or 0)
+        ticket=int(p.get("ticket") or 0)
+        if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0:
+            continue
+        if "RUNNER" in comment and tp>0:
+            one_r=abs(tp-entry)/1.5
+            reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
+            lock=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
+            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
+            if one_r>0 and reached and not locked:
+                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
+                logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s locked_R=0.5",ticket)
+    fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
+    basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
+    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
+    same_side=bool(fast_bot) and all(str(p.get("side") or "").upper()==basket_side for p in fast_bot)
+    h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
+    m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
+    m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
+    m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
+    reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
+    # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
+    # and M1 momentum confirms, or M1 EMA flips with 2/3 closed candles against.
+    fast_reversal=(m5_flip and m1_opposing) or (m1_flip and m1_opposing)
+    AUTO_STATE["fast_basket_positions"]=len(fast_bot)
+    AUTO_STATE["fast_basket_profit"]=round(basket_profit,2)
+    AUTO_STATE["fast_basket_exit_check"]="H1_FLIP" if h1_flip else ("LOWER_TF_REVERSAL" if fast_reversal else ("RSI_EXTREME" if reversal else "HOLD"))
+    now=time.time()
+    if now-float(AUTO_STATE.get("manager_log_at",0))>=30:
+        logger.info("AUTO_POSITION_MANAGER_TICK bot_positions=%s fast_positions=%s basket_profit=%.2f indicators_fresh=%s exit_check=%s",
+                    len(bot),len(fast_bot),basket_profit,fresh,AUTO_STATE["fast_basket_exit_check"])
+        AUTO_STATE["manager_log_at"]=now
+    for p in fast_bot:
+        side=str(p.get("side") or "").upper()
+        entry=float(p.get("entryPrice") or 0)
+        current=float(p.get("currentPrice") or 0)
+        tp=float(p.get("takeProfit") or 0)
+        sl_now=float(p.get("stopLoss") or 0)
+        ticket=int(p.get("ticket") or 0)
+        # Strategy TP is 2R, so half the entry-to-TP distance is one R.
+        one_r=abs(tp-entry)/2.0 if entry>0 and tp>0 else 0.0
+        if side in ("BUY","SELL") and one_r>0 and current>0:
+            reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
+            lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
+            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
+            if reached and not locked:
+                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
+                logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
+    if fast_bot and same_side and basket_profit>0 and (h1_flip or fast_reversal or reversal):
+        closed=[]
+        for p in fast_bot:
+            ticket=int(p.get("ticket") or 0)
+            if ticket:
+                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+                closed.append(ticket)
+                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s result=%s",ticket,str(result)[:180])
+        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
+        logger.info("AUTO_FAST_BASKET_CLOSED tickets=%s basket_profit=%.2f",closed,basket_profit)
+
+async def auto_cycle():
+    row,detail=await account_detail()
+    equity_now=float((detail.get("account") or {}).get("equity") or 0)
+    utc_day=datetime.now(timezone.utc).date().isoformat()
+    if AUTO_STATE.get("utc_day")!=utc_day:
+        AUTO_STATE["utc_day"]=utc_day
+        AUTO_STATE["trades_today"]=0
+        AUTO_STATE["daily_start_equity"]=equity_now if equity_now>0 else None
+    if AUTO_STATE.get("initial_equity") is None and equity_now>0:
+        AUTO_STATE["initial_equity"]=equity_now
+    symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
+    symbol=choose_symbol(symbols)
+    # Request bounded windows matching the broker history actually served:
+    # observed H1 coverage is ~294 bars for 400h and H4 ~216 bars for 1200h.
+    # Asking for a full year can trigger oversized/empty history responses on
+    # some TickerAll sessions; the strategy only needs 60 H1 and 50 H4 bars.
+    h1,h4,m15,m5=await asyncio.gather(
+      strategy_frame(row["id"],symbol,"H1",400),
+      strategy_frame(row["id"],symbol,"H4",1200),
+      strategy_frame(row["id"],symbol,"M5",120),
+      strategy_frame(row["id"],symbol,"M1",60))
+    # D1/W1 are not decision inputs; skip unused broker history requests.
+    minimums={"H1":60,"H4":55,"M5":30,"M1":25}
+    available={"H1":len(h1),"H4":len(h4),"M5":len(m15),"M1":len(m5)}
+    missing={tf:count for tf,count in available.items() if count<minimums[tf]}
+    if missing:
+        detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
+        raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
+    ind=strategy_indicators(h1)
+    # Cache completed M5/M1 momentum for the independent exit manager only;
+    # entry strategy and its H4/H1 -> M5 -> M1 gates remain unchanged.
+    def _ema_pair(frame):
+        close=frame["close"].astype(float)
+        e9=close.ewm(span=9,adjust=False).mean()
+        e21=close.ewm(span=21,adjust=False).mean()
+        return float(e9.iloc[-1]),float(e21.iloc[-1])
+    m5_e9,m5_e21=_ema_pair(m15)
+    m1_e9,m1_e21=_ema_pair(m5)
+    m1_recent=m5.iloc[-3:]
+    m1_bearish=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum())
+    m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
+    AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
+      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
+      "m1_bullish_candles":m1_bullish,"updated_at":time.time()}
+    h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
+    direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
+    rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
+    mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
+    now_utc=datetime.now(timezone.utc)
+    sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
+    signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
+    stamp=float(m15["timestamp"].iloc[-1])
+    print(
+      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M5:%s,M1:%s bar=%s "
+      "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
+      "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
+      "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
+      "news_block=%s news_reason=%s details=%s",
+      symbol,len(h1),len(h4),len(m15),len(m5),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
+      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
+      ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
+      signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
+      signal.phase4_score,signal.news_block,signal.news_reason,signal.details)
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
+      "last_signal":{"direction":signal.direction,"score":signal.total_score,"phase1":signal.phase1_score,
+       "smc":signal.phase2_score,"fundamental":signal.phase4_score,"news_block":signal.news_block,
+       "details":signal.details},"last_error":None})
+    positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    all_positions=positions_data.get("positions",[])
+    bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
+    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
+        if not bot: AUTO_STATE["last_action"]="HOLD"
+        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
+          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
+          signal.direction,signal.total_score,MIN_UNIFIED_SCORE,signal.news_block)
+        return
+    if bot:
+        AUTO_STATE["last_action"]="FAST_BASKET_ALREADY_OPEN"; return
+    if AUTO_STATE.get("last_entry_bar_time")==stamp:
+        AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_M5_BAR"; return
+    if not EXECUTION_ENABLED:
+        AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
+    if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
+        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
+    equity=float((detail.get("account") or {}).get("equity") or 0)
+    if equity<=0: raise RuntimeError("DEMO equity unavailable; entry blocked")
+    daily_start=AUTO_STATE.get("daily_start_equity") or equity
+    initial=AUTO_STATE.get("initial_equity") or equity
+    if equity<=daily_start*(1-AUTO_DAILY_LOSS_LIMIT):
+        AUTO_STATE["last_action"]="DAILY_LOSS_LIMIT"; return
+    if equity<=initial*(1-AUTO_MAX_DRAWDOWN):
+        AUTO_STATE["last_action"]="MAX_DRAWDOWN_LIMIT"; return
+    q=LIVE_TICKS.get(symbol)
+    if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
+        AUTO_STATE["last_action"]="NO_FRESH_LIVE_QUOTE"; return
+    price=float(q["ask"] if signal.direction=="BUY" else q["bid"])
+    risk_distance=abs(float(signal.entry)-float(signal.stop_loss))
+    if risk_distance<=0:
+        AUTO_STATE["last_action"]="INVALID_STRATEGY_STOP"; return
+    spec_payload=await ta("GET",f"/v1/accounts/{row['id']}/symbols/{symbol}/spec")
+    spec=spec_payload.get("spec",{}) if isinstance(spec_payload,dict) else {}
+    volume=min(0.01,MAX_VOLUME)
+    volume_min=float(spec.get("volumeMin") or 0)
+    volume_step=float(spec.get("volumeStep") or 0)
+    volume_max=float(spec.get("volumeMax") or 0)
+    tick_size=float(spec.get("tickSize") or 0)
+    tick_value_account=float(spec.get("tickValueAccount") or 0)
+    if volume_min<=0 or volume_step<=0 or volume_max<=0 or tick_size<=0 or tick_value_account<=0:
+        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_BROKER_RISK_SPEC"; return
+    step_units=volume/volume_step
+    if volume<volume_min-1e-9 or volume>volume_max+1e-9 or abs(step_units-round(step_units))>1e-7:
+        AUTO_STATE["last_action"]="BLOCKED_VOLUME_NOT_BROKER_VALID"; return
+    risk_distance=(price-float(signal.stop_loss)) if signal.direction=="BUY" else (float(signal.stop_loss)-price)
+    if risk_distance<=0 or risk_distance>3.5*float(signal.atr):
+        AUTO_STATE["last_action"]="BLOCKED_STALE_OR_INVALID_STOP"; return
+    spread=float(q["ask"])-float(q["bid"])
+    # Compute M5 ATR locally; _ind belongs to adaptive_strategy, not this module.
+    if len(m15)>=25:
+        prev_close=m15["close"].astype(float).shift(1)
+        tr=pd.concat([
+            m15["high"].astype(float)-m15["low"].astype(float),
+            (m15["high"].astype(float)-prev_close).abs(),
+            (m15["low"].astype(float)-prev_close).abs()
+        ],axis=1).max(axis=1)
+        m5_atr=float(tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean().iloc[-1])
+    else:
+        m5_atr=0.0
+    if m5_atr<=0 or spread>0.20*m5_atr:
+        AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
+    sl=float(signal.stop_loss)
+    fast_tp=price+risk_distance if signal.direction=="BUY" else price-risk_distance
+    per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
+    if per_leg_risk*3>equity*MAX_RISK_FRACTION:
+        AUTO_STATE["last_action"]="BLOCKED_THREE_LEG_AGGREGATE_RISK_CAP"; return
+    if AUTO_STATE["trades_today"]+3>AUTO_MAX_TRADES_PER_DAY:
+        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
+    opened=[]
+    try:
+        for leg in range(3):
+            req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
+              client_order_id="AUTOFAST"+uuid.uuid4().hex[:12],order_origin="AUTO")
+            opened.append(await order(req,authorization="Bearer "+BRIDGE_TOKEN))
+    except Exception as exc:
+        rollback_errors=[]
+        for result in reversed(opened):
+            ticket=int(result.get("order") or 0)
+            if ticket:
+                try: await ta("DELETE","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{},idem=True)
+                except Exception as rollback_exc: rollback_errors.append(str(rollback_exc)[:120])
+            else: rollback_errors.append("opened leg ticket missing")
+        AUTO_STATE["last_action"]="FAST_BASKET_ENTRY_ROLLED_BACK" if not rollback_errors else "FAST_BASKET_PARTIAL_ROLLBACK_UNCONFIRMED"
+        AUTO_STATE["last_error"]=str(exc)[:180]+((" | rollback: "+"; ".join(rollback_errors)) if rollback_errors else "")
+        AUTO_STATE["last_order"]={"opened_legs":opened,"rollback_errors":rollback_errors}
+        AUTO_STATE["trades_today"]+=len(opened); AUTO_STATE["last_entry_bar_time"]=stamp
+        return
+    AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
+    AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
+    AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
+      "aggregate_volume":round(volume*3,4),"target_R":1.0,"profit_lock_at_R":0.65,
+      "locked_profit_R":0.10,"max_auto_positions":3}
+
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
-    auth(authorization); await account_detail()
-    raise HTTPException(501,"Automatic strategy loop is not implemented yet; manual DEMO orders only")
+    global AUTO_TASK, AUTO_MANAGE_TASK
+    print("AUTO_START_REQUEST received",flush=True)
+    auth(authorization)
+    row,detail=await account_detail()
+    if detail.get("isDemo") is not True:
+        print("AUTO_START_BLOCKED reason=account_not_demo",flush=True)
+        raise HTTPException(403,"AUTO is DEMO-only")
+    if not EXECUTION_ENABLED:
+        print("AUTO_START_BLOCKED reason=execution_disabled",flush=True)
+        raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
+    async with AUTO_LOCK:
+        if AUTO_TASK and not AUTO_TASK.done():
+            print("AUTO_START_ALREADY_RUNNING",flush=True)
+            return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
+        AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
+        print("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true",flush=True)
+        async def position_manager():
+            while AUTO_STATE["running"]:
+                started=time.monotonic()
+                try:
+                    await auto_manage_positions()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("AUTO_POSITION_MANAGER_ERROR error=%s",str(exc)[:250])
+                elapsed=time.monotonic()-started
+                await asyncio.sleep(max(0.25,1.0-elapsed))
+        AUTO_MANAGE_TASK=asyncio.create_task(position_manager())
+        async def runner():
+            while AUTO_STATE["running"]:
+                cycle_started=time.monotonic()
+                AUTO_STATE["last_cycle_started_at"]=datetime.now(timezone.utc).isoformat()
+                try:
+                    print("AUTO_CYCLE_STARTED symbol=XAUUSD",flush=True)
+                    await auto_cycle()
+                    duration=time.monotonic()-cycle_started
+                    AUTO_STATE["cycle_count"]=int(AUTO_STATE.get("cycle_count",0))+1
+                    AUTO_STATE["last_cycle_duration_seconds"]=round(duration,2)
+                    print("AUTO_CYCLE_COMPLETED duration_seconds=%.2f action=%s signal=%s" %
+                          (duration,AUTO_STATE.get("last_action"),
+                           AUTO_STATE.get("last_signal")),flush=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    duration=time.monotonic()-cycle_started
+                    AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR",
+                                       "last_cycle_duration_seconds":round(duration,2)})
+                    import traceback
+                    print("DioMasteR AUTO cycle blocked: %s" % str(exc)[:350],flush=True)
+                    traceback.print_exc()
+                await asyncio.sleep(3)
+        AUTO_TASK=asyncio.create_task(runner())
+    return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}
 
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {"running":False,"supported":False,"last_action":"NOT_IMPLEMENTED","account_mode":"DEMO"}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
+      "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
+      "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
+    global AUTO_TASK, AUTO_MANAGE_TASK
     auth(authorization)
-    return {"running":False,"supported":False,"message":"No cloud auto loop is running"}
+    AUTO_STATE["running"]=False
+    if AUTO_TASK and not AUTO_TASK.done():
+        AUTO_TASK.cancel()
+        try: await AUTO_TASK
+        except asyncio.CancelledError: pass
+    if AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done():
+        AUTO_MANAGE_TASK.cancel()
+        try: await AUTO_MANAGE_TASK
+        except asyncio.CancelledError: pass
+    AUTO_STATE["last_action"]="STOPPED"
+    return {"running":False,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO stopped"}
 
 
 @app.get("/assistant/snapshot")

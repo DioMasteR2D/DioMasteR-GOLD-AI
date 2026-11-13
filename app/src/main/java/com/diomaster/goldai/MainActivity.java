@@ -124,7 +124,7 @@ public class MainActivity extends Activity {
                 // independently of the chart refresh and without starting/stopping AUTO.
                 if (mt5Status != null && mt5Status.startsWith("DEMO")) loadMt5AccountData();
             }
-            if (activityResumed) handler.postDelayed(this, 10000L);
+            if (activityResumed) handler.postDelayed(this, 3000L);
         }
     };
 
@@ -271,7 +271,7 @@ public class MainActivity extends Activity {
         refreshCloudAutoState();
         handler.removeCallbacks(refreshLoop);
         fetchPrice(true);
-        handler.postDelayed(refreshLoop, 30000L);
+        handler.postDelayed(refreshLoop, 3000L);
         if (!mt5BaseUrl.isEmpty() && !mt5Token.isEmpty()
                 && (mt5Status == null || !mt5Status.startsWith("DEMO"))) autoConnectMt5();
     }

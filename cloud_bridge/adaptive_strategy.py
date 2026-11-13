@@ -159,7 +159,7 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
         hold.details=f"HOLD: stop distance invalid ({risk:.3f})"; return hold
     # Reuse the established macro/news evaluator. News remains an absolute block.
     try:
-        from unified_engine import score_phase4
+        from fundamental_gate import score_phase4
         macro_pts,news_block,news_reason,macro_details=score_phase4(side)
     except Exception as exc:
         macro_pts,news_block,news_reason,macro_details=0,True,f"Fundamental/news validation failed: {exc}","macro unavailable"

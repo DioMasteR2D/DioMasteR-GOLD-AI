@@ -14,6 +14,9 @@ from datetime import datetime, timezone, timedelta
 CACHE_FILE = "news_calendar_cache.json"
 CACHE_TTL_SECONDS = 900
 EVENTS_SOURCE_OK = False
+_LAST_GOOD_EVENTS = None
+_LAST_GOOD_AT = 0.0
+_LAST_FETCH_ATTEMPT = 0.0
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 
 @dataclass
@@ -78,10 +81,12 @@ def _read_cache():
 
 def get_upcoming_events():
     """Return verified high/medium-impact USD events in the next 48 hours."""
-    global EVENTS_SOURCE_OK
+    global EVENTS_SOURCE_OK, _LAST_GOOD_EVENTS, _LAST_GOOD_AT, _LAST_FETCH_ATTEMPT
     cached = _read_cache()
     if cached is not None:
         EVENTS_SOURCE_OK = True
+        _LAST_GOOD_EVENTS = cached
+        _LAST_GOOD_AT = time.time()
         now = datetime.now(timezone.utc)
         events = []
         for row in cached:
@@ -95,6 +100,26 @@ def get_upcoming_events():
                 continue
         return sorted(events, key=lambda event: event.hours_until)
 
+    # Reuse a recently verified calendar during provider throttling.
+    # Do not request ForexFactory on every 3-second AUTO cycle.
+    now_epoch = time.time()
+    if _LAST_GOOD_EVENTS is not None and now_epoch - _LAST_GOOD_AT <= 3600:
+        EVENTS_SOURCE_OK = True
+        now = datetime.now(timezone.utc)
+        events = []
+        for row in _LAST_GOOD_EVENTS:
+            try:
+                dt = datetime.fromisoformat(row["datetime_utc"])
+                hours = (dt - now).total_seconds() / 3600
+                if -2 <= hours <= 48:
+                    events.append(EconomicEvent(row["title"], dt, row["impact"], row["currency"], round(hours, 2)))
+            except Exception:
+                continue
+        return sorted(events, key=lambda event: event.hours_until)
+    if now_epoch - _LAST_FETCH_ATTEMPT < 60:
+        EVENTS_SOURCE_OK = False
+        raise RuntimeError("USD news calendar refresh is rate-limited; no recent verified cache")
+    _LAST_FETCH_ATTEMPT = now_epoch
     EVENTS_SOURCE_OK = False
     response = requests.get(
         CALENDAR_URL,
@@ -135,6 +160,8 @@ def get_upcoming_events():
 
     # Only mark the source verified after a successful, structurally valid response.
     EVENTS_SOURCE_OK = True
+    _LAST_GOOD_EVENTS = cache_rows
+    _LAST_GOOD_AT = time.time()
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as handle:
             json.dump({"saved_at": time.time(), "events": cache_rows}, handle)

@@ -448,8 +448,8 @@ async def quote(symbol:str,authorization:Optional[str]=Header(default=None)):
 CANDLE_CACHE={}
 CANDLE_REFRESH_TASKS={}
 AUTO_STRATEGY_CACHE={}
-AUTO_STRATEGY_CACHE_TTL={"M5":5,"M15":15,"H1":30,"H4":60}
-CANDLE_CACHE_TTL={"M1":15,"M5":20,"M15":30,"M30":45,"H1":60,"H4":90,"D1":120,"W1":180,"MN1":300}
+AUTO_STRATEGY_CACHE_TTL={"M1":2,"M5":3,"M15":5,"H1":20,"H4":45}
+CANDLE_CACHE_TTL={"M1":3,"M5":5,"M15":10,"M30":20,"H1":30,"H4":60,"D1":120,"W1":180,"MN1":300}
 
 async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
     try:
@@ -808,10 +808,10 @@ async def auto_cycle():
     h1,h4,m15,m5=await asyncio.gather(
       strategy_frame(row["id"],symbol,"H1",400),
       strategy_frame(row["id"],symbol,"H4",1200),
-      strategy_frame(row["id"],symbol,"M15",240),
-      strategy_frame(row["id"],symbol,"M5",120))
+      strategy_frame(row["id"],symbol,"M5",120),
+      strategy_frame(row["id"],symbol,"M1",60))
     # D1/W1 are not decision inputs; skip unused broker history requests.
-    minimums={"H1":60,"H4":55,"M15":30,"M5":25}
+    minimums={"H1":60,"H4":55,"M5":30,"M1":25}
     available={"H1":len(h1),"H4":len(h4),"M15":len(m15),"M5":len(m5)}
     missing={tf:count for tf,count in available.items() if count<minimums[tf]}
     if missing:
@@ -825,7 +825,7 @@ async def auto_cycle():
     now_utc=datetime.now(timezone.utc)
     sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
     signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
-    stamp=float(h1["timestamp"].iloc[-1])
+    stamp=float(m15["timestamp"].iloc[-1])
     print(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M15:%s,M5:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
@@ -866,6 +866,8 @@ async def auto_cycle():
                                 ticket,entry,lock_price)
     # Smart exits only touch bot-owned positions; manual trades are never managed.
     for p in bot:
+        if "RUNNER" in str(p.get("comment","")).upper():
+            continue  # Runner is managed by its +0.5R lock and +1.5R target.
         side=str(p.get("side","")).upper(); profit=float(p.get("profit") or 0)
         opposite=(side=="BUY" and ind["ema9"]<ind["ema21"]) or (side=="SELL" and ind["ema9"]>ind["ema21"])
         reversal=(side=="BUY" and ind["rsi"]>=70) or (side=="SELL" and ind["rsi"]<=30)
@@ -1003,7 +1005,7 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
                     import traceback
                     print("DioMasteR AUTO cycle blocked: %s" % str(exc)[:350],flush=True)
                     traceback.print_exc()
-                await asyncio.sleep(15)
+                await asyncio.sleep(3)
         AUTO_TASK=asyncio.create_task(runner())
     return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}
 

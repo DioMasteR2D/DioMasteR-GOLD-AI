@@ -826,7 +826,7 @@ async def auto_manage_positions():
     h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
     m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
     m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
-    m1_opposing=(basket_side=="BUY" and ind.get("m1_opposing_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_opposing_candles",0)>=2)
+    m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
     reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
     # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
     # and M1 momentum confirms, or M1 EMA flips with 2/3 closed candles against.
@@ -905,10 +905,11 @@ async def auto_cycle():
     m5_e9,m5_e21=_ema_pair(m15)
     m1_e9,m1_e21=_ema_pair(m5)
     m1_recent=m5.iloc[-3:]
-    m1_opposing=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum()) if ind["ema9"]>ind["ema21"] else int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
+    m1_bearish=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum())
+    m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
     AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
-      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_opposing_candles":m1_opposing,
-      "updated_at":time.time()}
+      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
+      "m1_bullish_candles":m1_bullish,"updated_at":time.time()}
     h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)

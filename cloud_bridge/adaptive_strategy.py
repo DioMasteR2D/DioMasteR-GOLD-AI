@@ -1,7 +1,7 @@
 """Adaptive Liquidity Hunter for XAUUSD.
 
-Uses completed broker OHLC only. H4/H1 define directional bias; M15 identifies
-liquidity sweep, BOS/retest, EMA pullback or breakout/retest; M5 confirms timing.
+Uses completed broker OHLC only. H4/H1 define directional bias; M5 identifies
+liquidity sweep, BOS/retest, EMA pullback or breakout/retest; M1 confirms timing.
 Fundamental/news gate is retained as a hard safety filter.
 """
 from dataclasses import dataclass
@@ -44,6 +44,7 @@ def _ind(df):
     return c,h,l,ema20,ema50,rsi,atr
 
 def _setup(m15, side):
+    """Fast M5 entry setup, using only completed M5 candles."""
     c,h,l,e20,e50,rsi,atr=_ind(m15)
     i=len(m15)-1
     if i < 25 or not np.isfinite(atr.iloc[i]) or atr.iloc[i] <= 0:
@@ -82,7 +83,7 @@ def _setup(m15, side):
     return None
 
 def _m5_confirm(m5, side):
-    """Timely closed-candle confirmation: directional body plus 2-of-3 momentum checks."""
+    """Fast M1 timing confirmation: directional body plus 2-of-3 momentum checks."""
     if not _valid(m5, 22): return False
     c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
     o=float(m5["open"].iloc[i]); close=float(c.iloc[i]); prev=float(c.iloc[i-1])
@@ -102,7 +103,7 @@ def _m5_confirm(m5, side):
 def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     hold=AdaptiveSignal("HOLD",0,0,0,0,False,"","LOW","Waiting for sufficient completed broker candles")
     if not all((_valid(h1,60),_valid(h4,55),_valid(m15,30),_valid(m5,25))):
-        hold.details="Insufficient completed H1/H4/M15/M5 broker candles"
+        hold.details="Insufficient completed H1/H4/M5/M1 broker candles"
         return hold
     c1,hi1,lo1,e20_1,e50_1,rsi1,atr1=_ind(h1)
     c4,_,_,e20_4,e50_4,_,atr4=_ind(h4)
@@ -120,7 +121,7 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
         return hold
     setup=_setup(m15,side)
     if not setup:
-        hold.details=f"HOLD: no valid M15 liquidity/pullback setup in {side} trend"
+        hold.details=f"HOLD: no valid M5 liquidity/pullback setup in {side} trend"
         return hold
     setup_name,setup_points,structure_price=setup
     confirmed=_m5_confirm(m5,side)
@@ -140,7 +141,7 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     if score<MIN_ADAPTIVE_SCORE:
         hold.total_score=score; hold.details=f"HOLD: {setup_name} score {score}/{MIN_ADAPTIVE_SCORE}; momentum not confirmed"
         return hold
-    m15c,_,_,_,_,_,m15atr_series=_ind(m15)
+    m15c,_,_,_,_,_,m15atr_series=_ind(m15)  # M5 ATR for fast scalping stops
     m15atr=float(m15atr_series.iloc[-1])
     price=float(m15c.iloc[-1])
     if not np.isfinite(m15atr) or m15atr<=0:
@@ -169,5 +170,5 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     score=min(100,score+int(macro_pts)*2)
     return AdaptiveSignal(side,score,2,setup_points,int(macro_pts),False,"",
         "HIGH" if score>=85 else "MEDIUM",
-        f"{setup_name}; H4/H1 aligned; M5 confirmed; RSI14={rsi:.1f}; ATR14={atr:.3f}; {macro_details}; SL/TP=structure + 2R",
+        f"{setup_name}; H4/H1 aligned; M1 confirmed; RSI14={rsi:.1f}; ATR14={atr:.3f}; {macro_details}; SL/TP=structure + 2R",
         setup_name,price,sl,tp,atr)

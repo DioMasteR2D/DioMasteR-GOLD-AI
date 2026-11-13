@@ -844,7 +844,8 @@ async def auto_cycle():
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    # Move the RUNNER stop to entry once live price reaches +1R.
+    # RUNNER: at +1R, lock +0.5R; target is +1.5R.
+    # Derive 1R from the original entry-to-target distance (target = 1.5R).
     for p in bot:
         if "RUNNER" in str(p.get("comment","")).upper():
             side=str(p.get("side","")).upper()
@@ -852,15 +853,17 @@ async def auto_cycle():
             current=float(p.get("currentPrice") or 0)
             tp_existing=float(p.get("takeProfit") or 0)
             sl_existing=float(p.get("stopLoss") or 0)
-            if entry>0 and tp_existing>0:
-                one_r=abs(tp_existing-entry)/2.0
+            if entry>0 and tp_existing>0 and side in ("BUY","SELL"):
+                one_r=abs(tp_existing-entry)/1.5
                 reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
-                already_be=abs(sl_existing-entry)<=max(0.01,one_r*0.02)
-                if reached and not already_be:
+                lock_price=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
+                already_locked=(sl_existing>=lock_price if side=="BUY" else sl_existing<=lock_price)
+                if reached and not already_locked:
                     ticket=int(p.get("ticket") or 0)
                     await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",
-                             {"stopLoss":entry},idem=True)
-                    logger.info("AUTO_RUNNER_BREAK_EVEN ticket=%s entry=%.5f",ticket,entry)
+                             {"stopLoss":lock_price},idem=True)
+                    logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s entry=%.5f stop=%.5f locked_R=0.5",
+                                ticket,entry,lock_price)
     # Smart exits only touch bot-owned positions; manual trades are never managed.
     for p in bot:
         side=str(p.get("side","")).upper(); profit=float(p.get("profit") or 0)
@@ -920,7 +923,7 @@ async def auto_cycle():
         AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
     sl=float(signal.stop_loss)
     fast_tp=price+risk_distance if signal.direction=="BUY" else price-risk_distance
-    runner_tp=price+2*risk_distance if signal.direction=="BUY" else price-2*risk_distance
+    runner_tp=price+1.5*risk_distance if signal.direction=="BUY" else price-1.5*risk_distance
     per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
     if per_leg_risk*2>equity*MAX_RISK_FRACTION:
         AUTO_STATE["last_action"]="BLOCKED_TWO_LEG_AGGREGATE_RISK_CAP"; return
@@ -934,9 +937,21 @@ async def auto_cycle():
           client_order_id="AUTORUNNER"+uuid.uuid4().hex[:10],order_origin="AUTO")
         runner_result=await order(runner_req,authorization="Bearer "+BRIDGE_TOKEN)
     except Exception as exc:
-        AUTO_STATE["last_action"]="FAST_OPENED_RUNNER_FAILED"
-        AUTO_STATE["last_error"]="Runner leg rejected after fast leg opened: "+str(exc)[:220]
-        AUTO_STATE["last_order"]={"fast":fast_result,"runner_error":str(exc)[:220]}
+        # Never intentionally leave a single-leg entry: roll back FAST if RUNNER fails.
+        rollback_error=None
+        try:
+            fast_ticket=int(fast_result.get("order") or 0)
+            if fast_ticket:
+                await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{fast_ticket}",{},idem=True)
+            else:
+                rollback_error="FAST ticket missing; automatic rollback could not be confirmed"
+        except Exception as rollback_exc:
+            rollback_error=str(rollback_exc)[:180]
+        AUTO_STATE["last_action"]="TWO_LEG_ENTRY_ROLLED_BACK" if not rollback_error else "FAST_OPENED_RUNNER_FAILED_ROLLBACK_UNCONFIRMED"
+        AUTO_STATE["last_error"]="Runner leg rejected: "+str(exc)[:180]+(
+            " | rollback: "+rollback_error if rollback_error else " | FAST rollback requested")
+        AUTO_STATE["last_order"]={"fast":fast_result,"runner_error":str(exc)[:180],
+                                  "rollback_error":rollback_error}
         AUTO_STATE["trades_today"]+=1
         AUTO_STATE["last_entry_bar_time"]=stamp
         return
@@ -944,7 +959,9 @@ async def auto_cycle():
     AUTO_STATE["last_entry_bar_time"]=stamp
     AUTO_STATE["last_action"]="OPENED_TWO_LEGS_"+signal.direction
     AUTO_STATE["last_order"]={"fast":fast_result,"runner":runner_result,"volume_each":volume,
-                              "aggregate_volume":round(volume*2,4),"fast_target_R":1,"runner_target_R":2}
+                              "aggregate_volume":round(volume*2,4),"fast_target_R":1,
+                              "runner_target_R":1.5,"runner_profit_lock_at_R":1,
+                              "runner_locked_profit_R":0.5}
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
@@ -996,7 +1013,7 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
     return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":2,"max_volume_each":min(0.01,MAX_VOLUME),"legs":{"fast_target_R":1,"runner_target_R":2,"equal_volume":True}}
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":2,"max_volume_each":min(0.01,MAX_VOLUME),"legs":{"fast_target_R":1,"runner_target_R":1.5,"runner_profit_lock_at_R":1,"runner_locked_profit_R":0.5,"equal_volume":True}}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

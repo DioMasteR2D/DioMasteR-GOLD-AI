@@ -77,12 +77,22 @@ def _setup(m15, side):
     return None
 
 def _m5_confirm(m5, side):
+    """Timely closed-candle confirmation: directional body plus 2-of-3 momentum checks."""
     if not _valid(m5, 22): return False
-    c,h,l,_,_,rsi,atr=_ind(m5); i=len(m5)-1
-    o=float(m5["open"].iloc[i]); close=float(c.iloc[i])
+    c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
+    o=float(m5["open"].iloc[i]); close=float(c.iloc[i]); prev=float(c.iloc[i-1])
+    # Avoid requiring a full break of the previous candle's extreme on every entry.
+    # A directional close, improving close-to-close momentum and RSI are sufficient
+    # when at least two checks agree; all values are from completed M5 candles.
     if side=="BUY":
-        return close>o and close>float(h.iloc[i-1]) and float(rsi.iloc[i])>=50
-    return close<o and close<float(l.iloc[i-1]) and float(rsi.iloc[i])<=50
+        directional=close>o
+        checks=[close>prev, float(rsi.iloc[i])>=48,
+                float(ema20.iloc[i])>=float(ema50.iloc[i])]
+    else:
+        directional=close<o
+        checks=[close<prev, float(rsi.iloc[i])<=52,
+                float(ema20.iloc[i])<=float(ema50.iloc[i])]
+    return directional and sum(bool(x) for x in checks)>=2
 
 def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     hold=AdaptiveSignal("HOLD",0,0,0,0,False,"","LOW","Waiting for sufficient completed broker candles")
@@ -113,9 +123,11 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
         hold.details=f"HOLD: {setup_name} found; waiting for M5 confirmation"
         return hold
     rsi=float(rsi1.iloc[i1]); atr=float(atr1.iloc[i1]); price=float(c1.iloc[i1])
-    momentum=(50<=rsi<=72) if side=="BUY" else (28<=rsi<=50)
+    # Wider neutral bands avoid rejecting otherwise aligned trends for a small
+    # RSI pullback; extreme momentum remains filtered to avoid chasing exhaustion.
+    momentum=(45<=rsi<=75) if side=="BUY" else (25<=rsi<=55)
     if not momentum:
-        hold.details=f"HOLD: {setup_name} confirmed but H1 RSI momentum is not aligned (RSI14={rsi:.1f})"
+        hold.details=f"HOLD: {setup_name} confirmed but H1 RSI is outside the permitted trend band (RSI14={rsi:.1f})"
         return hold
     # Score is setup quality, not a win-probability percentage.
     score=35+setup_points+15+10

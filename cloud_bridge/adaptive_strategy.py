@@ -63,13 +63,13 @@ def _setup(m15, side):
         return ("BOS_RETEST", 27, min(low,prior_res))
     if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
         return ("BOS_RETEST", 27, max(high,prior_sup))
-    # Trend pullback to the M15 EMA zone. A touch may occur on any of the
-    # latest three CLOSED candles; the latest candle must reclaim/reject EMA20
-    # with a directional body. This avoids missing a valid retest merely because
-    # the confirmation candle follows the actual touch by one or two bars.
+    # Trend pullback to the M5 EMA zone. Accept a touch on any of the
+    # latest five CLOSED candles; the latest candle must still reclaim/reject
+    # EMA20 with a directional body. A modest ATR buffer tolerates normal spread
+    # and wick variation without removing the directional confirmation.
     zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
-    recent_low=float(l.iloc[i-2:i+1].min()); recent_high=float(h.iloc[i-2:i+1].max())
-    touch_buffer=0.10*a
+    recent_low=float(l.iloc[i-4:i+1].min()); recent_high=float(h.iloc[i-4:i+1].max())
+    touch_buffer=0.15*a
     if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
         return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
     if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:

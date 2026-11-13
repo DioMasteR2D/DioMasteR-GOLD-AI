@@ -58,6 +58,8 @@ public class MainActivity extends Activity {
     private boolean fetching = false;
     private boolean pendingRefresh = false;
     private long lastMtfDiagnosticsAt = 0L;
+    private volatile long lastAccountRefreshAt = 0L;
+    private volatile boolean accountRefreshInFlight = false;
     private boolean activityResumed = false;
     private int fetchSequence = 0;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
@@ -116,7 +118,12 @@ public class MainActivity extends Activity {
 
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
-            if (activityResumed) fetchPrice();
+            if (activityResumed) {
+                fetchPrice();
+                // Keep broker positions, floating P/L and closed history synchronized
+                // independently of the chart refresh and without starting/stopping AUTO.
+                if (mt5Status != null && mt5Status.startsWith("DEMO")) loadMt5AccountData();
+            }
             if (activityResumed) handler.postDelayed(this, 10000L);
         }
     };
@@ -575,16 +582,26 @@ public class MainActivity extends Activity {
 
     private void loadMt5AccountData() {
         if (mt5BaseUrl.isEmpty() || mt5Token.isEmpty() || mt5Status == null || !mt5Status.startsWith("DEMO")) return;
+        long now = System.currentTimeMillis();
+        if (accountRefreshInFlight || now - lastAccountRefreshAt < 7000L) return;
+        accountRefreshInFlight = true;
+        lastAccountRefreshAt = now;
         new Thread(() -> {
             try {
                 Mt5DemoClient client=new Mt5DemoClient(mt5BaseUrl,mt5Token);
+                JSONObject status=client.status();
                 JSONObject open=client.positions();
-                JSONObject history=client.history(mt5Symbol,50);
+                JSONObject history=client.history(mt5Symbol,100);
                 JSONArray openRows=open.optJSONArray("positions");
                 JSONArray closedRows=history.optJSONArray("history");
                 runOnUiThread(() -> {
                     mt5OpenPositions=openRows==null?new JSONArray():openRows;
                     mt5ClosedHistory=closedRows==null?new JSONArray():closedRows;
+                    mt5Balance=status.optDouble("balance",mt5Balance);
+                    mt5Equity=status.optDouble("equity",mt5Equity);
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                            .putLong("balance_bits",Double.doubleToRawLongBits(mt5Balance))
+                            .putLong("equity_bits",Double.doubleToRawLongBits(mt5Equity)).apply();
                     render();
                 });
             } catch(Exception e) {
@@ -592,8 +609,10 @@ public class MainActivity extends Activity {
                     feedMessage="MT5 account data: "+(e.getMessage()==null?"unavailable":e.getMessage());
                     render();
                 });
+            } finally {
+                accountRefreshInFlight = false;
             }
-        }).start();
+        }, "DioMasteR-MT5-account-sync").start();
     }
 
     private void showMt5Positions() {
@@ -1026,7 +1045,7 @@ public class MainActivity extends Activity {
         addLabel(homePositions,"▣  ΑΝΟΙΧΤΕΣ ΘΕΣΕΙΣ");
         JSONArray homeOpen = useBrokerAccount ? mt5OpenPositions : homeSnap.optJSONArray("positions");
         if (homeOpen == null || homeOpen.length() == 0) {
-            homePositions.addView(text("Δεν υπάρχουν ανοιχτές θέσεις.",11,MUTED,false));
+            homePositions.addView(text(useBrokerAccount ? "Ο broker δεν αναφέρει ανοιχτές θέσεις αυτή τη στιγμή." : "Δεν υπάρχουν ανοιχτές θέσεις.",11,MUTED,false));
         } else {
             for (int n=0; n<Math.min(3,homeOpen.length()); n++) {
                 JSONObject pos=homeOpen.optJSONObject(n); if(pos==null) continue;
@@ -1034,8 +1053,14 @@ public class MainActivity extends Activity {
                 double pnl=pos.optDouble("profit",0);
                 String symbol=pos.optString("symbol",mt5Symbol);
                 String size=useBrokerAccount?String.format(Locale.US,"%.2f lot",pos.optDouble("volume")):String.format(Locale.US,"%.2f oz",pos.optDouble("oz"));
-                addRow(homePositions,symbol+"  "+side+"  "+size,
-                        useBrokerAccount?PaperTradingEngine.money(pnl):PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+                String ticket = pos.optString("ticket", "—");
+                addRow(homePositions,"#"+ticket+"  "+symbol+"  "+side+"  "+size,
+                        PaperTradingEngine.money(pnl),pnl>=0?GREEN:RED);
+                if (useBrokerAccount) {
+                    addRow(homePositions,"Entry "+String.format(Locale.US,"%.2f",pos.optDouble("price_open",0))+
+                            " · SL "+String.format(Locale.US,"%.2f",pos.optDouble("sl",0))+
+                            " · TP "+String.format(Locale.US,"%.2f",pos.optDouble("tp",0)), "LIVE MT5", MUTED);
+                }
             }
         }
         LinearLayout homeStats = card();
@@ -1183,7 +1208,7 @@ public class MainActivity extends Activity {
         historyPageStart = root.getChildCount();
         LinearLayout history = card();
         historySection = history;
-        addLabel(history, "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
+        addLabel(history, mt5Status != null && mt5Status.startsWith("DEMO") ? "ΙΣΤΟΡΙΚΟ MT5 DEMO · ΑΠΟΔΟΣΗ" : "ΙΣΤΟΡΙΚΟ PAPER · ΑΠΟΔΟΣΗ");
         JSONArray closed = snap.optJSONArray("history");
         if (closed == null) closed = new JSONArray();
         int winCount = 0, lossCount = 0;

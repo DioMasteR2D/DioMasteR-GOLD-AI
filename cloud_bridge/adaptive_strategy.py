@@ -44,61 +44,61 @@ def _ind(df):
     return c,h,l,ema20,ema50,rsi,atr
 
 def _setup(m15, side):
-    """Fast M5 entry setup, using only completed M5 candles."""
+    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles."""
     c,h,l,e20,e50,rsi,atr=_ind(m15)
-    i=len(m15)-1
-    if i < 25 or not np.isfinite(atr.iloc[i]) or atr.iloc[i] <= 0:
+    last=len(m15)-1
+    if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
         return None
-    o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
-    a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
-    body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
-    # Sweep: pierce a prior 20-bar extreme and close back inside with rejection.
-    if side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8:
-        return ("LIQUIDITY_SWEEP", 30, low)
-    if side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8:
-        return ("LIQUIDITY_SWEEP", 30, high)
-    # BOS + retest: a prior close broke structure; current candle retests and holds it.
-    prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
-    if side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o:
-        return ("BOS_RETEST", 27, min(low,prior_res))
-    if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
-        return ("BOS_RETEST", 27, max(high,prior_sup))
-    # Trend pullback to the M5 EMA zone. Accept a touch on any of the
-    # latest five CLOSED candles; the latest candle must still reclaim/reject
-    # EMA20 with a directional body. A modest ATR buffer tolerates normal spread
-    # and wick variation without removing the directional confirmation.
-    zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
-    recent_low=float(l.iloc[i-4:i+1].min()); recent_high=float(h.iloc[i-4:i+1].max())
-    touch_buffer=0.15*a
-    if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
-        return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
-    if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
-        return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
-    # Breakout and retest of a recent 12-bar range.
-    range_high=float(h.iloc[i-13:i-1].max()); range_low=float(l.iloc[i-13:i-1].min())
-    if side=="BUY" and prev_close > range_high and low <= range_high and close > range_high:
-        return ("BREAKOUT_RETEST", 25, low)
-    if side=="SELL" and prev_close < range_low and high >= range_low and close < range_low:
-        return ("BREAKOUT_RETEST", 25, high)
+    # Prefer the newest valid setup, but do not discard a setup merely because
+    # the next one or two closed M5 candles are the confirmation/retest candle.
+    for i in range(last, max(24,last-3), -1):
+        if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
+            continue
+        o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
+        a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
+        body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
+        if side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8:
+            return ("LIQUIDITY_SWEEP", 30, low)
+        if side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8:
+            return ("LIQUIDITY_SWEEP", 30, high)
+        prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
+        if side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o:
+            return ("BOS_RETEST", 27, min(low,prior_res))
+        if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
+            return ("BOS_RETEST", 27, max(high,prior_sup))
+        zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
+        recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
+        touch_buffer=0.15*a
+        if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
+            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
+        if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
+            return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
+        range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
+        if side=="BUY" and prev_close > range_high and low <= range_high and close > range_high:
+            return ("BREAKOUT_RETEST", 25, low)
+        if side=="SELL" and prev_close < range_low and high >= range_low and close < range_low:
+            return ("BREAKOUT_RETEST", 25, high)
     return None
 
 def _m5_confirm(m5, side):
-    """Fast M1 timing confirmation: directional body plus 2-of-3 momentum checks."""
+    """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
     if not _valid(m5, 22): return False
     c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
+    # Use a short 3-candle window so a valid M1 impulse is not lost to one
+    # small pause candle. The latest candle must still close in trade direction.
+    recent=m5.iloc[i-2:i+1]
     o=float(m5["open"].iloc[i]); close=float(c.iloc[i]); prev=float(c.iloc[i-1])
-    # Avoid requiring a full break of the previous candle's extreme on every entry.
-    # A directional close, improving close-to-close momentum and RSI are sufficient
-    # when at least two checks agree; all values are from completed M5 candles.
+    directional=close>o if side=="BUY" else close<o
+    if not directional: return False
     if side=="BUY":
-        directional=close>o
-        checks=[close>prev, float(rsi.iloc[i])>=48,
-                float(ema20.iloc[i])>=float(ema50.iloc[i])]
+        checks=[close>prev, float(rsi.iloc[i])>=47,
+                float(ema20.iloc[i])>=float(ema50.iloc[i]),
+                int((recent["close"].astype(float)>recent["open"].astype(float)).sum())>=2]
     else:
-        directional=close<o
-        checks=[close<prev, float(rsi.iloc[i])<=52,
-                float(ema20.iloc[i])<=float(ema50.iloc[i])]
-    return directional and sum(bool(x) for x in checks)>=2
+        checks=[close<prev, float(rsi.iloc[i])<=53,
+                float(ema20.iloc[i])<=float(ema50.iloc[i]),
+                int((recent["close"].astype(float)<recent["open"].astype(float)).sum())>=2]
+    return sum(bool(x) for x in checks)>=2
 
 def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     hold=AdaptiveSignal("HOLD",0,0,0,0,False,"","LOW","Waiting for sufficient completed broker candles")

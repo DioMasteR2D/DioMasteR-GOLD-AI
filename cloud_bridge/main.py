@@ -920,7 +920,7 @@ async def auto_cycle():
     if risk_distance<=0 or risk_distance>3.5*float(signal.atr):
         AUTO_STATE["last_action"]="BLOCKED_STALE_OR_INVALID_STOP"; return
     spread=float(q["ask"])-float(q["bid"])
-    m5_atr=float(_ind(m5)[-1].iloc[-1]) if len(m5)>=25 else 0.0
+    m5_atr=float(_ind(m15)[-1].iloc[-1]) if len(m15)>=25 else 0.0
     if m5_atr<=0 or spread>0.20*m5_atr:
         AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
     sl=float(signal.stop_loss)

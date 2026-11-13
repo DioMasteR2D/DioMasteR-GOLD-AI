@@ -799,6 +799,8 @@ async def auto_manage_positions():
     cached=AUTO_STATE.get("management_indicators") or {}
     fresh=(time.time()-float(cached.get("updated_at",0)))<=90
     ind=cached if fresh else {}
+    AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
+    AUTO_STATE["position_manager_positions"]=len(bot)
     for p in bot:
         comment=str(p.get("comment","")).upper()
         side=str(p.get("side","")).upper()
@@ -820,8 +822,23 @@ async def auto_manage_positions():
     fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
     basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
     basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
-    opposite=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
+    same_side=bool(fast_bot) and all(str(p.get("side") or "").upper()==basket_side for p in fast_bot)
+    h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
+    m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
+    m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
+    m1_opposing=(basket_side=="BUY" and ind.get("m1_opposing_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_opposing_candles",0)>=2)
     reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
+    # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
+    # and M1 momentum confirms, or M1 EMA flips with 2/3 closed candles against.
+    fast_reversal=(m5_flip and m1_opposing) or (m1_flip and m1_opposing)
+    AUTO_STATE["fast_basket_positions"]=len(fast_bot)
+    AUTO_STATE["fast_basket_profit"]=round(basket_profit,2)
+    AUTO_STATE["fast_basket_exit_check"]="H1_FLIP" if h1_flip else ("LOWER_TF_REVERSAL" if fast_reversal else ("RSI_EXTREME" if reversal else "HOLD"))
+    now=time.time()
+    if now-float(AUTO_STATE.get("manager_log_at",0))>=30:
+        logger.info("AUTO_POSITION_MANAGER_TICK bot_positions=%s fast_positions=%s basket_profit=%.2f indicators_fresh=%s exit_check=%s",
+                    len(bot),len(fast_bot),basket_profit,fresh,AUTO_STATE["fast_basket_exit_check"])
+        AUTO_STATE["manager_log_at"]=now
     for p in fast_bot:
         side=str(p.get("side") or "").upper()
         entry=float(p.get("entryPrice") or 0)
@@ -829,7 +846,8 @@ async def auto_manage_positions():
         tp=float(p.get("takeProfit") or 0)
         sl_now=float(p.get("stopLoss") or 0)
         ticket=int(p.get("ticket") or 0)
-        one_r=abs(tp-entry) if entry>0 and tp>0 else 0.0
+        # Strategy TP is 2R, so half the entry-to-TP distance is one R.
+        one_r=abs(tp-entry)/2.0 if entry>0 and tp>0 else 0.0
         if side in ("BUY","SELL") and one_r>0 and current>0:
             reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
             lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
@@ -837,7 +855,7 @@ async def auto_manage_positions():
             if reached and not locked:
                 await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
                 logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
-    if fast_bot and basket_profit>0 and (opposite or reversal):
+    if fast_bot and same_side and basket_profit>0 and (h1_flip or fast_reversal or reversal):
         closed=[]
         for p in fast_bot:
             ticket=int(p.get("ticket") or 0)
@@ -877,7 +895,20 @@ async def auto_cycle():
         detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
         raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
     ind=strategy_indicators(h1)
-    AUTO_STATE["management_indicators"]={**ind,"updated_at":time.time()}
+    # Cache completed M5/M1 momentum for the independent exit manager only;
+    # entry strategy and its H4/H1 -> M5 -> M1 gates remain unchanged.
+    def _ema_pair(frame):
+        close=frame["close"].astype(float)
+        e9=close.ewm(span=9,adjust=False).mean()
+        e21=close.ewm(span=21,adjust=False).mean()
+        return float(e9.iloc[-1]),float(e21.iloc[-1])
+    m5_e9,m5_e21=_ema_pair(m15)
+    m1_e9,m1_e21=_ema_pair(m5)
+    m1_recent=m5.iloc[-3:]
+    m1_opposing=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum()) if ind["ema9"]>ind["ema21"] else int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
+    AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
+      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_opposing_candles":m1_opposing,
+      "updated_at":time.time()}
     h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)

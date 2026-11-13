@@ -117,7 +117,7 @@ public class MainActivity extends Activity {
     private final Runnable refreshLoop = new Runnable() {
         @Override public void run() {
             if (activityResumed) fetchPrice();
-            if (activityResumed) handler.postDelayed(this, 30000L);
+            if (activityResumed) handler.postDelayed(this, 10000L);
         }
     };
 
@@ -486,7 +486,7 @@ public class MainActivity extends Activity {
 
     private boolean quoteFresh() {
         long age = System.currentTimeMillis() - quoteAt;
-        return price > 0 && quoteAt > 0 && age >= -5000L && age <= 15000L;
+        return price > 0 && quoteAt > 0 && age >= -5000L && age <= 45000L;
     }
 
     private void openTrade(String side) {

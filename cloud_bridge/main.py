@@ -812,7 +812,7 @@ async def auto_cycle():
       strategy_frame(row["id"],symbol,"M1",60))
     # D1/W1 are not decision inputs; skip unused broker history requests.
     minimums={"H1":60,"H4":55,"M5":30,"M1":25}
-    available={"H1":len(h1),"H4":len(h4),"M15":len(m15),"M5":len(m5)}
+    available={"H1":len(h1),"H4":len(h4),"M5":len(m15),"M1":len(m5)}
     missing={tf:count for tf,count in available.items() if count<minimums[tf]}
     if missing:
         detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
@@ -827,7 +827,7 @@ async def auto_cycle():
     signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
     stamp=float(m15["timestamp"].iloc[-1])
     print(
-      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M15:%s,M5:%s bar=%s "
+      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M5:%s,M1:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
       "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
@@ -883,7 +883,7 @@ async def auto_cycle():
         return
     if bot: AUTO_STATE["last_action"]="POSITION_ALREADY_OPEN"; return
     if AUTO_STATE.get("last_entry_bar_time")==stamp:
-        AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_H1_BAR"; return
+        AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_M5_BAR"; return
     if not EXECUTION_ENABLED:
         AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
     if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:

@@ -634,6 +634,7 @@ import pandas as pd
 from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
 MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
 AUTO_TASK=None
+AUTO_MANAGE_TASK=None
 AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
 AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
@@ -789,6 +790,64 @@ def aggregate_h4_history(h4, timeframe):
         })
     return pd.DataFrame(result)
 
+async def auto_manage_positions():
+    """Fast independent position manager; never waits for the full signal/candle pipeline."""
+    row,_=await account_detail()
+    pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+    positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
+    bot=[p for p in positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
+    cached=AUTO_STATE.get("management_indicators") or {}
+    fresh=(time.time()-float(cached.get("updated_at",0)))<=90
+    ind=cached if fresh else {}
+    for p in bot:
+        comment=str(p.get("comment","")).upper()
+        side=str(p.get("side","")).upper()
+        entry=float(p.get("entryPrice") or 0)
+        current=float(p.get("currentPrice") or 0)
+        tp=float(p.get("takeProfit") or 0)
+        sl_now=float(p.get("stopLoss") or 0)
+        ticket=int(p.get("ticket") or 0)
+        if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0:
+            continue
+        if "RUNNER" in comment and tp>0:
+            one_r=abs(tp-entry)/1.5
+            reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
+            lock=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
+            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
+            if one_r>0 and reached and not locked:
+                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
+                logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s locked_R=0.5",ticket)
+    fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
+    basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
+    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
+    opposite=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
+    reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
+    for p in fast_bot:
+        side=str(p.get("side") or "").upper()
+        entry=float(p.get("entryPrice") or 0)
+        current=float(p.get("currentPrice") or 0)
+        tp=float(p.get("takeProfit") or 0)
+        sl_now=float(p.get("stopLoss") or 0)
+        ticket=int(p.get("ticket") or 0)
+        one_r=abs(tp-entry) if entry>0 and tp>0 else 0.0
+        if side in ("BUY","SELL") and one_r>0 and current>0:
+            reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
+            lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
+            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
+            if reached and not locked:
+                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
+                logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
+    if fast_bot and basket_profit>0 and (opposite or reversal):
+        closed=[]
+        for p in fast_bot:
+            ticket=int(p.get("ticket") or 0)
+            if ticket:
+                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+                closed.append(ticket)
+                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s result=%s",ticket,str(result)[:180])
+        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
+        logger.info("AUTO_FAST_BASKET_CLOSED tickets=%s basket_profit=%.2f",closed,basket_profit)
+
 async def auto_cycle():
     row,detail=await account_detail()
     equity_now=float((detail.get("account") or {}).get("equity") or 0)
@@ -818,6 +877,7 @@ async def auto_cycle():
         detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
         raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
     ind=strategy_indicators(h1)
+    AUTO_STATE["management_indicators"]={**ind,"updated_at":time.time()}
     h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
@@ -844,53 +904,6 @@ async def auto_cycle():
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    # RUNNER: at +1R, lock +0.5R; target is +1.5R.
-    # Derive 1R from the original entry-to-target distance (target = 1.5R).
-    for p in bot:
-        if "RUNNER" in str(p.get("comment","")).upper():
-            side=str(p.get("side","")).upper()
-            entry=float(p.get("entryPrice") or 0)
-            current=float(p.get("currentPrice") or 0)
-            tp_existing=float(p.get("takeProfit") or 0)
-            sl_existing=float(p.get("stopLoss") or 0)
-            if entry>0 and tp_existing>0 and side in ("BUY","SELL"):
-                one_r=abs(tp_existing-entry)/1.5
-                reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
-                lock_price=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
-                already_locked=(sl_existing>=lock_price if side=="BUY" else sl_existing<=lock_price)
-                if reached and not already_locked:
-                    ticket=int(p.get("ticket") or 0)
-                    await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",
-                             {"stopLoss":lock_price},idem=True)
-                    logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s entry=%.5f stop=%.5f locked_R=0.5",
-                                ticket,entry,lock_price)
-    # Three FAST legs are managed as one basket.
-    fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
-    basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
-    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
-    opposite=(basket_side=="BUY" and ind["ema9"]<ind["ema21"]) or (basket_side=="SELL" and ind["ema9"]>ind["ema21"])
-    reversal=(basket_side=="BUY" and ind["rsi"]>=70) or (basket_side=="SELL" and ind["rsi"]<=30)
-    for p in fast_bot:
-        side=str(p.get("side") or "").upper()
-        entry=float(p.get("entryPrice") or 0); current=float(p.get("currentPrice") or 0)
-        tp=float(p.get("takeProfit") or 0); sl_now=float(p.get("stopLoss") or 0)
-        one_r=abs(tp-entry) if entry>0 and tp>0 else 0.0
-        if side in ("BUY","SELL") and one_r>0 and current>0:
-            reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
-            lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
-            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
-            if reached and not locked:
-                ticket=int(p.get("ticket") or 0)
-                await ta("PATCH","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{"stopLoss":lock},idem=True)
-                logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s",ticket)
-    if fast_bot and basket_profit>0 and (opposite or reversal):
-        closed_tickets=[]
-        for p in fast_bot:
-            ticket=int(p.get("ticket") or 0)
-            await ta("DELETE","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{},idem=True)
-            closed_tickets.append(ticket)
-        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
-        logger.info("AUTO_FAST_BASKET_CLOSED tickets=%s basket_profit=%.2f",closed_tickets,basket_profit)
     if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
         if not bot: AUTO_STATE["last_action"]="HOLD"
         logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
@@ -984,7 +997,7 @@ async def auto_cycle():
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
-    global AUTO_TASK
+    global AUTO_TASK, AUTO_MANAGE_TASK
     print("AUTO_START_REQUEST received",flush=True)
     auth(authorization)
     row,detail=await account_detail()
@@ -1000,6 +1013,18 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
             return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
         AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
         print("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true",flush=True)
+        async def position_manager():
+            while AUTO_STATE["running"]:
+                started=time.monotonic()
+                try:
+                    await auto_manage_positions()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("AUTO_POSITION_MANAGER_ERROR error=%s",str(exc)[:250])
+                elapsed=time.monotonic()-started
+                await asyncio.sleep(max(0.25,1.0-elapsed))
+        AUTO_MANAGE_TASK=asyncio.create_task(position_manager())
         async def runner():
             while AUTO_STATE["running"]:
                 cycle_started=time.monotonic()
@@ -1036,12 +1061,16 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
-    global AUTO_TASK
+    global AUTO_TASK, AUTO_MANAGE_TASK
     auth(authorization)
     AUTO_STATE["running"]=False
     if AUTO_TASK and not AUTO_TASK.done():
         AUTO_TASK.cancel()
         try: await AUTO_TASK
+        except asyncio.CancelledError: pass
+    if AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done():
+        AUTO_MANAGE_TASK.cancel()
+        try: await AUTO_MANAGE_TASK
         except asyncio.CancelledError: pass
     AUTO_STATE["last_action"]="STOPPED"
     return {"running":False,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO stopped"}

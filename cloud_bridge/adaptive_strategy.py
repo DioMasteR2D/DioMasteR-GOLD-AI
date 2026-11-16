@@ -81,7 +81,7 @@ def _setup(m15, side):
     return None
 
 def _setup_diagnostics(m15, side):
-    """Explain which M5 setup predicates pass without changing entry decisions."""
+    """Explain every M5 setup predicate and its input values; read-only diagnostics."""
     c,h,l,e20,e50,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25:
@@ -92,20 +92,33 @@ def _setup_diagnostics(m15, side):
             rows.append(f"bar{i}:invalid_atr")
             continue
         o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
-        a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
+        a=float(atr.iloc[i]); prev_close=float(c.iloc[i-1])
+        prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
         body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
         sweep=(low < prior_low and close > prior_low and lower_wick >= body*0.8) if side=="BUY" else (high > prior_high and close < prior_high and upper_wick >= body*0.8)
-        prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
+        prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
         bos=(prev_close > prior_res and low <= prior_res and close > prior_res and close > o) if side=="BUY" else (prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
-        zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
+        ema20=float(e20.iloc[i]); ema50=float(e50.iloc[i])
+        zone_low=min(ema20,ema50); zone_high=max(ema20,ema50)
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         buffer=0.15*a
-        ema=(recent_low <= zone_high+buffer and close > float(e20.iloc[i]) and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < float(e20.iloc[i]) and close < o)
+        ema=(recent_low <= zone_high+buffer and close > ema20 and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < ema20 and close < o)
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
         breakout=(prev_close > range_high and low <= range_high and close > range_high) if side=="BUY" else (prev_close < range_low and high >= range_low and close < range_low)
         stamp=m15["timestamp"].iloc[i] if "timestamp" in m15.columns else i
-        rows.append(f"{stamp}:sweep={int(sweep)},bos={int(bos)},ema_pullback={int(ema)},breakout_retest={int(breakout)}")
+        rows.append(
+            f"{stamp}:O={o:.2f},H={high:.2f},L={low:.2f},C={close:.2f},"
+            f"prevC={prev_close:.2f},ATR={a:.3f},body={body:.3f},"
+            f"wickU={upper_wick:.3f},wickL={lower_wick:.3f},"
+            f"priorH={prior_high:.2f},priorL={prior_low:.2f},"
+            f"res={prior_res:.2f},sup={prior_sup:.2f},"
+            f"EMA20={ema20:.2f},EMA50={ema50:.2f},"
+            f"recentH={recent_high:.2f},recentL={recent_low:.2f},"
+            f"rangeH={range_high:.2f},rangeL={range_low:.2f},"
+            f"sweep={int(sweep)},bos={int(bos)},ema_pullback={int(ema)},breakout_retest={int(breakout)}"
+        )
     return f"M5_SCAN side={side} " + " | ".join(rows)
+
 def _m5_confirm(m5, side):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
     if not _valid(m5, 22): return False

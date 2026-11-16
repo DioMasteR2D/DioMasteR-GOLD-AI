@@ -324,18 +324,8 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 try {
                     Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, mt5Token);
-                    // Load the selected execution timeframe first, then obtain the freshest broker tick.
-                    JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
-                    // Independent strategy feeds: fixed H1 entry timeframe and H4 trend filter.
-                    JSONObject strategyH1Data = client.candles(mt5Symbol, "H1", 400);
-                    JSONObject strategyH4Data = client.candles(mt5Symbol, "H4", 1200);
-                    JSONArray strategyH1 = strategyH1Data.optJSONArray("candles");
-                    JSONArray strategyH4 = strategyH4Data.optJSONArray("candles");
-                    if (strategyH1 == null || strategyH4 == null)
-                        throw new IllegalStateException("Λείπουν τα H1/H4 candles της στρατηγικής.");
-                    JSONArray rows = candleData.optJSONArray("candles");
-                    if (rows == null || rows.length() < 2)
-                        throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
+                    // Fetch and publish the live broker quote FIRST so the screen updates
+                    // without waiting for the slower OHLC history requests.
                     JSONObject quote = client.quote(mt5Symbol);
                     String quoteSource = quote.optString("quote_source", "");
                     double bid = quote.optDouble("bid", 0);
@@ -347,6 +337,27 @@ public class MainActivity extends Activity {
                     if (bid <= 0 || ask < bid || stamp <= 0 || quoteAge < -5000L || quoteAge > 15000L)
                         throw new IllegalStateException("LIVE tick παλιό ή μη έγκυρο (" + Math.max(0, quoteAge/1000L) + "s). Αναμονή νέας τιμής.");
                     double latest = (bid + ask) / 2.0;
+                    final long quoteReceivedAt = stamp;
+                    runOnUiThread(() -> {
+                        if (requestId != fetchSequence || !activityResumed) return;
+                        price = latest;
+                        quoteAt = quoteReceivedAt;
+                        feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " +
+                                new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(quoteReceivedAt));
+                        render();
+                    });
+
+                    // Chart and strategy history are loaded AFTER the live quote is already visible.
+                    JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
+                    JSONObject strategyH1Data = client.candles(mt5Symbol, "H1", 400);
+                    JSONObject strategyH4Data = client.candles(mt5Symbol, "H4", 1200);
+                    JSONArray strategyH1 = strategyH1Data.optJSONArray("candles");
+                    JSONArray strategyH4 = strategyH4Data.optJSONArray("candles");
+                    if (strategyH1 == null || strategyH4 == null)
+                        throw new IllegalStateException("Λείπουν τα H1/H4 candles της στρατηγικής.");
+                    JSONArray rows = candleData.optJSONArray("candles");
+                    if (rows == null || rows.length() < 2)
+                        throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
                     final JSONArray bars = rows;
                     final JSONArray h1Bars = strategyH1;
                     final JSONArray h4Bars = strategyH4;

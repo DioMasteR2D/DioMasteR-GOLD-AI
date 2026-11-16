@@ -43,8 +43,13 @@ def _ind(df):
     atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
     return c,h,l,ema20,ema50,rsi,atr
 
-def _setup(m15, side):
-    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles."""
+def _setup(m15, side, diagnostics=None):
+    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles.
+    Optional diagnostics count the exact predicates evaluated without changing
+    setup selection, scoring, or entry decisions.
+    """
+    counts = {name: 0 for name in ("LIQUIDITY_SWEEP", "BOS_RETEST", "EMA_PULLBACK", "BREAKOUT_RETEST")}
+    checked = 0
     c,h,l,e20,e50,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
@@ -54,18 +59,19 @@ def _setup(m15, side):
     for i in range(last, max(24,last-3), -1):
         if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
             continue
+        checked += 1
         o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
         a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
         body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
-        if side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8:
-            return ("LIQUIDITY_SWEEP", 30, low)
-        if side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8:
-            return ("LIQUIDITY_SWEEP", 30, high)
+        sweep = (side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8) or (side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8)
+        counts["LIQUIDITY_SWEEP"] += int(bool(sweep))
+        if sweep:
+            return ("LIQUIDITY_SWEEP", 30, low if side=="BUY" else high)
         prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
-        if side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o:
-            return ("BOS_RETEST", 27, min(low,prior_res))
-        if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
-            return ("BOS_RETEST", 27, max(high,prior_sup))
+        bos = (side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o) or (side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
+        counts["BOS_RETEST"] += int(bool(bos))
+        if bos:
+            return ("BOS_RETEST", 27, min(low,prior_res) if side=="BUY" else max(high,prior_sup))
         zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         touch_buffer=0.15*a
@@ -74,10 +80,12 @@ def _setup(m15, side):
         if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
             return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
-        if side=="BUY" and prev_close > range_high and low <= range_high and close > range_high:
-            return ("BREAKOUT_RETEST", 25, low)
-        if side=="SELL" and prev_close < range_low and high >= range_low and close < range_low:
-            return ("BREAKOUT_RETEST", 25, high)
+        breakout = (side=="BUY" and prev_close > range_high and low <= range_high and close > range_high) or (side=="SELL" and prev_close < range_low and high >= range_low and close < range_low)
+        counts["BREAKOUT_RETEST"] += int(bool(breakout))
+        if breakout:
+            return ("BREAKOUT_RETEST", 25, low if side=="BUY" else high)
+    if diagnostics is not None:
+        diagnostics.update({"checked_candles": checked, **counts})
     return None
 
 def _m5_confirm(m5, side):
@@ -119,9 +127,11 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     else:
         hold.details="HOLD: H4/H1 trend alignment absent or market ranging"
         return hold
-    setup=_setup(m15,side)
+    setup_diagnostics={}
+    setup=_setup(m15,side,setup_diagnostics)
     if not setup:
-        hold.details=f"HOLD: no valid M5 liquidity/pullback setup in {side} trend"
+        counts=", ".join(f"{name}={setup_diagnostics.get(name,0)}" for name in ("LIQUIDITY_SWEEP","BOS_RETEST","EMA_PULLBACK","BREAKOUT_RETEST"))
+        hold.details=f"HOLD: no valid M5 setup in {side} trend; checked={setup_diagnostics.get('checked_candles',0)} closed_candles; matches: {counts}"
         return hold
     setup_name,setup_points,structure_price=setup
     confirmed=_m5_confirm(m5,side)

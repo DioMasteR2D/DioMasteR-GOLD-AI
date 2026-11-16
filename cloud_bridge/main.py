@@ -797,7 +797,7 @@ async def auto_manage_positions():
     positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
     bot=[p for p in positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
     cached=AUTO_STATE.get("management_indicators") or {}
-    fresh=(time.time()-float(cached.get("updated_at",0)))<=90
+    fresh=(time.time()-float(cached.get("updated_at",0)))<=90 and cached.get("source_candles_fresh",True)
     ind=cached if fresh else {}
     AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
     AUTO_STATE["position_manager_positions"]=len(bot)
@@ -895,6 +895,36 @@ async def auto_cycle():
         detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
         raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
     ind=strategy_indicators(h1)
+    # Reject stale broker candles before any new entry decision. Timestamps refer
+    # to candle open; age is measured from the expected candle close. H4 gets a
+    # weekend-sized allowance, while H1/M5/M1 must reflect the active session.
+    now_ts=time.time()
+    candle_frames={"H1":(h1,3600,7200),"H4":(h4,14400,259200),
+                   "M5":(m15,300,720),"M1":(m5,60,180)}
+    candle_freshness={}
+    stale_frames=[]
+    for tf,(frame,period_seconds,max_age_seconds) in candle_frames.items():
+        last_open=float(frame["timestamp"].iloc[-1]) if not frame.empty else 0.0
+        age_seconds=max(0.0,now_ts-(last_open+period_seconds)) if last_open>0 else float("inf")
+        candle_freshness[tf]={"last_candle_at":datetime.fromtimestamp(last_open,timezone.utc).isoformat() if last_open>0 else None,
+                              "age_seconds":round(age_seconds,1) if age_seconds!=float("inf") else None,
+                              "max_age_seconds":max_age_seconds,
+                              "fresh":age_seconds<=max_age_seconds}
+        if age_seconds>max_age_seconds:
+            stale_frames.append(tf)
+    AUTO_STATE["candle_freshness"]=candle_freshness
+    if stale_frames:
+        cached_management=AUTO_STATE.get("management_indicators") or {}
+        cached_management["source_candles_fresh"]=False
+        cached_management["updated_at"]=now_ts
+        AUTO_STATE["management_indicators"]=cached_management
+        AUTO_STATE["last_action"]="BLOCKED_STALE_CANDLES"
+        AUTO_STATE["last_error"]=None
+        if now_ts-float(AUTO_STATE.get("candle_freshness_log_at",0))>=30:
+            logger.warning("AUTO_ENTRY_BLOCKED_STALE_CANDLES symbol=%s stale=%s freshness=%s",
+                           symbol,stale_frames,candle_freshness)
+            AUTO_STATE["candle_freshness_log_at"]=now_ts
+        return
     # Cache completed M5/M1 momentum for the independent exit manager only;
     # entry strategy and its H4/H1 -> M5 -> M1 gates remain unchanged.
     def _ema_pair(frame):
@@ -909,7 +939,7 @@ async def auto_cycle():
     m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
     AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
       "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
-      "m1_bullish_candles":m1_bullish,"updated_at":time.time()}
+      "m1_bullish_candles":m1_bullish,"source_candles_fresh":True,"updated_at":time.time()}
     h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
     direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)

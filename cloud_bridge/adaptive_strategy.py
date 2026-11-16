@@ -80,6 +80,32 @@ def _setup(m15, side):
             return ("BREAKOUT_RETEST", 25, high)
     return None
 
+def _setup_diagnostics(m15, side):
+    """Explain which M5 setup predicates pass without changing entry decisions."""
+    c,h,l,e20,e50,rsi,atr=_ind(m15)
+    last=len(m15)-1
+    if last < 25:
+        return f"M5_SCAN side={side} insufficient_bars={len(m15)}"
+    rows=[]
+    for i in range(last, max(24,last-3), -1):
+        if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
+            rows.append(f"bar{i}:invalid_atr")
+            continue
+        o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
+        a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
+        body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
+        sweep=(low < prior_low and close > prior_low and lower_wick >= body*0.8) if side=="BUY" else (high > prior_high and close < prior_high and upper_wick >= body*0.8)
+        prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
+        bos=(prev_close > prior_res and low <= prior_res and close > prior_res and close > o) if side=="BUY" else (prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
+        zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
+        recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
+        buffer=0.15*a
+        ema=(recent_low <= zone_high+buffer and close > float(e20.iloc[i]) and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < float(e20.iloc[i]) and close < o)
+        range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
+        breakout=(prev_close > range_high and low <= range_high and close > range_high) if side=="BUY" else (prev_close < range_low and high >= range_low and close < range_low)
+        stamp=m15["timestamp"].iloc[i] if "timestamp" in m15.columns else i
+        rows.append(f"{stamp}:sweep={int(sweep)},bos={int(bos)},ema_pullback={int(ema)},breakout_retest={int(breakout)}")
+    return f"M5_SCAN side={side} " + " | ".join(rows)
 def _m5_confirm(m5, side):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
     if not _valid(m5, 22): return False
@@ -121,7 +147,8 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
         return hold
     setup=_setup(m15,side)
     if not setup:
-        hold.details=f"HOLD: no valid M5 liquidity/pullback setup in {side} trend"
+        scan=_setup_diagnostics(m15,side)
+        hold.details=f"HOLD: no valid M5 liquidity/pullback setup in {side} trend; {scan}"
         return hold
     setup_name,setup_points,structure_price=setup
     confirmed=_m5_confirm(m5,side)

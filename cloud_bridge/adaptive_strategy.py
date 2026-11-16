@@ -75,10 +75,10 @@ def _setup(m15, side, diagnostics=None):
         zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         touch_buffer=0.15*a
-        if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
-            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
-        if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
-            return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
+        pullback = (side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o) or (side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o)
+        counts["EMA_PULLBACK"] += int(bool(pullback))
+        if pullback:
+            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])) if side=="BUY" else max(recent_high, float(e20.iloc[i])))
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
         breakout = (side=="BUY" and prev_close > range_high and low <= range_high and close > range_high) or (side=="SELL" and prev_close < range_low and high >= range_low and close < range_low)
         counts["BREAKOUT_RETEST"] += int(bool(breakout))

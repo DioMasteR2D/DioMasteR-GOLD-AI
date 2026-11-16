@@ -43,64 +43,46 @@ def _ind(df):
     atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
     return c,h,l,ema20,ema50,rsi,atr
 
-def _setup(m15, side, diagnostics=None):
-    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles.
-    Optional diagnostics count the exact predicates evaluated without changing
-    setup selection, scoring, or entry decisions.
-    """
-    counts = {name: 0 for name in ("LIQUIDITY_SWEEP", "BOS_RETEST", "EMA_PULLBACK", "BREAKOUT_RETEST")}
-    checked = 0
+def _setup(m15, side):
+    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles."""
     c,h,l,e20,e50,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
         return None
-    if diagnostics is not None:
-        recent=m15.iloc[max(0,last-2):last+1]
-        diagnostics["recent_m5_ohlc"]=[
-            {"t":str(row.get("timestamp","")),"o":round(float(row["open"]),3),
-             "h":round(float(row["high"]),3),"l":round(float(row["low"]),3),
-             "c":round(float(row["close"]),3)}
-            for _,row in recent.iterrows()
-        ]
     # Prefer the newest valid setup, but do not discard a setup merely because
     # the next one or two closed M5 candles are the confirmation/retest candle.
     for i in range(last, max(24,last-3), -1):
         if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
             continue
-        checked += 1
         o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
         a=float(atr.iloc[i]); prior_high=float(h.iloc[i-20:i].max()); prior_low=float(l.iloc[i-20:i].min())
         body=max(abs(close-o),a*0.02); lower_wick=min(o,close)-low; upper_wick=high-max(o,close)
-        sweep = (side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8) or (side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8)
-        counts["LIQUIDITY_SWEEP"] += int(bool(sweep))
-        if sweep:
-            return ("LIQUIDITY_SWEEP", 30, low if side=="BUY" else high)
+        if side=="BUY" and low < prior_low and close > prior_low and lower_wick >= body*0.8:
+            return ("LIQUIDITY_SWEEP", 30, low)
+        if side=="SELL" and high > prior_high and close < prior_high and upper_wick >= body*0.8:
+            return ("LIQUIDITY_SWEEP", 30, high)
         prev_close=float(c.iloc[i-1]); prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
-        bos = (side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o) or (side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
-        counts["BOS_RETEST"] += int(bool(bos))
-        if bos:
-            return ("BOS_RETEST", 27, min(low,prior_res) if side=="BUY" else max(high,prior_sup))
+        if side=="BUY" and prev_close > prior_res and low <= prior_res and close > prior_res and close > o:
+            return ("BOS_RETEST", 27, min(low,prior_res))
+        if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
+            return ("BOS_RETEST", 27, max(high,prior_sup))
         zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         touch_buffer=0.15*a
-        pullback = (side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o) or (side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o)
-        counts["EMA_PULLBACK"] += int(bool(pullback))
-        if pullback:
-            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])) if side=="BUY" else max(recent_high, float(e20.iloc[i])))
+        if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
+            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
+        if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
+            return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
-        breakout = (side=="BUY" and prev_close > range_high and low <= range_high and close > range_high) or (side=="SELL" and prev_close < range_low and high >= range_low and close < range_low)
-        counts["BREAKOUT_RETEST"] += int(bool(breakout))
-        if breakout:
-            return ("BREAKOUT_RETEST", 25, low if side=="BUY" else high)
-    if diagnostics is not None:
-        diagnostics.update({"checked_candles": checked, **counts})
+        if side=="BUY" and prev_close > range_high and low <= range_high and close > range_high:
+            return ("BREAKOUT_RETEST", 25, low)
+        if side=="SELL" and prev_close < range_low and high >= range_low and close < range_low:
+            return ("BREAKOUT_RETEST", 25, high)
     return None
 
-def _m5_confirm(m5, side, diagnostics=None):
+def _m5_confirm(m5, side):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
-    if not _valid(m5, 22):
-        if diagnostics is not None: diagnostics["m1_confirmation"]="INSUFFICIENT_M1_BARS"
-        return False
+    if not _valid(m5, 22): return False
     c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
     # Use a short 3-candle window so a valid M1 impulse is not lost to one
     # small pause candle. The latest candle must still close in trade direction.
@@ -116,20 +98,6 @@ def _m5_confirm(m5, side, diagnostics=None):
         checks=[close<prev, float(rsi.iloc[i])<=53,
                 float(ema20.iloc[i])<=float(ema50.iloc[i]),
                 int((recent["close"].astype(float)<recent["open"].astype(float)).sum())>=2]
-    if diagnostics is not None:
-        diagnostics.update({
-            "m1_confirmation_checks":[bool(x) for x in checks],
-            "m1_confirmation_passed":sum(bool(x) for x in checks),
-            "m1_last_ohlc":{"o":round(o,3),"h":round(float(h.iloc[i]),3),
-                "l":round(float(l.iloc[i]),3),"c":round(close,3)},
-            "m1_rsi":round(float(rsi.iloc[i]),2),
-            "m1_ema20":round(float(ema20.iloc[i]),3),
-            "m1_ema50":round(float(ema50.iloc[i]),3),
-            "m1_recent_directional_candles":int(
-                (recent["close"].astype(float)>recent["open"].astype(float)).sum()
-                if side=="BUY" else
-                (recent["close"].astype(float)<recent["open"].astype(float)).sum())
-        })
     return sum(bool(x) for x in checks)>=2
 
 def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
@@ -151,20 +119,14 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     else:
         hold.details="HOLD: H4/H1 trend alignment absent or market ranging"
         return hold
-    setup_diagnostics={}
-    setup=_setup(m15,side,setup_diagnostics)
+    setup=_setup(m15,side)
     if not setup:
-        counts=", ".join(f"{name}={setup_diagnostics.get(name,0)}" for name in ("LIQUIDITY_SWEEP","BOS_RETEST","EMA_PULLBACK","BREAKOUT_RETEST"))
-        hold.details=(f"HOLD: no valid M5 setup in {side} trend; "
-            f"checked={setup_diagnostics.get('checked_candles',0)} closed_candles; "
-            f"matches: {counts}; M5_DIAG={setup_diagnostics}")
+        hold.details=f"HOLD: no valid M5 liquidity/pullback setup in {side} trend"
         return hold
     setup_name,setup_points,structure_price=setup
-    confirmation_diagnostics={}
-    confirmed=_m5_confirm(m5,side,confirmation_diagnostics)
+    confirmed=_m5_confirm(m5,side)
     if not confirmed:
-        hold.details=(f"HOLD: {setup_name} found; waiting for M1 confirmation; "
-            f"M1_DIAG={confirmation_diagnostics}; M5_DIAG={setup_diagnostics}")
+        hold.details=f"HOLD: {setup_name} found; waiting for M5 confirmation"
         return hold
     rsi=float(rsi1.iloc[i1]); atr=float(atr1.iloc[i1]); price=float(c1.iloc[i1])
     # Wider neutral bands avoid rejecting otherwise aligned trends for a small

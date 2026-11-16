@@ -635,6 +635,39 @@ from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
 MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
 AUTO_TASK=None
 AUTO_MANAGE_TASK=None
+
+async def _position_manager_loop():
+    """Independent DEMO position manager; strategy and exit conditions stay in auto_manage_positions()."""
+    logger.info("AUTO_POSITION_MANAGER_STARTED")
+    try:
+        while AUTO_STATE["running"]:
+            started=time.monotonic()
+            try:
+                await auto_manage_positions()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                AUTO_STATE["position_manager_last_error"]=str(exc)[:250]
+                logger.exception("AUTO_POSITION_MANAGER_ERROR error=%s",str(exc)[:250])
+            elapsed=time.monotonic()-started
+            await asyncio.sleep(max(0.25,1.0-elapsed))
+    finally:
+        logger.info("AUTO_POSITION_MANAGER_STOPPED")
+
+def ensure_position_manager():
+    """Restart only the manager task if it died; never restart or alter the trading runner."""
+    global AUTO_MANAGE_TASK
+    if not AUTO_STATE.get("running"):
+        return False
+    if AUTO_MANAGE_TASK is None or AUTO_MANAGE_TASK.done():
+        was_started=AUTO_MANAGE_TASK is not None
+        AUTO_MANAGE_TASK=asyncio.create_task(_position_manager_loop(),name="diomaster-position-manager")
+        if was_started:
+            logger.warning("AUTO_POSITION_MANAGER_WATCHDOG_RESTARTED")
+        else:
+            logger.info("AUTO_POSITION_MANAGER_WATCHDOG_STARTED")
+    return True
+
 AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
 AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
@@ -857,14 +890,33 @@ async def auto_manage_positions():
                 logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
     if fast_bot and same_side and basket_profit>0 and (h1_flip or fast_reversal or reversal):
         closed=[]
+        attempted=[]
+        close_errors=[]
         for p in fast_bot:
             ticket=int(p.get("ticket") or 0)
             if ticket:
-                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
-                closed.append(ticket)
-                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s result=%s",ticket,str(result)[:180])
+                attempted.append(ticket)
+                try:
+                    result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+                    confirmed=bool(result.get("closed")) if isinstance(result,dict) else False
+                    if confirmed:
+                        closed.append(ticket)
+                    logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s confirmed=%s result=%s",
+                                ticket,confirmed,str(result)[:180])
+                    if not confirmed:
+                        logger.warning("AUTO_FAST_BASKET_CLOSE_UNCONFIRMED ticket=%s result=%s",
+                                       ticket,str(result)[:180])
+                except Exception as exc:
+                    close_errors.append({"ticket":ticket,"error":str(exc)[:180]})
+                    logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED ticket=%s error=%s",
+                                     ticket,str(exc)[:180])
+        AUTO_STATE["last_close_attempted_tickets"]=attempted
+        AUTO_STATE["last_close_confirmed_tickets"]=closed
+        AUTO_STATE["last_close_errors"]=close_errors
+        AUTO_STATE["last_close_at"]=datetime.now(timezone.utc).isoformat()
         AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
-        logger.info("AUTO_FAST_BASKET_CLOSED tickets=%s basket_profit=%.2f",closed,basket_profit)
+        logger.info("AUTO_FAST_BASKET_CLOSED attempted=%s confirmed=%s errors=%s basket_profit=%.2f",
+                    attempted,closed,len(close_errors),basket_profit)
 
 async def auto_cycle():
     row,detail=await account_detail()
@@ -1071,29 +1123,22 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
         raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
     async with AUTO_LOCK:
         if AUTO_TASK and not AUTO_TASK.done():
+            ensure_position_manager()
             print("AUTO_START_ALREADY_RUNNING",flush=True)
-            return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","state":AUTO_STATE}
+            return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO",
+                    "manager_running":bool(AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done()),"state":AUTO_STATE}
         AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
         print("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true",flush=True)
-        async def position_manager():
-            while AUTO_STATE["running"]:
-                started=time.monotonic()
-                try:
-                    await auto_manage_positions()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("AUTO_POSITION_MANAGER_ERROR error=%s",str(exc)[:250])
-                elapsed=time.monotonic()-started
-                await asyncio.sleep(max(0.25,1.0-elapsed))
-        AUTO_MANAGE_TASK=asyncio.create_task(position_manager())
+        ensure_position_manager()
         async def runner():
             while AUTO_STATE["running"]:
                 cycle_started=time.monotonic()
                 AUTO_STATE["last_cycle_started_at"]=datetime.now(timezone.utc).isoformat()
                 try:
+                    ensure_position_manager()
                     print("AUTO_CYCLE_STARTED symbol=XAUUSD",flush=True)
                     await auto_cycle()
+                    ensure_position_manager()
                     duration=time.monotonic()-cycle_started
                     AUTO_STATE["cycle_count"]=int(AUTO_STATE.get("cycle_count",0))+1
                     AUTO_STATE["last_cycle_duration_seconds"]=round(duration,2)
@@ -1117,6 +1162,8 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
     return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
+      "manager_running":bool(AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done() and AUTO_STATE["running"]),
+      "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
       "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10}

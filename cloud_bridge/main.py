@@ -655,7 +655,10 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
     best=[]
     if cached:
         age=max(0.0,time.time()-float(cached.get("fetched_at",0)))
-        max_age=max(120.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
+        # Fast timeframes must never reuse a two-minute-old bridge cache:
+        # M1/M5 are decision inputs and need a short freshness window. H1/H4
+        # retain their naturally longer cache windows.
+        max_age=max(5.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
         cached_rows=cached.get("candles",[])
         if age<=max_age and isinstance(cached_rows,list):
             parsed=[]

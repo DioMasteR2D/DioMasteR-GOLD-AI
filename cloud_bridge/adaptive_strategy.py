@@ -54,6 +54,14 @@ def _setup(m15, side, diagnostics=None):
     last=len(m15)-1
     if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
         return None
+    if diagnostics is not None:
+        recent=m15.iloc[max(0,last-2):last+1]
+        diagnostics["recent_m5_ohlc"]=[
+            {"t":str(row.get("timestamp","")),"o":round(float(row["open"]),3),
+             "h":round(float(row["high"]),3),"l":round(float(row["low"]),3),
+             "c":round(float(row["close"]),3)}
+            for _,row in recent.iterrows()
+        ]
     # Prefer the newest valid setup, but do not discard a setup merely because
     # the next one or two closed M5 candles are the confirmation/retest candle.
     for i in range(last, max(24,last-3), -1):
@@ -88,9 +96,11 @@ def _setup(m15, side, diagnostics=None):
         diagnostics.update({"checked_candles": checked, **counts})
     return None
 
-def _m5_confirm(m5, side):
+def _m5_confirm(m5, side, diagnostics=None):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
-    if not _valid(m5, 22): return False
+    if not _valid(m5, 22):
+        if diagnostics is not None: diagnostics["m1_confirmation"]="INSUFFICIENT_M1_BARS"
+        return False
     c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
     # Use a short 3-candle window so a valid M1 impulse is not lost to one
     # small pause candle. The latest candle must still close in trade direction.
@@ -106,6 +116,20 @@ def _m5_confirm(m5, side):
         checks=[close<prev, float(rsi.iloc[i])<=53,
                 float(ema20.iloc[i])<=float(ema50.iloc[i]),
                 int((recent["close"].astype(float)<recent["open"].astype(float)).sum())>=2]
+    if diagnostics is not None:
+        diagnostics.update({
+            "m1_confirmation_checks":[bool(x) for x in checks],
+            "m1_confirmation_passed":sum(bool(x) for x in checks),
+            "m1_last_ohlc":{"o":round(o,3),"h":round(float(h.iloc[i]),3),
+                "l":round(float(l.iloc[i]),3),"c":round(close,3)},
+            "m1_rsi":round(float(rsi.iloc[i]),2),
+            "m1_ema20":round(float(ema20.iloc[i]),3),
+            "m1_ema50":round(float(ema50.iloc[i]),3),
+            "m1_recent_directional_candles":int(
+                (recent["close"].astype(float)>recent["open"].astype(float)).sum()
+                if side=="BUY" else
+                (recent["close"].astype(float)<recent["open"].astype(float)).sum())
+        })
     return sum(bool(x) for x in checks)>=2
 
 def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
@@ -131,12 +155,16 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     setup=_setup(m15,side,setup_diagnostics)
     if not setup:
         counts=", ".join(f"{name}={setup_diagnostics.get(name,0)}" for name in ("LIQUIDITY_SWEEP","BOS_RETEST","EMA_PULLBACK","BREAKOUT_RETEST"))
-        hold.details=f"HOLD: no valid M5 setup in {side} trend; checked={setup_diagnostics.get('checked_candles',0)} closed_candles; matches: {counts}"
+        hold.details=(f"HOLD: no valid M5 setup in {side} trend; "
+            f"checked={setup_diagnostics.get('checked_candles',0)} closed_candles; "
+            f"matches: {counts}; M5_DIAG={setup_diagnostics}")
         return hold
     setup_name,setup_points,structure_price=setup
-    confirmed=_m5_confirm(m5,side)
+    confirmation_diagnostics={}
+    confirmed=_m5_confirm(m5,side,confirmation_diagnostics)
     if not confirmed:
-        hold.details=f"HOLD: {setup_name} found; waiting for M5 confirmation"
+        hold.details=(f"HOLD: {setup_name} found; waiting for M1 confirmation; "
+            f"M1_DIAG={confirmation_diagnostics}; M5_DIAG={setup_diagnostics}")
         return hold
     rsi=float(rsi1.iloc[i1]); atr=float(atr1.iloc[i1]); price=float(c1.iloc[i1])
     # Wider neutral bands avoid rejecting otherwise aligned trends for a small

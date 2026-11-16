@@ -736,9 +736,9 @@ def strategy_indicators(df):
     rsi=(100-(100/(1+rs))).fillna(50)
     tr=pd.concat([(df["high"]-df["low"]), (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()],axis=1).max(axis=1)
     atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    ema20=close.ewm(span=20,adjust=False).mean()
-    ema50=close.ewm(span=50,adjust=False).mean()
-    # Keep the original EMA9/21 crossover rule, but recognize a confirmed
+    ema9=close.ewm(span=9,adjust=False).mean()
+    ema21=close.ewm(span=21,adjust=False).mean()
+    # Keep the EMA9/21 crossover rule, but recognize a confirmed
     # crossover on any of the latest 3 CLOSED H1 candles. The current EMA
     # relationship must still agree with that crossover direction.
     cross_age=None
@@ -746,20 +746,20 @@ def strategy_indicators(df):
     for offset in range(0, min(3, len(close)-1)):
         idx=len(close)-1-offset
         prev=idx-1
-        if ema20.iloc[idx]>ema50.iloc[idx] and ema20.iloc[prev]<=ema50.iloc[prev]:
+        if ema9.iloc[idx]>ema21.iloc[idx] and ema9.iloc[prev]<=ema21.iloc[prev]:
             cross_age=offset
             cross_direction="BUY"
             break
-        if ema20.iloc[idx]<ema50.iloc[idx] and ema20.iloc[prev]>=ema50.iloc[prev]:
+        if ema9.iloc[idx]<ema21.iloc[idx] and ema9.iloc[prev]>=ema21.iloc[prev]:
             cross_age=offset
             cross_direction="SELL"
             break
-    if cross_direction=="BUY" and not (ema20.iloc[-1]>ema50.iloc[-1]):
+    if cross_direction=="BUY" and not (ema9.iloc[-1]>ema21.iloc[-1]):
         cross_direction=None; cross_age=None
-    if cross_direction=="SELL" and not (ema20.iloc[-1]<ema50.iloc[-1]):
+    if cross_direction=="SELL" and not (ema9.iloc[-1]<ema21.iloc[-1]):
         cross_direction=None; cross_age=None
-    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema20":float(ema20.iloc[-1]),
-      "ema50":float(ema50.iloc[-1]),"ema20_prev":float(ema20.iloc[-2]),"ema50_prev":float(ema50.iloc[-2]),
+    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
+      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2]),
       "cross_age":cross_age,"cross_direction":cross_direction}
 
 def aggregate_h4_history(h4, timeframe):
@@ -823,9 +823,9 @@ async def auto_manage_positions():
     basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
     basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
     same_side=bool(fast_bot) and all(str(p.get("side") or "").upper()==basket_side for p in fast_bot)
-    h1_flip=(basket_side=="BUY" and ind.get("ema20",0)<ind.get("ema50",0)) or (basket_side=="SELL" and ind.get("ema20",0)>ind.get("ema50",0))
-    m5_flip=(basket_side=="BUY" and ind.get("m5_ema20",0)<ind.get("m5_ema50",0)) or (basket_side=="SELL" and ind.get("m5_ema20",0)>ind.get("m5_ema50",0))
-    m1_flip=(basket_side=="BUY" and ind.get("m1_ema20",0)<ind.get("m1_ema50",0)) or (basket_side=="SELL" and ind.get("m1_ema20",0)>ind.get("m1_ema50",0))
+    h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
+    m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
+    m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
     m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
     reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
     # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
@@ -937,11 +937,11 @@ async def auto_cycle():
     m1_recent=m5.iloc[-3:]
     m1_bearish=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum())
     m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
-    AUTO_STATE["management_indicators"]={**ind,"m5_ema20":m5_e9,"m5_ema50":m5_e21,
-      "m1_ema20":m1_e9,"m1_ema50":m1_e21,"m1_bearish_candles":m1_bearish,
+    AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
+      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
       "m1_bullish_candles":m1_bullish,"source_candles_fresh":True,"updated_at":time.time()}
     h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
-    direction="BUY" if ind["ema20"]>ind["ema50"] else "SELL"
+    direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
     mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
     now_utc=datetime.now(timezone.utc)
@@ -950,12 +950,12 @@ async def auto_cycle():
     stamp=float(m15["timestamp"].iloc[-1])
     print(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M5:%s,M1:%s bar=%s "
-      "ema20=%.5f ema50=%.5f ema20_prev=%.5f ema50_prev=%.5f "
+      "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
       "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
       "news_block=%s news_reason=%s details=%s",
       symbol,len(h1),len(h4),len(m15),len(m5),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
-      ind["ema20"],ind["ema50"],ind["ema20_prev"],ind["ema50_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
+      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
       ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
       signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
       signal.phase4_score,signal.news_block,signal.news_reason,signal.details)

@@ -981,8 +981,8 @@ async def auto_cycle():
     # entry strategy and its H4/H1 -> M5 -> M1 gates remain unchanged.
     def _ema_pair(frame):
         close=frame["close"].astype(float)
-        e9=close.ewm(span=20,adjust=False).mean()
-        e21=close.ewm(span=50,adjust=False).mean()
+        e9=close.ewm(span=9,adjust=False).mean()
+        e21=close.ewm(span=21,adjust=False).mean()
         return float(e9.iloc[-1]),float(e21.iloc[-1])
     m5_e9,m5_e21=_ema_pair(m15)
     m1_e9,m1_e21=_ema_pair(m5)
@@ -992,10 +992,12 @@ async def auto_cycle():
     AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
       "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
       "m1_bullish_candles":m1_bullish,"source_candles_fresh":True,"updated_at":time.time()}
-    h4_ema50=float(h4["close"].ewm(span=50,adjust=False).mean().iloc[-1])
+    h4_close=float(h4["close"].iloc[-1])
+    h4_ema9=float(h4["close"].ewm(span=9,adjust=False).mean().iloc[-1])
+    h4_ema21=float(h4["close"].ewm(span=21,adjust=False).mean().iloc[-1])
     direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
     rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
-    mtf_ok=(direction=="BUY" and float(h4["close"].iloc[-1])>h4_ema50) or (direction=="SELL" and float(h4["close"].iloc[-1])<h4_ema50)
+    mtf_ok=(direction=="BUY" and h4_ema9>h4_ema21 and h4_close>h4_ema9) or (direction=="SELL" and h4_ema9<h4_ema21 and h4_close<h4_ema9)
     now_utc=datetime.now(timezone.utc)
     sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
     signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
@@ -1003,12 +1005,12 @@ async def auto_cycle():
     print(
       "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M5:%s,M1:%s bar=%s "
       "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
-      "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema50=%.5f "
+      "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema9=%.5f h4_ema21=%.5f "
       "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
       "news_block=%s news_reason=%s details=%s",
       symbol,len(h1),len(h4),len(m15),len(m5),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
       ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
-      ind.get("cross_age"),ind["rsi"],rsi_ok,float(h4["close"].iloc[-1]),h4_ema50,mtf_ok,sess_ok,
+      ind.get("cross_age"),ind["rsi"],rsi_ok,h4_close,h4_ema9,h4_ema21,mtf_ok,sess_ok,
       signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
       signal.phase4_score,signal.news_block,signal.news_reason,signal.details)
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
@@ -1166,7 +1168,7 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
       "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10}
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

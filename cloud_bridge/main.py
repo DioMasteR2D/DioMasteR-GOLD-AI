@@ -902,8 +902,8 @@ async def auto_cycle():
     symbol=choose_symbol(symbols)
     # Sniper uses only completed M5 and M1 broker candles for fast entries.
     m5,m1=await asyncio.gather(
-      strategy_frame(row["id"],symbol,"M5",120),
-      strategy_frame(row["id"],symbol,"M1",60))
+      strategy_frame(row["id"],symbol,"M5",48),
+      strategy_frame(row["id"],symbol,"M1",48))
     if len(m5)<30 or len(m1)<25:
         raise RuntimeError(f"Insufficient completed broker candles for Sniper: M5={len(m5)}/30 M1={len(m1)}/25")
     now_ts=time.time()

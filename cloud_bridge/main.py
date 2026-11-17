@@ -673,6 +673,8 @@ AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
+AUTO_FAST_PROFIT_TRAIL_START_USD=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_START_USD","3.0"))
+AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO","0.67"))
 
 async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
     cache_key=(symbol,timeframe)
@@ -872,22 +874,45 @@ async def auto_manage_positions():
         logger.info("AUTO_POSITION_MANAGER_TICK bot_positions=%s fast_positions=%s basket_profit=%.2f indicators_fresh=%s exit_check=%s",
                     len(bot),len(fast_bot),basket_profit,fresh,AUTO_STATE["fast_basket_exit_check"])
         AUTO_STATE["manager_log_at"]=now
-    for p in fast_bot:
-        side=str(p.get("side") or "").upper()
-        entry=float(p.get("entryPrice") or 0)
-        current=float(p.get("currentPrice") or 0)
-        tp=float(p.get("takeProfit") or 0)
-        sl_now=float(p.get("stopLoss") or 0)
-        ticket=int(p.get("ticket") or 0)
-        # Strategy TP is 2R, so half the entry-to-TP distance is one R.
-        one_r=abs(tp-entry)/2.0 if entry>0 and tp>0 else 0.0
-        if side in ("BUY","SELL") and one_r>0 and current>0:
-            reached=(side=="BUY" and current>=entry+0.65*one_r) or (side=="SELL" and current<=entry-0.65*one_r)
-            lock=entry+(0.10*one_r if side=="BUY" else -0.10*one_r)
-            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
-            if reached and not locked:
-                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
+    # Basket-level ratcheting profit protection. The broker SL itself stores the
+    # highest protected level, so protection survives a Render restart without
+    # relying on in-memory peak-profit state. Never loosen an existing SL.
+    trail_active=(same_side and basket_profit>=AUTO_FAST_PROFIT_TRAIL_START_USD)
+    if trail_active:
+        keep_ratio=max(0.50,min(0.85,AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO))
+        for p in fast_bot:
+            side=str(p.get("side") or "").upper()
+            entry=float(p.get("entryPrice") or 0)
+            current=float(p.get("currentPrice") or 0)
+            position_profit=float(p.get("profit") or 0)
+            sl_now=float(p.get("stopLoss") or 0)
+            ticket=int(p.get("ticket") or 0)
+            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or position_profit<=0:
+                continue
+            favorable=(current>entry if side=="BUY" else current<entry)
+            if not favorable:
+                continue
+            # Lock the configured share of each profitable leg's current price
+            # movement. Existing broker SLs make this a one-way ratchet:
+            # pullbacks can trigger the stop but can never lower it.
+            lock=entry+(current-entry)*keep_ratio
+            digits=int(p.get("digits") or 2)
+            lock=round(lock,digits)
+            tighter=(sl_now<=0 or lock>sl_now) if side=="BUY" else (sl_now<=0 or lock<sl_now)
+            if tighter:
+                try:
+                    result=await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
+                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s basket_profit=%.2f keep_ratio=%.2f stop_loss=%.{digits}f result=%s",
+                                ticket,side,basket_profit,keep_ratio,lock,str(result)[:160])
+                except Exception as exc:
+                    logger.warning("AUTO_FAST_BASKET_TRAIL_LOCK_FAILED ticket=%s error=%s",ticket,str(exc)[:180])
+    elif fast_bot and same_side:
+        # Keep diagnostics explicit while the basket is below activation.
+        AUTO_STATE["fast_basket_trail_state"]="WAITING_FOR_PROFIT_THRESHOLD"
+    if trail_active:
+        AUTO_STATE["fast_basket_trail_state"]="ACTIVE"
+        AUTO_STATE["fast_basket_trail_start_usd"]=AUTO_FAST_PROFIT_TRAIL_START_USD
+        AUTO_STATE["fast_basket_trail_keep_ratio"]=AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO
     # A confirmed reversal must protect the basket even when it is currently losing.
     # Never act on stale indicators; broker-side SL/TP remain the hard safety boundary.
     if fast_bot and same_side and fresh and (h1_flip or fast_reversal or reversal):

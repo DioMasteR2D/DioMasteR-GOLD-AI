@@ -947,9 +947,9 @@ async def auto_cycle():
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE or signal.news_block:
+    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE:
         if not bot: AUTO_STATE["last_action"]="HOLD"
-        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
+        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s",
           "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SNIPER_SIGNAL_NOT_CONFIRMED",
           signal.direction,signal.total_score,MIN_SNIPER_SCORE)
         return
@@ -1096,7 +1096,7 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
       "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"SNIPER: M5 breakout retest + M1 rejection; 3-leg unified basket; quick target and profit trail",
-      "sniper_threshold":MIN_SNIPER_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+      "sniper_threshold":MIN_SNIPER_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.25,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
        "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO}
 
 @app.post("/v1/auto/stop")

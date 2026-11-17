@@ -149,10 +149,13 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     i1=len(h1)-1; i4=len(h4)-1
     if not np.isfinite(atr1.iloc[i1]) or not np.isfinite(atr4.iloc[i4]):
         hold.details="ATR warm-up incomplete"; return hold
-    h4_bull=float(e9_4.iloc[i4])>float(e21_4.iloc[i4]) and float(c4.iloc[i4])>float(e9_4.iloc[i4])
-    h4_bear=float(e9_4.iloc[i4])<float(e21_4.iloc[i4]) and float(c4.iloc[i4])<float(e9_4.iloc[i4])
-    h1_bull=float(e9_1.iloc[i1])>float(e21_1.iloc[i1]) and float(c1.iloc[i1])>float(e9_1.iloc[i1])
-    h1_bear=float(e9_1.iloc[i1])<float(e21_1.iloc[i1]) and float(c1.iloc[i1])<float(e9_1.iloc[i1])
+    # Directional bias is defined by the EMA9/EMA21 relationship only.
+    # Requiring price to also be above/below EMA9 incorrectly turns normal
+    # pullbacks into a neutral trend and blocks otherwise aligned H4/H1 setups.
+    h4_bull=float(e9_4.iloc[i4])>float(e21_4.iloc[i4])
+    h4_bear=float(e9_4.iloc[i4])<float(e21_4.iloc[i4])
+    h1_bull=float(e9_1.iloc[i1])>float(e21_1.iloc[i1])
+    h1_bear=float(e9_1.iloc[i1])<float(e21_1.iloc[i1])
     if h4_bull and h1_bull: side="BUY"
     elif h4_bear and h1_bear: side="SELL"
     else:

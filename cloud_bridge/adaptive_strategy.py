@@ -1,8 +1,8 @@
-"""Clean EMA9/EMA21 XAUUSD DEMO strategy.
+"""Sniper Scalping strategy for XAUUSD MT5 DEMO.
 
-Only EMA9/EMA21 trend alignment, M5 pullback and M1 confirmation are used.
-No SMC, liquidity sweep, BOS, RSI, macro/news scoring or legacy entry filters.
-All OHLC input must be completed broker candles supplied by the bridge.
+Entry: M5 range breakout, controlled retest, and M1 rejection confirmation.
+No EMA crossover, RSI, SMC, liquidity, macro/news or legacy scoring filters.
+Only completed broker candles are accepted.
 """
 from dataclasses import dataclass
 import numpy as np
@@ -32,80 +32,90 @@ def _valid(df, minimum=25):
         col in df.columns for col in ("open", "high", "low", "close")
     )
 
-def _ind(df):
-    close = df["close"].astype(float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    ema9 = close.ewm(span=9, adjust=False).mean()
-    ema21 = close.ewm(span=21, adjust=False).mean()
-    previous = close.shift(1)
-    tr = pd.concat([(high-low), (high-previous).abs(), (low-previous).abs()], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-    return close, high, low, ema9, ema21, None, atr
+def _atr(df):
+    high=df["high"].astype(float)
+    low=df["low"].astype(float)
+    close=df["close"].astype(float)
+    prev=close.shift(1)
+    tr=pd.concat([high-low,(high-prev).abs(),(low-prev).abs()],axis=1).max(axis=1)
+    return tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
 
 def get_adaptive_signal(h1, h4, m5, m1, d1=None, w1=None):
-    hold = AdaptiveSignal("HOLD", 0, 0, 0, 0, False, "", "LOW",
-                          "EMA9/EMA21: waiting for completed broker candles")
-    if not all((_valid(h1, 30), _valid(h4, 30), _valid(m5, 30), _valid(m1, 25))):
-        hold.details = "HOLD: insufficient completed H1/H4/M5/M1 candles"
+    hold=AdaptiveSignal("HOLD",0,0,0,0,False,"","LOW",
+                        "SNIPER: waiting for completed M5/M1 broker candles")
+    if not (_valid(m5,30) and _valid(m1,25)):
+        hold.details="HOLD: insufficient completed M5/M1 candles"
         return hold
 
-    h1c, _, _, h1e9, h1e21, _, h1atr = _ind(h1)
-    h4c, _, _, h4e9, h4e21, _, h4atr = _ind(h4)
-    m5c, _, _, m5e9, m5e21, _, m5atr = _ind(m5)
-    m1c, _, _, m1e9, m1e21, _, m1atr = _ind(m1)
+    m5=m5.reset_index(drop=True)
+    m1=m1.reset_index(drop=True)
+    atr_series=_atr(m5)
+    atr=float(atr_series.iloc[-1]) if np.isfinite(atr_series.iloc[-1]) else 0.0
+    if atr<=0:
+        hold.details="HOLD: M5 ATR not ready"
+        return hold
 
-    h1_up, h1_down = float(h1e9.iloc[-1]) > float(h1e21.iloc[-1]), float(h1e9.iloc[-1]) < float(h1e21.iloc[-1])
-    h4_up, h4_down = float(h4e9.iloc[-1]) > float(h4e21.iloc[-1]), float(h4e9.iloc[-1]) < float(h4e21.iloc[-1])
-    if h1_up and h4_up:
-        side = "BUY"
-    elif h1_down and h4_down:
-        side = "SELL"
+    # Breakout level is calculated only from candles preceding the current
+    # retest window, avoiding look-ahead into the setup candle.
+    prior=m5.iloc[-14:-3]
+    if len(prior)<10:
+        hold.details="HOLD: insufficient M5 range history"
+        return hold
+    resistance=float(prior["high"].astype(float).max())
+    support=float(prior["low"].astype(float).min())
+    recent=m5.iloc[-3:]
+    recent_low=float(recent["low"].astype(float).min())
+    recent_high=float(recent["high"].astype(float).max())
+    last5=m5.iloc[-1]
+    last5_close=float(last5["close"])
+    last5_open=float(last5["open"])
+
+    # A valid retest must revisit the broken level without closing deeply
+    # back inside the old range, then finish in breakout direction.
+    buy_retest=(float(recent.iloc[-1]["low"])<=resistance+0.12*atr
+                and float(recent.iloc[-1]["low"])>=resistance-0.35*atr
+                and last5_close>resistance and last5_close>last5_open)
+    sell_retest=(float(recent.iloc[-1]["high"])>=support-0.12*atr
+                 and float(recent.iloc[-1]["high"])<=support+0.35*atr
+                 and last5_close<support and last5_close<last5_open)
+    if buy_retest:
+        side="BUY"
+        level=resistance
+    elif sell_retest:
+        side="SELL"
+        level=support
     else:
-        hold.details = "HOLD: H1/H4 EMA9-EMA21 trend not aligned"
+        hold.details="HOLD: waiting for M5 breakout retest"
         return hold
 
-    # M5 setup: trend-aligned EMA9/21 pullback followed by a directional close.
-    m5_open, m5_close, m5_prev = float(m5["open"].iloc[-1]), float(m5c.iloc[-1]), float(m5c.iloc[-2])
-    m5_fast, m5_slow = float(m5e9.iloc[-1]), float(m5e21.iloc[-1])
-    m5_atr = float(m5atr.iloc[-1]) if np.isfinite(m5atr.iloc[-1]) else 0.0
-    if m5_atr <= 0:
-        hold.details = "HOLD: M5 ATR not ready"
-        return hold
-    recent = m5.iloc[-4:]
-    recent_low = float(recent["low"].astype(float).min())
-    recent_high = float(recent["high"].astype(float).max())
-    if side == "BUY":
-        setup_ok = m5_fast > m5_slow and recent_low <= m5_fast + 0.20*m5_atr and m5_close > m5_open and m5_close > m5_prev
+    # M1 rejection/continuation confirmation at the retested breakout level.
+    last1=m1.iloc[-1]
+    prev1=m1.iloc[-2]
+    o=float(last1["open"]); c=float(last1["close"])
+    hi=float(last1["high"]); lo=float(last1["low"])
+    body=max(abs(c-o),1e-9)
+    lower_wick=min(o,c)-lo
+    upper_wick=hi-max(o,c)
+    if side=="BUY":
+        confirm=(c>o and c>level and lower_wick>=0.25*body
+                 and c>float(prev1["close"]))
+        entry=c
+        sl=min(recent_low,lo)-0.12*atr
+        risk=entry-sl
+        tp=entry+1.25*risk
     else:
-        setup_ok = m5_fast < m5_slow and recent_high >= m5_fast - 0.20*m5_atr and m5_close < m5_open and m5_close < m5_prev
-    if not setup_ok:
-        hold.details = f"HOLD: waiting for M5 EMA9/EMA21 pullback continuation ({side})"
-        return hold
-
-    # M1 confirmation: EMA9/21 aligned and last completed candle closes in direction.
-    m1_open, m1_close, m1_prev = float(m1["open"].iloc[-1]), float(m1c.iloc[-1]), float(m1c.iloc[-2])
-    if side == "BUY":
-        confirm = float(m1e9.iloc[-1]) > float(m1e21.iloc[-1]) and m1_close > m1_open and m1_close > m1_prev
-    else:
-        confirm = float(m1e9.iloc[-1]) < float(m1e21.iloc[-1]) and m1_close < m1_open and m1_close < m1_prev
+        confirm=(c<o and c<level and upper_wick>=0.25*body
+                 and c<float(prev1["close"]))
+        entry=c
+        sl=max(recent_high,hi)+0.12*atr
+        risk=sl-entry
+        tp=entry-1.25*risk
     if not confirm:
-        hold.details = f"HOLD: M5 setup valid; waiting for M1 EMA9/EMA21 confirmation ({side})"
+        hold.details=f"HOLD: M5 {side} retest found; waiting for M1 rejection"
         return hold
-
-    entry, atr = m1_close, m5_atr
-    if side == "BUY":
-        sl = min(recent_low, entry - 1.2*atr) - 0.10*atr
-        risk = entry - sl
-        tp = entry + 2.0*risk
-    else:
-        sl = max(recent_high, entry + 1.2*atr) + 0.10*atr
-        risk = sl - entry
-        tp = entry - 2.0*risk
-    if risk <= 0 or risk > 3.5*atr:
-        hold.details = "HOLD: EMA9/EMA21 stop distance outside safety range"
+    if risk<=0 or risk>1.8*atr:
+        hold.details="HOLD: Sniper structural stop outside 1.8 ATR safety range"
         return hold
-
-    return AdaptiveSignal("BUY" if side == "BUY" else "SELL", 85, 1, 1, 0, False, "", "HIGH",
-                          "EMA9/EMA21 aligned H4+H1; M5 pullback continuation; M1 confirmed; structural SL; TP 2R",
-                          "EMA921_PULLBACK", entry, sl, tp, atr)
+    return AdaptiveSignal(side,85,1,1,0,False,"","HIGH",
+        "SNIPER breakout + M5 retest + M1 rejection; structural stop; quick 1.25R target",
+        "SNIPER_BREAKOUT_RETEST",entry,sl,tp,atr)

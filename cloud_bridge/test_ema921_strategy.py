@@ -6,37 +6,42 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from adaptive_strategy import get_adaptive_signal, _valid, _ind
+from adaptive_strategy import get_adaptive_signal, _valid
 
 def frame(values):
-    values = np.asarray(values, dtype=float)
+    values=np.asarray(values,dtype=float)
     return pd.DataFrame({
-        "open": values - 0.05,
-        "high": values + 0.20,
-        "low": values - 0.20,
-        "close": values,
+        "open":values-0.05,
+        "high":values+0.20,
+        "low":values-0.20,
+        "close":values,
     })
 
-class CleanEMA921Tests(unittest.TestCase):
-    def test_requires_real_ohlc_and_completed_history(self):
-        self.assertFalse(_valid(pd.DataFrame({"close": [1.0] * 50}), 25))
-        empty = pd.DataFrame(columns=["open", "high", "low", "close"])
-        self.assertEqual(get_adaptive_signal(empty, empty, empty, empty).direction, "HOLD")
+class SniperStrategyTests(unittest.TestCase):
+    def test_requires_real_ohlc_and_minimum_history(self):
+        self.assertFalse(_valid(pd.DataFrame({"close":[1.0]*50}),25))
+        empty=pd.DataFrame(columns=["open","high","low","close"])
+        self.assertEqual(get_adaptive_signal(None,None,empty,empty).direction,"HOLD")
 
-    def test_indicator_contract_keeps_ema9_ema21_and_atr(self):
-        values = np.linspace(2000, 2010, 80)
-        close, high, low, ema9, ema21, rsi, atr = _ind(frame(values))
-        self.assertEqual(len(ema9), 80)
-        self.assertEqual(len(ema21), 80)
-        self.assertIsNone(rsi)
-        self.assertTrue(np.isfinite(float(atr.iloc[-1])))
-
-    def test_no_legacy_filter_fields_are_required(self):
-        values = np.linspace(2000, 2010, 80)
-        data = frame(values)
-        signal = get_adaptive_signal(data, data, data, data)
-        self.assertIn(signal.direction, ("HOLD", "BUY", "SELL"))
+    def test_flat_market_does_not_force_an_entry(self):
+        data=frame(np.full(80,2000.0))
+        signal=get_adaptive_signal(None,None,data,data)
+        self.assertEqual(signal.direction,"HOLD")
         self.assertFalse(signal.news_block)
 
-if __name__ == "__main__":
+    def test_signal_contract_and_quick_target_risk_ratio(self):
+        # A normal history must return the stable signal contract without
+        # requiring EMA, RSI, SMC or fundamental inputs.
+        values=np.linspace(2000,2002,80)
+        data=frame(values)
+        signal=get_adaptive_signal(None,None,data,data)
+        self.assertIn(signal.direction,("HOLD","BUY","SELL"))
+        self.assertEqual(signal.news_block,False)
+        if signal.direction in ("BUY","SELL"):
+            risk=abs(signal.entry-signal.stop_loss)
+            reward=abs(signal.take_profit-signal.entry)
+            self.assertGreater(risk,0)
+            self.assertAlmostEqual(reward/risk,1.25,places=5)
+
+if __name__=="__main__":
     unittest.main()

@@ -826,7 +826,7 @@ def aggregate_h4_history(h4, timeframe):
     return pd.DataFrame(result)
 
 async def auto_manage_positions():
-    """Fast independent position manager; never waits for the full signal/candle pipeline."""
+    """Single DEMO FAST basket manager for BUY and SELL; broker SL/TP remain hard safety limits."""
     row,_=await account_detail()
     pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
@@ -836,6 +836,9 @@ async def auto_manage_positions():
     ind=cached if fresh else {}
     AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
     AUTO_STATE["position_manager_positions"]=len(bot)
+
+    # Keep the existing separate RUNNER 0.5R protection; FAST exits below are
+    # exclusively owned by the basket manager.
     for p in bot:
         comment=str(p.get("comment","")).upper()
         side=str(p.get("side","")).upper()
@@ -844,9 +847,7 @@ async def auto_manage_positions():
         tp=float(p.get("takeProfit") or 0)
         sl_now=float(p.get("stopLoss") or 0)
         ticket=int(p.get("ticket") or 0)
-        if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0:
-            continue
-        if "RUNNER" in comment and tp>0:
+        if "RUNNER" in comment and ticket and side in ("BUY","SELL") and entry>0 and current>0 and tp>0:
             one_r=abs(tp-entry)/1.5
             reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
             lock=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
@@ -854,96 +855,122 @@ async def auto_manage_positions():
             if one_r>0 and reached and not locked:
                 await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
                 logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s locked_R=0.5",ticket)
+
     fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
+    if not fast_bot:
+        AUTO_STATE.pop("fast_basket_key",None)
+        AUTO_STATE.pop("fast_basket_peak_usd",None)
+        AUTO_STATE["fast_basket_positions"]=0
+        AUTO_STATE["fast_basket_profit"]=0.0
+        AUTO_STATE["fast_basket_trail_state"]="IDLE"
+        return
+
+    sides={str(p.get("side") or "").upper() for p in fast_bot}
+    if len(sides)!=1 or not sides.issubset({"BUY","SELL"}):
+        logger.error("AUTO_FAST_BASKET_INVALID sides=%s tickets=%s",sorted(sides),[p.get("ticket") for p in fast_bot])
+        return
+    basket_side=next(iter(sides))
+    tickets=sorted(int(p.get("ticket") or 0) for p in fast_bot if int(p.get("ticket") or 0)>0)
+    basket_key="|".join(map(str,tickets))
     basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
-    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
-    same_side=bool(fast_bot) and all(str(p.get("side") or "").upper()==basket_side for p in fast_bot)
+    start=max(0.5,float(AUTO_FAST_PROFIT_TRAIL_START_USD))
+    keep=max(0.50,min(0.85,float(AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO)))
+    peak_key=AUTO_STATE.get("fast_basket_key")
+    if peak_key!=basket_key:
+        AUTO_STATE["fast_basket_key"]=basket_key
+        AUTO_STATE["fast_basket_peak_usd"]=basket_profit
+        AUTO_STATE["fast_basket_trail_armed"]=False
+    peak=max(float(AUTO_STATE.get("fast_basket_peak_usd",basket_profit)),basket_profit)
+    if basket_profit>=start:
+        AUTO_STATE["fast_basket_trail_armed"]=True
+    if AUTO_STATE.get("fast_basket_trail_armed"):
+        peak=max(peak,start)
+    AUTO_STATE["fast_basket_peak_usd"]=peak
+    trail_floor=max(0.0,peak*keep) if AUTO_STATE.get("fast_basket_trail_armed") else 0.0
+
     h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
     m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
     m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
     m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
-    reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
-    # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
-    # and M1 momentum confirms, or M1 EMA flips with 2/3 closed candles against.
-    fast_reversal=(m5_flip and m1_opposing) or (m1_flip and m1_opposing)
+    rsi_reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
+    confirmed_reversal=(m5_flip and m1_opposing) or (m1_flip and m1_opposing) or (h1_flip and m1_opposing) or rsi_reversal
+
     AUTO_STATE["fast_basket_positions"]=len(fast_bot)
     AUTO_STATE["fast_basket_profit"]=round(basket_profit,2)
-    AUTO_STATE["fast_basket_exit_check"]="H1_FLIP" if h1_flip else ("LOWER_TF_REVERSAL" if fast_reversal else ("RSI_EXTREME" if reversal else "HOLD"))
+    AUTO_STATE["fast_basket_peak_usd"]=round(peak,2)
+    AUTO_STATE["fast_basket_trail_floor_usd"]=round(trail_floor,2)
+    AUTO_STATE["fast_basket_exit_check"]="TRAIL_FLOOR" if (AUTO_STATE.get("fast_basket_trail_armed") and basket_profit<=trail_floor) else ("CONFIRMED_REVERSAL" if confirmed_reversal else "HOLD")
     now=time.time()
-    if now-float(AUTO_STATE.get("manager_log_at",0))>=30:
-        logger.info("AUTO_POSITION_MANAGER_TICK bot_positions=%s fast_positions=%s basket_profit=%.2f indicators_fresh=%s exit_check=%s",
-                    len(bot),len(fast_bot),basket_profit,fresh,AUTO_STATE["fast_basket_exit_check"])
+    if now-float(AUTO_STATE.get("manager_log_at",0))>=10:
+        logger.info("AUTO_POSITION_MANAGER_TICK side=%s tickets=%s profit=%.2f peak=%.2f trail_floor=%.2f armed=%s fresh=%s reversal=%s",
+                    basket_side,tickets,basket_profit,peak,trail_floor,bool(AUTO_STATE.get("fast_basket_trail_armed")),fresh,confirmed_reversal)
         AUTO_STATE["manager_log_at"]=now
-    # Basket-level ratcheting profit protection. The broker SL itself stores the
-    # highest protected level, so protection survives a Render restart without
-    # relying on in-memory peak-profit state. Never loosen an existing SL.
-    trail_active=(same_side and basket_profit>=AUTO_FAST_PROFIT_TRAIL_START_USD)
-    if trail_active:
-        keep_ratio=max(0.50,min(0.85,AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO))
+
+    # Ratchet broker-side SLs on every currently profitable leg once the
+    # aggregate basket is armed. This is symmetric for BUY and SELL and never
+    # loosens an existing stop. Aggregate exit below remains the final arbiter.
+    if AUTO_STATE.get("fast_basket_trail_armed"):
         for p in fast_bot:
             side=str(p.get("side") or "").upper()
             entry=float(p.get("entryPrice") or 0)
             current=float(p.get("currentPrice") or 0)
-            position_profit=float(p.get("profit") or 0)
+            leg_profit=float(p.get("profit") or 0)
             sl_now=float(p.get("stopLoss") or 0)
             ticket=int(p.get("ticket") or 0)
-            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or position_profit<=0:
+            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or leg_profit<=0:
                 continue
-            favorable=(current>entry if side=="BUY" else current<entry)
-            if not favorable:
-                continue
-            # Lock the configured share of each profitable leg's current price
-            # movement. Existing broker SLs make this a one-way ratchet:
-            # pullbacks can trigger the stop but can never lower it.
-            lock=entry+(current-entry)*keep_ratio
-            digits=int(p.get("digits") or 2)
-            lock=round(lock,digits)
+            lock=round(entry+(current-entry)*keep,int(p.get("digits") or 2))
             tighter=(sl_now<=0 or lock>sl_now) if side=="BUY" else (sl_now<=0 or lock<sl_now)
             if tighter:
                 try:
                     result=await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s basket_profit=%.2f keep_ratio=%.2f stop_loss=%s result=%s",
-                                ticket,side,basket_profit,keep_ratio,lock,str(result)[:160])
+                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s aggregate_profit=%.2f peak=%.2f floor=%.2f stop_loss=%s result=%s",
+                                ticket,side,basket_profit,peak,trail_floor,lock,str(result)[:140])
                 except Exception as exc:
                     logger.warning("AUTO_FAST_BASKET_TRAIL_LOCK_FAILED ticket=%s error=%s",ticket,str(exc)[:180])
-    elif fast_bot and same_side:
-        # Keep diagnostics explicit while the basket is below activation.
-        AUTO_STATE["fast_basket_trail_state"]="WAITING_FOR_PROFIT_THRESHOLD"
-    if trail_active:
-        AUTO_STATE["fast_basket_trail_state"]="ACTIVE"
-        AUTO_STATE["fast_basket_trail_start_usd"]=AUTO_FAST_PROFIT_TRAIL_START_USD
-        AUTO_STATE["fast_basket_trail_keep_ratio"]=AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO
-    # A confirmed reversal must protect the basket even when it is currently losing.
-    # Never act on stale indicators; broker-side SL/TP remain the hard safety boundary.
-    if fast_bot and same_side and fresh and (h1_flip or fast_reversal or reversal):
-        closed=[]
+
+    # One exit authority: close all FAST legs only when the aggregate basket
+    # gives back its protected profit floor, or a fresh confirmed reversal
+    # arrives while the basket is still net profitable. Never close a FAST
+    # basket at a loss because of an indicator flip alone.
+    trail_exit=bool(AUTO_STATE.get("fast_basket_trail_armed")) and basket_profit<=trail_floor
+    reversal_exit=fresh and confirmed_reversal and basket_profit>0
+    if trail_exit or reversal_exit:
+        reason="BASKET_PROFIT_TRAIL" if trail_exit else "PROFITABLE_CONFIRMED_REVERSAL"
         attempted=[]
-        close_errors=[]
+        confirmed=[]
+        errors=[]
         for p in fast_bot:
             ticket=int(p.get("ticket") or 0)
-            if ticket:
-                attempted.append(ticket)
-                try:
-                    result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
-                    confirmed=bool(result.get("closed")) if isinstance(result,dict) else False
-                    if confirmed:
-                        closed.append(ticket)
-                    logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s confirmed=%s result=%s",
-                                ticket,confirmed,str(result)[:180])
-                    if not confirmed:
-                        logger.warning("AUTO_FAST_BASKET_CLOSE_UNCONFIRMED ticket=%s result=%s",
-                                       ticket,str(result)[:180])
-                except Exception as exc:
-                    close_errors.append({"ticket":ticket,"error":str(exc)[:180]})
-                    logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED ticket=%s error=%s",
-                                     ticket,str(exc)[:180])
+            if not ticket:
+                continue
+            attempted.append(ticket)
+            try:
+                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+                is_closed=bool(result.get("closed")) if isinstance(result,dict) else False
+                if is_closed:
+                    confirmed.append(ticket)
+                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT reason=%s ticket=%s confirmed=%s result=%s",
+                            reason,ticket,is_closed,str(result)[:160])
+                if not is_closed:
+                    errors.append({"ticket":ticket,"error":"close_not_confirmed"})
+            except Exception as exc:
+                errors.append({"ticket":ticket,"error":str(exc)[:160]})
+                logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED reason=%s ticket=%s",reason,ticket)
         AUTO_STATE["last_close_attempted_tickets"]=attempted
-        AUTO_STATE["last_close_confirmed_tickets"]=closed
-        AUTO_STATE["last_close_errors"]=close_errors
+        AUTO_STATE["last_close_confirmed_tickets"]=confirmed
+        AUTO_STATE["last_close_errors"]=errors
         AUTO_STATE["last_close_at"]=datetime.now(timezone.utc).isoformat()
-        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
-        logger.info("AUTO_FAST_BASKET_CLOSED attempted=%s confirmed=%s errors=%s basket_profit=%.2f",
-                    attempted,closed,len(close_errors),basket_profit)
+        AUTO_STATE["last_action"]="FAST_BASKET_"+reason
+        logger.info("AUTO_FAST_BASKET_CLOSED reason=%s attempted=%s confirmed=%s errors=%s profit=%.2f peak=%.2f floor=%.2f",
+                    reason,attempted,confirmed,len(errors),basket_profit,peak,trail_floor)
+        # Re-read broker state so partial close failures remain visible.
+        verify=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+        remaining=[p for p in (verify.get("positions",[]) if isinstance(verify,dict) else [])
+                   if "AUTO FAST" in str(p.get("comment","")).upper() and str(p.get("comment","")).startswith("DioMasteR AUTO")]
+        AUTO_STATE["fast_basket_remaining_tickets"]=[int(p.get("ticket") or 0) for p in remaining]
+        if remaining:
+            logger.error("AUTO_FAST_BASKET_REMAINS_OPEN tickets=%s reason=%s",AUTO_STATE["fast_basket_remaining_tickets"],reason)
 
 async def auto_cycle():
     row,detail=await account_detail()

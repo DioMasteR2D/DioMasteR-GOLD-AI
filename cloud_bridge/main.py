@@ -712,6 +712,40 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
                 return frame
             logger.info("AUTO candle cache insufficient symbol=%s timeframe=%s bars=%s required=%s age_seconds=%.1f",
                         symbol,timeframe,len(completed),required,age)
+    # The Android chart and AUTO may request different lookback lengths for
+    # the same timeframe (for example 48h vs 60h). If the AUTO-specific request
+    # transiently returns an empty batch, reuse the freshest verified broker
+    # cache for that symbol/timeframe instead of treating the market as having
+    # zero candles. Empty refreshes never overwrite good cache entries.
+    if len(best)<required:
+        alternate=[]
+        for key,candidate in CANDLE_CACHE.items():
+            if not isinstance(key,tuple) or len(key)<2 or key[0]!=symbol or key[1]!=timeframe:
+                continue
+            candidate_age=max(0.0,time.time()-float(candidate.get("fetched_at",0)))
+            candidate_max_age=max(120.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
+            rows=candidate.get("candles",[])
+            if candidate_age>candidate_max_age or not isinstance(rows,list):
+                continue
+            parsed=[]
+            for x in rows:
+                try:
+                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),
+                      "high":float(x["high"]),"low":float(x["low"]),"close":float(x["close"]),
+                      "tick_volume":float(x.get("tick_volume") or 0)})
+                except (KeyError,TypeError,ValueError):
+                    continue
+            parsed.sort(key=lambda x:x["timestamp"])
+            completed=parsed[:-1] if len(parsed)>1 else parsed
+            if len(completed)>=required:
+                alternate.append((candidate_age,len(completed),completed,key))
+        if alternate:
+            age,bars,best,source_key=sorted(alternate,key=lambda x:(x[0],-x[1]))[0]
+            logger.warning("AUTO candle shared-cache fallback symbol=%s timeframe=%s source_hours=%s bars=%s age_seconds=%.1f",
+                           symbol,timeframe,source_key[2] if len(source_key)>2 else "unknown",bars,age)
+            frame=pd.DataFrame(best)
+            AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
+            return frame
 
     # Retry the full lookback once, then use progressively shorter broker
     # history windows. This avoids long stalls on TickerAll empty batches.

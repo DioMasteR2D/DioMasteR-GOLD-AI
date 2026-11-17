@@ -888,7 +888,9 @@ async def auto_manage_positions():
             if reached and not locked:
                 await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
                 logger.info("AUTO_FAST_BASKET_PROFIT_LOCK ticket=%s locked_R=0.10",ticket)
-    if fast_bot and same_side and basket_profit>0 and (h1_flip or fast_reversal or reversal):
+    # A confirmed reversal must protect the basket even when it is currently losing.
+    # Never act on stale indicators; broker-side SL/TP remain the hard safety boundary.
+    if fast_bot and same_side and fresh and (h1_flip or fast_reversal or reversal):
         closed=[]
         attempted=[]
         close_errors=[]

@@ -191,7 +191,8 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     setup_name,setup_points,structure_price=setup
     confirmed=_m5_confirm(m5,side)
     if not confirmed:
-        hold.details=f"HOLD: {setup_name} found; waiting for M5 confirmation"
+        m1_diag=_m1_confirmation_diagnostics(m5,side)
+        hold.details=f"HOLD: {setup_name} found; waiting for M1 confirmation; {m1_diag}"
         return hold
     rsi=float(rsi1.iloc[i1]); atr=float(atr1.iloc[i1]); price=float(c1.iloc[i1])
     # Wider neutral bands avoid rejecting otherwise aligned trends for a small

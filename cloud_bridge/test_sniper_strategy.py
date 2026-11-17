@@ -31,8 +31,8 @@ class SniperStrategyTests(unittest.TestCase):
 
     def test_confirmed_m5_breakout_retest_and_m1_rejection_produces_buy(self):
         m5=frame(np.full(80,2000.0))
-        m5["high"]=2000.05
-        m5["low"]=1999.95
+        m5["high"]=2000.10
+        m5["low"]=1999.90
         m5.loc[79,["open","high","low","close"]]=[2000.04,2000.22,2000.04,2000.20]
         m1=frame(np.full(30,2000.0))
         m1.loc[28,["open","high","low","close"]]=[2000.10,2000.16,2000.08,2000.12]

@@ -1,6 +1,6 @@
 """Adaptive Liquidity Hunter for XAUUSD.
 
-Uses completed broker OHLC only. H4/H1 define directional bias; M5 identifies
+Uses completed broker OHLC only. H4/H1 EMA9/EMA21 define directional bias; M5 identifies
 liquidity sweep, BOS/retest, EMA pullback or breakout/retest; M1 confirms timing.
 Fundamental/news gate is retained as a hard safety filter.
 """
@@ -33,19 +33,19 @@ def _valid(df, minimum):
 
 def _ind(df):
     c=df["close"].astype(float); h=df["high"].astype(float); l=df["low"].astype(float)
-    ema20=c.ewm(span=20, adjust=False).mean()
-    ema50=c.ewm(span=50, adjust=False).mean()
+    ema9=c.ewm(span=9, adjust=False).mean()
+    ema21=c.ewm(span=21, adjust=False).mean()
     delta=c.diff()
     gain=delta.clip(lower=0).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
     loss=(-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
     rsi=100-(100/(1+gain/loss.replace(0,np.nan)))
     tr=pd.concat([h-l,(h-c.shift()).abs(),(l-c.shift()).abs()],axis=1).max(axis=1)
     atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    return c,h,l,ema20,ema50,rsi,atr
+    return c,h,l,ema9,ema21,rsi,atr
 
 def _setup(m15, side):
     """Fast M5 entry setup; inspect the latest three CLOSED M5 candles."""
-    c,h,l,e20,e50,rsi,atr=_ind(m15)
+    c,h,l,e9,e21,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
         return None
@@ -66,13 +66,13 @@ def _setup(m15, side):
             return ("BOS_RETEST", 27, min(low,prior_res))
         if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
             return ("BOS_RETEST", 27, max(high,prior_sup))
-        zone_low=min(float(e20.iloc[i]),float(e50.iloc[i])); zone_high=max(float(e20.iloc[i]),float(e50.iloc[i]))
+        zone_low=min(float(e9.iloc[i]),float(e21.iloc[i])); zone_high=max(float(e9.iloc[i]),float(e21.iloc[i]))
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         touch_buffer=0.15*a
-        if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e20.iloc[i]) and close > o:
-            return ("EMA_PULLBACK", 23, min(recent_low, float(e20.iloc[i])))
-        if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e20.iloc[i]) and close < o:
-            return ("EMA_PULLBACK", 23, max(recent_high, float(e20.iloc[i])))
+        if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e9.iloc[i]) and close > o:
+            return ("EMA_PULLBACK", 23, min(recent_low, float(e9.iloc[i])))
+        if side=="SELL" and recent_high >= zone_low-touch_buffer and close < float(e9.iloc[i]) and close < o:
+            return ("EMA_PULLBACK", 23, max(recent_high, float(e9.iloc[i])))
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
         if side=="BUY" and prev_close > range_high and low <= range_high and close > range_high:
             return ("BREAKOUT_RETEST", 25, low)
@@ -82,7 +82,7 @@ def _setup(m15, side):
 
 def _setup_diagnostics(m15, side):
     """Explain every M5 setup predicate and its input values; read-only diagnostics."""
-    c,h,l,e20,e50,rsi,atr=_ind(m15)
+    c,h,l,e9,e21,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25:
         return f"M5_SCAN side={side} insufficient_bars={len(m15)}"
@@ -98,11 +98,11 @@ def _setup_diagnostics(m15, side):
         sweep=(low < prior_low and close > prior_low and lower_wick >= body*0.8) if side=="BUY" else (high > prior_high and close < prior_high and upper_wick >= body*0.8)
         prior_res=float(h.iloc[i-11:i-1].max()); prior_sup=float(l.iloc[i-11:i-1].min())
         bos=(prev_close > prior_res and low <= prior_res and close > prior_res and close > o) if side=="BUY" else (prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
-        ema20=float(e20.iloc[i]); ema50=float(e50.iloc[i])
-        zone_low=min(ema20,ema50); zone_high=max(ema20,ema50)
+        ema9=float(e9.iloc[i]); ema21=float(e21.iloc[i])
+        zone_low=min(ema9,ema21); zone_high=max(ema9,ema21)
         recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
         buffer=0.15*a
-        ema=(recent_low <= zone_high+buffer and close > ema20 and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < ema20 and close < o)
+        ema=(recent_low <= zone_high+buffer and close > ema9 and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < ema9 and close < o)
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())
         breakout=(prev_close > range_high and low <= range_high and close > range_high) if side=="BUY" else (prev_close < range_low and high >= range_low and close < range_low)
         stamp=m15["timestamp"].iloc[i] if "timestamp" in m15.columns else i
@@ -112,7 +112,7 @@ def _setup_diagnostics(m15, side):
             f"wickU={upper_wick:.3f},wickL={lower_wick:.3f},"
             f"priorH={prior_high:.2f},priorL={prior_low:.2f},"
             f"res={prior_res:.2f},sup={prior_sup:.2f},"
-            f"EMA20={ema20:.2f},EMA50={ema50:.2f},"
+            f"EMA9={ema9:.2f},EMA21={ema21:.2f},"
             f"recentH={recent_high:.2f},recentL={recent_low:.2f},"
             f"rangeH={range_high:.2f},rangeL={range_low:.2f},"
             f"sweep={int(sweep)},bos={int(bos)},ema_pullback={int(ema)},breakout_retest={int(breakout)}"
@@ -122,7 +122,7 @@ def _setup_diagnostics(m15, side):
 def _m5_confirm(m5, side):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
     if not _valid(m5, 22): return False
-    c,h,l,ema20,ema50,rsi,atr=_ind(m5); i=len(m5)-1
+    c,h,l,ema9,ema21,rsi,atr=_ind(m5); i=len(m5)-1
     # Use a short 3-candle window so a valid M1 impulse is not lost to one
     # small pause candle. The latest candle must still close in trade direction.
     recent=m5.iloc[i-2:i+1]
@@ -131,11 +131,11 @@ def _m5_confirm(m5, side):
     if not directional: return False
     if side=="BUY":
         checks=[close>prev, float(rsi.iloc[i])>=47,
-                float(ema20.iloc[i])>=float(ema50.iloc[i]),
+                float(ema9.iloc[i])>=float(ema21.iloc[i]),
                 int((recent["close"].astype(float)>recent["open"].astype(float)).sum())>=2]
     else:
         checks=[close<prev, float(rsi.iloc[i])<=53,
-                float(ema20.iloc[i])<=float(ema50.iloc[i]),
+                float(ema9.iloc[i])<=float(ema21.iloc[i]),
                 int((recent["close"].astype(float)<recent["open"].astype(float)).sum())>=2]
     return sum(bool(x) for x in checks)>=2
 
@@ -144,15 +144,15 @@ def get_adaptive_signal(h1,h4,m15,m5,d1=None,w1=None):
     if not all((_valid(h1,60),_valid(h4,55),_valid(m15,30),_valid(m5,25))):
         hold.details="Insufficient completed H1/H4/M5/M1 broker candles"
         return hold
-    c1,hi1,lo1,e20_1,e50_1,rsi1,atr1=_ind(h1)
-    c4,_,_,e20_4,e50_4,_,atr4=_ind(h4)
+    c1,hi1,lo1,e9_1,e21_1,rsi1,atr1=_ind(h1)
+    c4,_,_,e9_4,e21_4,_,atr4=_ind(h4)
     i1=len(h1)-1; i4=len(h4)-1
     if not np.isfinite(atr1.iloc[i1]) or not np.isfinite(atr4.iloc[i4]):
         hold.details="ATR warm-up incomplete"; return hold
-    h4_bull=float(c4.iloc[i4])>float(e50_4.iloc[i4]) and float(e20_4.iloc[i4])>float(e50_4.iloc[i4])
-    h4_bear=float(c4.iloc[i4])<float(e50_4.iloc[i4]) and float(e20_4.iloc[i4])<float(e50_4.iloc[i4])
-    h1_bull=float(e20_1.iloc[i1])>float(e50_1.iloc[i1]) and float(c1.iloc[i1])>float(e20_1.iloc[i1])
-    h1_bear=float(e20_1.iloc[i1])<float(e50_1.iloc[i1]) and float(c1.iloc[i1])<float(e20_1.iloc[i1])
+    h4_bull=float(e9_4.iloc[i4])>float(e21_4.iloc[i4]) and float(c4.iloc[i4])>float(e9_4.iloc[i4])
+    h4_bear=float(e9_4.iloc[i4])<float(e21_4.iloc[i4]) and float(c4.iloc[i4])<float(e9_4.iloc[i4])
+    h1_bull=float(e9_1.iloc[i1])>float(e21_1.iloc[i1]) and float(c1.iloc[i1])>float(e9_1.iloc[i1])
+    h1_bear=float(e9_1.iloc[i1])<float(e21_1.iloc[i1]) and float(c1.iloc[i1])<float(e9_1.iloc[i1])
     if h4_bull and h1_bull: side="BUY"
     elif h4_bear and h1_bear: side="SELL"
     else:

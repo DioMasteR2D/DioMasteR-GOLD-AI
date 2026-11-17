@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - strategy/sniper-three-leg-basket
+      - strategy/ema-9-21-h1-mtf-demo
 
 jobs:
   test:

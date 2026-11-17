@@ -44,14 +44,14 @@ def _ind(df):
     return c,h,l,ema9,ema21,rsi,atr
 
 def _setup(m15, side):
-    """Fast M5 entry setup; inspect the latest three CLOSED M5 candles."""
+    """Fast M5 entry setup; inspect the latest six CLOSED M5 candles."""
     c,h,l,e9,e21,rsi,atr=_ind(m15)
     last=len(m15)-1
     if last < 25 or not np.isfinite(atr.iloc[last]) or atr.iloc[last] <= 0:
         return None
     # Prefer the newest valid setup, but do not discard a setup merely because
     # the next one or two closed M5 candles are the confirmation/retest candle.
-    for i in range(last, max(24,last-3), -1):
+    for i in range(last, max(24,last-6), -1):
         if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
             continue
         o=float(m15["open"].iloc[i]); close=float(c.iloc[i]); high=float(h.iloc[i]); low=float(l.iloc[i])
@@ -67,7 +67,7 @@ def _setup(m15, side):
         if side=="SELL" and prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o:
             return ("BOS_RETEST", 27, max(high,prior_sup))
         zone_low=min(float(e9.iloc[i]),float(e21.iloc[i])); zone_high=max(float(e9.iloc[i]),float(e21.iloc[i]))
-        recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
+        recent_low=float(l.iloc[max(0,i-6):i+1].min()); recent_high=float(h.iloc[max(0,i-6):i+1].max())
         touch_buffer=0.15*a
         if side=="BUY" and recent_low <= zone_high+touch_buffer and close > float(e9.iloc[i]) and close > o:
             return ("EMA_PULLBACK", 23, min(recent_low, float(e9.iloc[i])))
@@ -87,7 +87,7 @@ def _setup_diagnostics(m15, side):
     if last < 25:
         return f"M5_SCAN side={side} insufficient_bars={len(m15)}"
     rows=[]
-    for i in range(last, max(24,last-3), -1):
+    for i in range(last, max(24,last-6), -1):
         if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
             rows.append(f"bar{i}:invalid_atr")
             continue
@@ -100,7 +100,7 @@ def _setup_diagnostics(m15, side):
         bos=(prev_close > prior_res and low <= prior_res and close > prior_res and close > o) if side=="BUY" else (prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
         ema9=float(e9.iloc[i]); ema21=float(e21.iloc[i])
         zone_low=min(ema9,ema21); zone_high=max(ema9,ema21)
-        recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
+        recent_low=float(l.iloc[max(0,i-6):i+1].min()); recent_high=float(h.iloc[max(0,i-6):i+1].max())
         buffer=0.15*a
         ema=(recent_low <= zone_high+buffer and close > ema9 and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < ema9 and close < o)
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())

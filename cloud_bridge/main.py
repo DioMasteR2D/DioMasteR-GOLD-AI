@@ -993,13 +993,13 @@ async def auto_cycle():
     if risk_distance<=0 or risk_distance>3.5*float(signal.atr):
         AUTO_STATE["last_action"]="BLOCKED_STALE_OR_INVALID_STOP"; return
     spread=float(q["ask"])-float(q["bid"])
-    # Compute M5 ATR locally; _ind belongs to adaptive_strategy, not this module.
-    if len(m15)>=25:
-        prev_close=m15["close"].astype(float).shift(1)
+    # Compute M5 ATR locally from the completed M5 strategy frame.
+    if len(m5)>=25:
+        prev_close=m5["close"].astype(float).shift(1)
         tr=pd.concat([
-            m15["high"].astype(float)-m15["low"].astype(float),
-            (m15["high"].astype(float)-prev_close).abs(),
-            (m15["low"].astype(float)-prev_close).abs()
+            m5["high"].astype(float)-m5["low"].astype(float),
+            (m5["high"].astype(float)-prev_close).abs(),
+            (m5["low"].astype(float)-prev_close).abs()
         ],axis=1).max(axis=1)
         m5_atr=float(tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean().iloc[-1])
     else:

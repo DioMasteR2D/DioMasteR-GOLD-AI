@@ -1135,8 +1135,9 @@ async def auto_cycle():
     AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
     AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
     AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
-      "aggregate_volume":round(volume*3,4),"target_R":2.0,"profit_lock_at_R":0.65,
-      "locked_profit_R":0.10,"max_auto_positions":3}
+      "aggregate_volume":round(volume*3,4),"target_R":2.0,
+      "profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+      "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO,"max_auto_positions":3}
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
@@ -1195,7 +1196,8 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
       "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_lock_at_R":0.65,"locked_profit_R":0.10}
+      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+       "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

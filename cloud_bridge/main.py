@@ -632,7 +632,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 # Cloud strategy loop: all decisions are made on completed broker candles.
 import pandas as pd
 from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
-MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
+MIN_SNIPER_SCORE = MIN_ADAPTIVE_SCORE
 AUTO_TASK=None
 AUTO_MANAGE_TASK=None
 
@@ -673,8 +673,9 @@ AUTO_LOCK=asyncio.Lock()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
-AUTO_FAST_PROFIT_TRAIL_START_USD=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_START_USD","3.0"))
-AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO","0.67"))
+AUTO_FAST_PROFIT_TRAIL_START_USD=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_START_USD","1.5"))
+AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO","0.70"))
+AUTO_FAST_BASKET_TARGET_USD=float(os.getenv("DIO_AUTO_FAST_BASKET_TARGET_USD","2.0"))
 
 async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
     cache_key=(symbol,timeframe)
@@ -762,71 +763,8 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
         AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
     return frame
 
-def strategy_indicators(df):
-    close=df["close"]
-    delta=close.diff()
-    gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    rs=gain/loss.replace(0,float("nan"))
-    rsi=(100-(100/(1+rs))).fillna(50)
-    tr=pd.concat([(df["high"]-df["low"]), (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()],axis=1).max(axis=1)
-    atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    ema9=close.ewm(span=9,adjust=False).mean()
-    ema21=close.ewm(span=21,adjust=False).mean()
-    # Keep the EMA9/21 crossover rule, but recognize a confirmed
-    # crossover on any of the latest 3 CLOSED H1 candles. The current EMA
-    # relationship must still agree with that crossover direction.
-    cross_age=None
-    cross_direction=None
-    for offset in range(0, min(3, len(close)-1)):
-        idx=len(close)-1-offset
-        prev=idx-1
-        if ema9.iloc[idx]>ema21.iloc[idx] and ema9.iloc[prev]<=ema21.iloc[prev]:
-            cross_age=offset
-            cross_direction="BUY"
-            break
-        if ema9.iloc[idx]<ema21.iloc[idx] and ema9.iloc[prev]>=ema21.iloc[prev]:
-            cross_age=offset
-            cross_direction="SELL"
-            break
-    if cross_direction=="BUY" and not (ema9.iloc[-1]>ema21.iloc[-1]):
-        cross_direction=None; cross_age=None
-    if cross_direction=="SELL" and not (ema9.iloc[-1]<ema21.iloc[-1]):
-        cross_direction=None; cross_age=None
-    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
-      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2]),
-      "cross_age":cross_age,"cross_direction":cross_direction}
-
-def aggregate_h4_history(h4, timeframe):
-    """Build genuine D1/W1 OHLC from completed broker H4 bars when native history is short."""
-    if timeframe not in ("D1", "W1") or h4.empty:
-        return pd.DataFrame(columns=["timestamp","open","high","low","close","tick_volume"])
-    groups={}
-    for bar in h4.to_dict("records"):
-        stamp=float(bar["timestamp"])
-        dt=datetime.fromtimestamp(stamp, timezone.utc)
-        key=dt.date().isoformat() if timeframe=="D1" else f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
-        groups.setdefault(key,[]).append(bar)
-    result=[]
-    minimum_bars=4 if timeframe=="D1" else 20
-    for key in sorted(groups):
-        rows=sorted(groups[key],key=lambda x:float(x["timestamp"]))
-        # Require at least four completed H4 bars per trading day and twenty per
-        # trading week. This excludes partial sessions/weeks rather than inventing OHLC.
-        if len(rows)<minimum_bars:
-            continue
-        result.append({
-            "timestamp":float(rows[0]["timestamp"]),
-            "open":float(rows[0]["open"]),
-            "high":max(float(x["high"]) for x in rows),
-            "low":min(float(x["low"]) for x in rows),
-            "close":float(rows[-1]["close"]),
-            "tick_volume":sum(float(x.get("tick_volume",0)) for x in rows),
-        })
-    return pd.DataFrame(result)
-
 async def auto_manage_positions():
-    """Fast independent position manager; never waits for the full signal/candle pipeline."""
+    """Single DEMO FAST basket manager for BUY and SELL; broker SL/TP remain hard safety limits."""
     row,_=await account_detail()
     pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
@@ -836,114 +774,119 @@ async def auto_manage_positions():
     ind=cached if fresh else {}
     AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
     AUTO_STATE["position_manager_positions"]=len(bot)
-    for p in bot:
-        comment=str(p.get("comment","")).upper()
-        side=str(p.get("side","")).upper()
-        entry=float(p.get("entryPrice") or 0)
-        current=float(p.get("currentPrice") or 0)
-        tp=float(p.get("takeProfit") or 0)
-        sl_now=float(p.get("stopLoss") or 0)
-        ticket=int(p.get("ticket") or 0)
-        if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0:
-            continue
-        if "RUNNER" in comment and tp>0:
-            one_r=abs(tp-entry)/1.5
-            reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
-            lock=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
-            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
-            if one_r>0 and reached and not locked:
-                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s locked_R=0.5",ticket)
+
     fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
+    if not fast_bot:
+        AUTO_STATE.pop("fast_basket_key",None)
+        AUTO_STATE.pop("fast_basket_peak_usd",None)
+        AUTO_STATE["fast_basket_positions"]=0
+        AUTO_STATE["fast_basket_profit"]=0.0
+        AUTO_STATE["fast_basket_trail_state"]="IDLE"
+        return
+
+    sides={str(p.get("side") or "").upper() for p in fast_bot}
+    if len(sides)!=1 or not sides.issubset({"BUY","SELL"}):
+        logger.error("AUTO_FAST_BASKET_INVALID sides=%s tickets=%s",sorted(sides),[p.get("ticket") for p in fast_bot])
+        return
+    basket_side=next(iter(sides))
+    tickets=sorted(int(p.get("ticket") or 0) for p in fast_bot if int(p.get("ticket") or 0)>0)
+    basket_key="|".join(map(str,tickets))
     basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
-    basket_side=str(fast_bot[0].get("side") or "").upper() if fast_bot else ""
-    same_side=bool(fast_bot) and all(str(p.get("side") or "").upper()==basket_side for p in fast_bot)
-    h1_flip=(basket_side=="BUY" and ind.get("ema9",0)<ind.get("ema21",0)) or (basket_side=="SELL" and ind.get("ema9",0)>ind.get("ema21",0))
-    m5_flip=(basket_side=="BUY" and ind.get("m5_ema9",0)<ind.get("m5_ema21",0)) or (basket_side=="SELL" and ind.get("m5_ema9",0)>ind.get("m5_ema21",0))
-    m1_flip=(basket_side=="BUY" and ind.get("m1_ema9",0)<ind.get("m1_ema21",0)) or (basket_side=="SELL" and ind.get("m1_ema9",0)>ind.get("m1_ema21",0))
+    start=max(0.5,float(AUTO_FAST_PROFIT_TRAIL_START_USD))
+    keep=max(0.50,min(0.85,float(AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO)))
+    peak_key=AUTO_STATE.get("fast_basket_key")
+    if peak_key!=basket_key:
+        AUTO_STATE["fast_basket_key"]=basket_key
+        AUTO_STATE["fast_basket_peak_usd"]=basket_profit
+        AUTO_STATE["fast_basket_trail_armed"]=False
+    peak=max(float(AUTO_STATE.get("fast_basket_peak_usd",basket_profit)),basket_profit)
+    if basket_profit>=start:
+        AUTO_STATE["fast_basket_trail_armed"]=True
+    if AUTO_STATE.get("fast_basket_trail_armed"):
+        peak=max(peak,start)
+    AUTO_STATE["fast_basket_peak_usd"]=peak
+    trail_floor=max(0.0,peak*keep) if AUTO_STATE.get("fast_basket_trail_armed") else 0.0
+
     m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
-    reversal=(basket_side=="BUY" and ind.get("rsi",0)>=70) or (basket_side=="SELL" and ind.get("rsi",100)<=30)
-    # Faster exit only on confirmed lower-timeframe reversal: M5 trend flips
-    # and M1 momentum confirms, or M1 EMA flips with 2/3 closed candles against.
-    fast_reversal=(m5_flip and m1_opposing) or (m1_flip and m1_opposing)
+    confirmed_reversal=m1_opposing
+
     AUTO_STATE["fast_basket_positions"]=len(fast_bot)
     AUTO_STATE["fast_basket_profit"]=round(basket_profit,2)
-    AUTO_STATE["fast_basket_exit_check"]="H1_FLIP" if h1_flip else ("LOWER_TF_REVERSAL" if fast_reversal else ("RSI_EXTREME" if reversal else "HOLD"))
+    AUTO_STATE["fast_basket_peak_usd"]=round(peak,2)
+    AUTO_STATE["fast_basket_trail_floor_usd"]=round(trail_floor,2)
+    AUTO_STATE["fast_basket_exit_check"]="TRAIL_FLOOR" if (AUTO_STATE.get("fast_basket_trail_armed") and basket_profit<=trail_floor) else ("CONFIRMED_REVERSAL" if confirmed_reversal else "HOLD")
     now=time.time()
-    if now-float(AUTO_STATE.get("manager_log_at",0))>=30:
-        logger.info("AUTO_POSITION_MANAGER_TICK bot_positions=%s fast_positions=%s basket_profit=%.2f indicators_fresh=%s exit_check=%s",
-                    len(bot),len(fast_bot),basket_profit,fresh,AUTO_STATE["fast_basket_exit_check"])
+    if now-float(AUTO_STATE.get("manager_log_at",0))>=10:
+        logger.info("AUTO_POSITION_MANAGER_TICK side=%s tickets=%s profit=%.2f peak=%.2f trail_floor=%.2f armed=%s fresh=%s reversal=%s",
+                    basket_side,tickets,basket_profit,peak,trail_floor,bool(AUTO_STATE.get("fast_basket_trail_armed")),fresh,confirmed_reversal)
         AUTO_STATE["manager_log_at"]=now
-    # Basket-level ratcheting profit protection. The broker SL itself stores the
-    # highest protected level, so protection survives a Render restart without
-    # relying on in-memory peak-profit state. Never loosen an existing SL.
-    trail_active=(same_side and basket_profit>=AUTO_FAST_PROFIT_TRAIL_START_USD)
-    if trail_active:
-        keep_ratio=max(0.50,min(0.85,AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO))
+
+    # Ratchet broker-side SLs on every currently profitable leg once the
+    # aggregate basket is armed. This is symmetric for BUY and SELL and never
+    # loosens an existing stop. Aggregate exit below remains the final arbiter.
+    if AUTO_STATE.get("fast_basket_trail_armed"):
         for p in fast_bot:
             side=str(p.get("side") or "").upper()
             entry=float(p.get("entryPrice") or 0)
             current=float(p.get("currentPrice") or 0)
-            position_profit=float(p.get("profit") or 0)
+            leg_profit=float(p.get("profit") or 0)
             sl_now=float(p.get("stopLoss") or 0)
             ticket=int(p.get("ticket") or 0)
-            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or position_profit<=0:
+            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or leg_profit<=0:
                 continue
-            favorable=(current>entry if side=="BUY" else current<entry)
-            if not favorable:
-                continue
-            # Lock the configured share of each profitable leg's current price
-            # movement. Existing broker SLs make this a one-way ratchet:
-            # pullbacks can trigger the stop but can never lower it.
-            lock=entry+(current-entry)*keep_ratio
-            digits=int(p.get("digits") or 2)
-            lock=round(lock,digits)
+            lock=round(entry+(current-entry)*keep,int(p.get("digits") or 2))
             tighter=(sl_now<=0 or lock>sl_now) if side=="BUY" else (sl_now<=0 or lock<sl_now)
             if tighter:
                 try:
                     result=await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s basket_profit=%.2f keep_ratio=%.2f stop_loss=%s result=%s",
-                                ticket,side,basket_profit,keep_ratio,lock,str(result)[:160])
+                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s aggregate_profit=%.2f peak=%.2f floor=%.2f stop_loss=%s result=%s",
+                                ticket,side,basket_profit,peak,trail_floor,lock,str(result)[:140])
                 except Exception as exc:
                     logger.warning("AUTO_FAST_BASKET_TRAIL_LOCK_FAILED ticket=%s error=%s",ticket,str(exc)[:180])
-    elif fast_bot and same_side:
-        # Keep diagnostics explicit while the basket is below activation.
-        AUTO_STATE["fast_basket_trail_state"]="WAITING_FOR_PROFIT_THRESHOLD"
-    if trail_active:
-        AUTO_STATE["fast_basket_trail_state"]="ACTIVE"
-        AUTO_STATE["fast_basket_trail_start_usd"]=AUTO_FAST_PROFIT_TRAIL_START_USD
-        AUTO_STATE["fast_basket_trail_keep_ratio"]=AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO
-    # A confirmed reversal must protect the basket even when it is currently losing.
-    # Never act on stale indicators; broker-side SL/TP remain the hard safety boundary.
-    if fast_bot and same_side and fresh and (h1_flip or fast_reversal or reversal):
-        closed=[]
+
+    # One exit authority: close all FAST legs only when the aggregate basket
+    # gives back its protected profit floor, or a fresh confirmed reversal
+    # arrives while the basket is still net profitable. Never close a FAST
+    # basket at a loss because of an indicator flip alone.
+    target_exit=basket_profit>=AUTO_FAST_BASKET_TARGET_USD
+    trail_exit=bool(AUTO_STATE.get("fast_basket_trail_armed")) and basket_profit<=trail_floor
+    reversal_exit=fresh and confirmed_reversal and basket_profit>0
+    if target_exit or trail_exit or reversal_exit:
+        reason="BASKET_QUICK_TARGET" if target_exit else ("BASKET_PROFIT_TRAIL" if trail_exit else "PROFITABLE_M1_REVERSAL")
         attempted=[]
-        close_errors=[]
+        confirmed=[]
+        errors=[]
         for p in fast_bot:
             ticket=int(p.get("ticket") or 0)
-            if ticket:
-                attempted.append(ticket)
-                try:
-                    result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
-                    confirmed=bool(result.get("closed")) if isinstance(result,dict) else False
-                    if confirmed:
-                        closed.append(ticket)
-                    logger.info("AUTO_FAST_BASKET_CLOSE_RESULT ticket=%s confirmed=%s result=%s",
-                                ticket,confirmed,str(result)[:180])
-                    if not confirmed:
-                        logger.warning("AUTO_FAST_BASKET_CLOSE_UNCONFIRMED ticket=%s result=%s",
-                                       ticket,str(result)[:180])
-                except Exception as exc:
-                    close_errors.append({"ticket":ticket,"error":str(exc)[:180]})
-                    logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED ticket=%s error=%s",
-                                     ticket,str(exc)[:180])
+            if not ticket:
+                continue
+            attempted.append(ticket)
+            try:
+                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
+                is_closed=bool(result.get("closed")) if isinstance(result,dict) else False
+                if is_closed:
+                    confirmed.append(ticket)
+                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT reason=%s ticket=%s confirmed=%s result=%s",
+                            reason,ticket,is_closed,str(result)[:160])
+                if not is_closed:
+                    errors.append({"ticket":ticket,"error":"close_not_confirmed"})
+            except Exception as exc:
+                errors.append({"ticket":ticket,"error":str(exc)[:160]})
+                logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED reason=%s ticket=%s",reason,ticket)
         AUTO_STATE["last_close_attempted_tickets"]=attempted
-        AUTO_STATE["last_close_confirmed_tickets"]=closed
-        AUTO_STATE["last_close_errors"]=close_errors
+        AUTO_STATE["last_close_confirmed_tickets"]=confirmed
+        AUTO_STATE["last_close_errors"]=errors
         AUTO_STATE["last_close_at"]=datetime.now(timezone.utc).isoformat()
-        AUTO_STATE["last_action"]="FAST_BASKET_SMART_EXIT"
-        logger.info("AUTO_FAST_BASKET_CLOSED attempted=%s confirmed=%s errors=%s basket_profit=%.2f",
-                    attempted,closed,len(close_errors),basket_profit)
+        AUTO_STATE["last_action"]="FAST_BASKET_"+reason
+        logger.info("AUTO_FAST_BASKET_CLOSED reason=%s attempted=%s confirmed=%s errors=%s profit=%.2f peak=%.2f floor=%.2f",
+                    reason,attempted,confirmed,len(errors),basket_profit,peak,trail_floor)
+        # Re-read broker state so partial close failures remain visible.
+        verify=await ta("GET",f"/v1/accounts/{row['id']}/positions")
+        remaining=[p for p in (verify.get("positions",[]) if isinstance(verify,dict) else [])
+                   if "AUTO FAST" in str(p.get("comment","")).upper() and str(p.get("comment","")).startswith("DioMasteR AUTO")]
+        AUTO_STATE["fast_basket_remaining_tickets"]=[int(p.get("ticket") or 0) for p in remaining]
+        if remaining:
+            logger.error("AUTO_FAST_BASKET_REMAINS_OPEN tickets=%s reason=%s",AUTO_STATE["fast_basket_remaining_tickets"],reason)
 
 async def auto_cycle():
     row,detail=await account_detail()
@@ -957,29 +900,14 @@ async def auto_cycle():
         AUTO_STATE["initial_equity"]=equity_now
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
-    # Request bounded windows matching the broker history actually served:
-    # observed H1 coverage is ~294 bars for 400h and H4 ~216 bars for 1200h.
-    # Asking for a full year can trigger oversized/empty history responses on
-    # some TickerAll sessions; the strategy only needs 60 H1 and 50 H4 bars.
-    h1,h4,m15,m5=await asyncio.gather(
-      strategy_frame(row["id"],symbol,"H1",400),
-      strategy_frame(row["id"],symbol,"H4",1200),
+    # Sniper uses only completed M5 and M1 broker candles for fast entries.
+    m5,m1=await asyncio.gather(
       strategy_frame(row["id"],symbol,"M5",120),
       strategy_frame(row["id"],symbol,"M1",60))
-    # D1/W1 are not decision inputs; skip unused broker history requests.
-    minimums={"H1":60,"H4":55,"M5":30,"M1":25}
-    available={"H1":len(h1),"H4":len(h4),"M5":len(m15),"M1":len(m5)}
-    missing={tf:count for tf,count in available.items() if count<minimums[tf]}
-    if missing:
-        detail=", ".join(f"{tf}={count}/{minimums[tf]}" for tf,count in missing.items())
-        raise RuntimeError(f"Insufficient completed broker candles for Adaptive Liquidity Hunter: {detail}")
-    ind=strategy_indicators(h1)
-    # Reject stale broker candles before any new entry decision. Timestamps refer
-    # to candle open; age is measured from the expected candle close. H4 gets a
-    # weekend-sized allowance, while H1/M5/M1 must reflect the active session.
+    if len(m5)<30 or len(m1)<25:
+        raise RuntimeError(f"Insufficient completed broker candles for Sniper: M5={len(m5)}/30 M1={len(m1)}/25")
     now_ts=time.time()
-    candle_frames={"H1":(h1,3600,7200),"H4":(h4,14400,259200),
-                   "M5":(m15,300,720),"M1":(m5,60,180)}
+    candle_frames={"M5":(m5,300,720),"M1":(m1,60,180)}
     candle_freshness={}
     stale_frames=[]
     for tf,(frame,period_seconds,max_age_seconds) in candle_frames.items():
@@ -987,8 +915,7 @@ async def auto_cycle():
         age_seconds=max(0.0,now_ts-(last_open+period_seconds)) if last_open>0 else float("inf")
         candle_freshness[tf]={"last_candle_at":datetime.fromtimestamp(last_open,timezone.utc).isoformat() if last_open>0 else None,
                               "age_seconds":round(age_seconds,1) if age_seconds!=float("inf") else None,
-                              "max_age_seconds":max_age_seconds,
-                              "fresh":age_seconds<=max_age_seconds}
+                              "max_age_seconds":max_age_seconds,"fresh":age_seconds<=max_age_seconds}
         if age_seconds>max_age_seconds:
             stale_frames.append(tf)
     AUTO_STATE["candle_freshness"]=candle_freshness
@@ -1004,54 +931,27 @@ async def auto_cycle():
                            symbol,stale_frames,candle_freshness)
             AUTO_STATE["candle_freshness_log_at"]=now_ts
         return
-    # Cache completed M5/M1 momentum for the independent exit manager only;
-    # entry strategy and its H4/H1 -> M5 -> M1 gates remain unchanged.
-    def _ema_pair(frame):
-        close=frame["close"].astype(float)
-        e9=close.ewm(span=9,adjust=False).mean()
-        e21=close.ewm(span=21,adjust=False).mean()
-        return float(e9.iloc[-1]),float(e21.iloc[-1])
-    m5_e9,m5_e21=_ema_pair(m15)
-    m1_e9,m1_e21=_ema_pair(m5)
-    m1_recent=m5.iloc[-3:]
+    # Exit manager gets a fresh M1 reversal read; no EMA or RSI rules.
+    m1_recent=m1.iloc[-2:]
     m1_bearish=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum())
     m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
-    AUTO_STATE["management_indicators"]={**ind,"m5_ema9":m5_e9,"m5_ema21":m5_e21,
-      "m1_ema9":m1_e9,"m1_ema21":m1_e21,"m1_bearish_candles":m1_bearish,
+    AUTO_STATE["management_indicators"]={"m1_bearish_candles":m1_bearish,
       "m1_bullish_candles":m1_bullish,"source_candles_fresh":True,"updated_at":time.time()}
-    h4_close=float(h4["close"].iloc[-1])
-    h4_ema9=float(h4["close"].ewm(span=9,adjust=False).mean().iloc[-1])
-    h4_ema21=float(h4["close"].ewm(span=21,adjust=False).mean().iloc[-1])
-    direction="BUY" if ind["ema9"]>ind["ema21"] else "SELL"
-    rsi_ok=(direction=="BUY" and 50<=ind["rsi"]<=72) or (direction=="SELL" and 28<=ind["rsi"]<=50)
-    mtf_ok=(direction=="BUY" and h4_ema9>h4_ema21 and h4_close>h4_ema9) or (direction=="SELL" and h4_ema9<h4_ema21 and h4_close<h4_ema9)
-    now_utc=datetime.now(timezone.utc)
-    sess_ok=(now_utc.weekday()<5 and 6<=now_utc.hour<20)
-    signal=await asyncio.to_thread(get_adaptive_signal,h1,h4,m15,m5)
-    stamp=float(m15["timestamp"].iloc[-1])
-    print(
-      "AUTO_DIAGNOSTIC symbol=%s bars=H1:%s,H4:%s,M5:%s,M1:%s bar=%s "
-      "ema9=%.5f ema21=%.5f ema9_prev=%.5f ema21_prev=%.5f "
-      "cross_buy=%s cross_sell=%s cross_age=%s rsi=%.2f rsi_ok=%s h4_close=%.5f h4_ema9=%.5f h4_ema21=%.5f "
-      "mtf_ok=%s session_ok=%s signal=%s score=%s phases=P1:%s/3,P2:%s/4,P4:%s/3 "
-      "news_block=%s news_reason=%s details=%s",
-      symbol,len(h1),len(h4),len(m15),len(m5),datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
-      ind["ema9"],ind["ema21"],ind["ema9_prev"],ind["ema21_prev"],ind["cross_direction"]=="BUY",ind["cross_direction"]=="SELL",
-      ind.get("cross_age"),ind["rsi"],rsi_ok,h4_close,h4_ema9,h4_ema21,mtf_ok,sess_ok,
-      signal.direction,signal.total_score,signal.phase1_score,signal.phase2_score,
-      signal.phase4_score,signal.news_block,signal.news_reason,signal.details)
+    signal=await asyncio.to_thread(get_adaptive_signal,None,None,m5,m1)
+    stamp=float(m5["timestamp"].iloc[-1])
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
-      "last_signal":{"direction":signal.direction,"score":signal.total_score,"phase1":signal.phase1_score,
-       "smc":signal.phase2_score,"fundamental":signal.phase4_score,"news_block":signal.news_block,
-       "details":signal.details},"last_error":None})
+      "last_signal":{"direction":signal.direction,"score":signal.total_score,
+       "setup":signal.setup,"details":signal.details},"last_error":None})
+    logger.info("AUTO_SNIPER_DIAGNOSTIC symbol=%s M5=%s M1=%s signal=%s score=%s setup=%s details=%s",
+      symbol,len(m5),len(m1),signal.direction,signal.total_score,signal.setup,signal.details)
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
+    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE:
         if not bot: AUTO_STATE["last_action"]="HOLD"
-        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
-          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
-          signal.direction,signal.total_score,MIN_UNIFIED_SCORE,signal.news_block)
+        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s",
+          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SNIPER_SIGNAL_NOT_CONFIRMED",
+          signal.direction,signal.total_score,MIN_SNIPER_SCORE)
         return
     if bot:
         AUTO_STATE["last_action"]="FAST_BASKET_ALREADY_OPEN"; return
@@ -1107,7 +1007,7 @@ async def auto_cycle():
     if m5_atr<=0 or spread>0.20*m5_atr:
         AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
     sl=float(signal.stop_loss)
-    fast_tp=price+2.0*risk_distance if signal.direction=="BUY" else price-2.0*risk_distance
+    fast_tp=price+3.0*risk_distance if signal.direction=="BUY" else price-3.0*risk_distance
     per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
     if per_leg_risk*3>equity*MAX_RISK_FRACTION:
         AUTO_STATE["last_action"]="BLOCKED_THREE_LEG_AGGREGATE_RISK_CAP"; return
@@ -1135,8 +1035,8 @@ async def auto_cycle():
     AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
     AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
     AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
-      "aggregate_volume":round(volume*3,4),"target_R":2.0,
-      "profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+      "aggregate_volume":round(volume*3,4),"target_R":1.25,"broker_emergency_tp_R":3.0,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
+      "profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
       "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO,"max_auto_positions":3}
 
 @app.post("/v1/auto/start")
@@ -1195,8 +1095,8 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
       "manager_running":bool(AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done() and AUTO_STATE["running"]),
       "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
-      "strategy":"Adaptive Liquidity Hunter: H4/H1 trend + M15 liquidity/pullback + M5 confirmation + ATR structure stops + news blackout",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+      "strategy":"SNIPER: M5 breakout retest + M1 rejection; 3-leg unified basket; quick target and profit trail",
+      "sniper_threshold":MIN_SNIPER_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.25,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
        "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO}
 
 @app.post("/v1/auto/stop")

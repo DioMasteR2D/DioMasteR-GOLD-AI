@@ -1,0 +1,24 @@
+name: Sniper strategy checks
+
+on:
+  pull_request:
+    branches:
+      - strategy/ema-9-21-h1-mtf-demo
+  push:
+    branches:
+      - strategy/sniper-three-leg-basket
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install strategy test dependencies
+        run: python -m pip install numpy==2.2.3 pandas==2.2.3
+      - name: Compile cloud bridge
+        run: python -m compileall -q cloud_bridge
+      - name: Run Sniper strategy tests
+        run: python cloud_bridge/test_sniper_strategy.py

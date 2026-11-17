@@ -950,8 +950,8 @@ async def auto_cycle():
     if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE or signal.news_block:
         if not bot: AUTO_STATE["last_action"]="HOLD"
         logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
-          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
-          signal.direction,signal.total_score,MIN_UNIFIED_SCORE,signal.news_block)
+          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SNIPER_SIGNAL_NOT_CONFIRMED",
+          signal.direction,signal.total_score,MIN_SNIPER_SCORE)
         return
     if bot:
         AUTO_STATE["last_action"]="FAST_BASKET_ALREADY_OPEN"; return

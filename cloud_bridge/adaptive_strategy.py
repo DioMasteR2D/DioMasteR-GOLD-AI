@@ -87,7 +87,7 @@ def _setup_diagnostics(m15, side):
     if last < 25:
         return f"M5_SCAN side={side} insufficient_bars={len(m15)}"
     rows=[]
-    for i in range(last, max(24,last-3), -1):
+    for i in range(last, max(24,last-6), -1):
         if not np.isfinite(atr.iloc[i]) or float(atr.iloc[i]) <= 0:
             rows.append(f"bar{i}:invalid_atr")
             continue
@@ -100,7 +100,7 @@ def _setup_diagnostics(m15, side):
         bos=(prev_close > prior_res and low <= prior_res and close > prior_res and close > o) if side=="BUY" else (prev_close < prior_sup and high >= prior_sup and close < prior_sup and close < o)
         ema9=float(e9.iloc[i]); ema21=float(e21.iloc[i])
         zone_low=min(ema9,ema21); zone_high=max(ema9,ema21)
-        recent_low=float(l.iloc[max(0,i-4):i+1].min()); recent_high=float(h.iloc[max(0,i-4):i+1].max())
+        recent_low=float(l.iloc[max(0,i-6):i+1].min()); recent_high=float(h.iloc[max(0,i-6):i+1].max())
         buffer=0.15*a
         ema=(recent_low <= zone_high+buffer and close > ema9 and close > o) if side=="BUY" else (recent_high >= zone_low-buffer and close < ema9 and close < o)
         range_high=float(h.iloc[max(0,i-13):i-1].max()); range_low=float(l.iloc[max(0,i-13):i-1].min())

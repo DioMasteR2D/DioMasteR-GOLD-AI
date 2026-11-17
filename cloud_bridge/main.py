@@ -902,7 +902,7 @@ async def auto_manage_positions():
             if tighter:
                 try:
                     result=await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s basket_profit=%.2f keep_ratio=%.2f stop_loss=%.{digits}f result=%s",
+                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s basket_profit=%.2f keep_ratio=%.2f stop_loss=%s result=%s",
                                 ticket,side,basket_profit,keep_ratio,lock,str(result)[:160])
                 except Exception as exc:
                     logger.warning("AUTO_FAST_BASKET_TRAIL_LOCK_FAILED ticket=%s error=%s",ticket,str(exc)[:180])

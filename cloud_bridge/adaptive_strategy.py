@@ -119,6 +119,28 @@ def _setup_diagnostics(m15, side):
         )
     return f"M5_SCAN side={side} " + " | ".join(rows)
 
+def _m1_confirmation_diagnostics(m1, side):
+    """Read-only explanation of the exact M1 confirmation checks."""
+    if not _valid(m1, 22):
+        return f"M1_CONFIRM insufficient_bars={len(m1) if isinstance(m1, pd.DataFrame) else 0}/22"
+    c,h,l,e9,e21,rsi,atr=_ind(m1); i=len(m1)-1
+    recent=m1.iloc[i-2:i+1]
+    o=float(m1["open"].iloc[i]); close=float(c.iloc[i]); prev=float(c.iloc[i-1])
+    directional=close>o if side=="BUY" else close<o
+    if side=="BUY":
+        checks=[close>prev, float(rsi.iloc[i])>=47,
+                float(e9.iloc[i])>=float(e21.iloc[i]),
+                int((recent["close"].astype(float)>recent["open"].astype(float)).sum())>=2]
+    else:
+        checks=[close<prev, float(rsi.iloc[i])<=53,
+                float(e9.iloc[i])<=float(e21.iloc[i]),
+                int((recent["close"].astype(float)<recent["open"].astype(float)).sum())>=2]
+    return (f"M1_CONFIRM side={side} directional={int(directional)} "
+            f"close_vs_prev={int(checks[0])} rsi={float(rsi.iloc[i]):.1f} rsi_ok={int(checks[1])} "
+            f"ema9={float(e9.iloc[i]):.3f} ema21={float(e21.iloc[i]):.3f} ema_ok={int(checks[2])} "
+            f"recent_directional={int((recent['close'].astype(float)>recent['open'].astype(float)).sum()) if side=='BUY' else int((recent['close'].astype(float)<recent['open'].astype(float)).sum())}/3 "
+            f"recent_ok={int(checks[3])} passed={sum(bool(x) for x in checks)}/4 required=2")
+
 def _m5_confirm(m5, side):
     """Fast M1 timing confirmation: latest closed candle plus recent momentum."""
     if not _valid(m5, 22): return False

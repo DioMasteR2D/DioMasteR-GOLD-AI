@@ -632,7 +632,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 # Cloud strategy loop: all decisions are made on completed broker candles.
 import pandas as pd
 from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
-MIN_UNIFIED_SCORE = MIN_ADAPTIVE_SCORE
+MIN_SNIPER_SCORE = MIN_ADAPTIVE_SCORE
 AUTO_TASK=None
 AUTO_MANAGE_TASK=None
 
@@ -763,69 +763,6 @@ async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=Fa
         AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
     return frame
 
-def strategy_indicators(df):
-    close=df["close"]
-    delta=close.diff()
-    gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    loss=(-delta.clip(upper=0)).ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    rs=gain/loss.replace(0,float("nan"))
-    rsi=(100-(100/(1+rs))).fillna(50)
-    tr=pd.concat([(df["high"]-df["low"]), (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()],axis=1).max(axis=1)
-    atr=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
-    ema9=close.ewm(span=9,adjust=False).mean()
-    ema21=close.ewm(span=21,adjust=False).mean()
-    # Keep the EMA9/21 crossover rule, but recognize a confirmed
-    # crossover on any of the latest 3 CLOSED H1 candles. The current EMA
-    # relationship must still agree with that crossover direction.
-    cross_age=None
-    cross_direction=None
-    for offset in range(0, min(3, len(close)-1)):
-        idx=len(close)-1-offset
-        prev=idx-1
-        if ema9.iloc[idx]>ema21.iloc[idx] and ema9.iloc[prev]<=ema21.iloc[prev]:
-            cross_age=offset
-            cross_direction="BUY"
-            break
-        if ema9.iloc[idx]<ema21.iloc[idx] and ema9.iloc[prev]>=ema21.iloc[prev]:
-            cross_age=offset
-            cross_direction="SELL"
-            break
-    if cross_direction=="BUY" and not (ema9.iloc[-1]>ema21.iloc[-1]):
-        cross_direction=None; cross_age=None
-    if cross_direction=="SELL" and not (ema9.iloc[-1]<ema21.iloc[-1]):
-        cross_direction=None; cross_age=None
-    return {"rsi":float(rsi.iloc[-1]),"atr":float(atr.iloc[-1]),"ema9":float(ema9.iloc[-1]),
-      "ema21":float(ema21.iloc[-1]),"ema9_prev":float(ema9.iloc[-2]),"ema21_prev":float(ema21.iloc[-2]),
-      "cross_age":cross_age,"cross_direction":cross_direction}
-
-def aggregate_h4_history(h4, timeframe):
-    """Build genuine D1/W1 OHLC from completed broker H4 bars when native history is short."""
-    if timeframe not in ("D1", "W1") or h4.empty:
-        return pd.DataFrame(columns=["timestamp","open","high","low","close","tick_volume"])
-    groups={}
-    for bar in h4.to_dict("records"):
-        stamp=float(bar["timestamp"])
-        dt=datetime.fromtimestamp(stamp, timezone.utc)
-        key=dt.date().isoformat() if timeframe=="D1" else f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
-        groups.setdefault(key,[]).append(bar)
-    result=[]
-    minimum_bars=4 if timeframe=="D1" else 20
-    for key in sorted(groups):
-        rows=sorted(groups[key],key=lambda x:float(x["timestamp"]))
-        # Require at least four completed H4 bars per trading day and twenty per
-        # trading week. This excludes partial sessions/weeks rather than inventing OHLC.
-        if len(rows)<minimum_bars:
-            continue
-        result.append({
-            "timestamp":float(rows[0]["timestamp"]),
-            "open":float(rows[0]["open"]),
-            "high":max(float(x["high"]) for x in rows),
-            "low":min(float(x["low"]) for x in rows),
-            "close":float(rows[-1]["close"]),
-            "tick_volume":sum(float(x.get("tick_volume",0)) for x in rows),
-        })
-    return pd.DataFrame(result)
-
 async def auto_manage_positions():
     """Single DEMO FAST basket manager for BUY and SELL; broker SL/TP remain hard safety limits."""
     row,_=await account_detail()
@@ -837,25 +774,6 @@ async def auto_manage_positions():
     ind=cached if fresh else {}
     AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
     AUTO_STATE["position_manager_positions"]=len(bot)
-
-    # Keep the existing separate RUNNER 0.5R protection; FAST exits below are
-    # exclusively owned by the basket manager.
-    for p in bot:
-        comment=str(p.get("comment","")).upper()
-        side=str(p.get("side","")).upper()
-        entry=float(p.get("entryPrice") or 0)
-        current=float(p.get("currentPrice") or 0)
-        tp=float(p.get("takeProfit") or 0)
-        sl_now=float(p.get("stopLoss") or 0)
-        ticket=int(p.get("ticket") or 0)
-        if "RUNNER" in comment and ticket and side in ("BUY","SELL") and entry>0 and current>0 and tp>0:
-            one_r=abs(tp-entry)/1.5
-            reached=(side=="BUY" and current>=entry+one_r) or (side=="SELL" and current<=entry-one_r)
-            lock=entry+(0.5*one_r if side=="BUY" else -0.5*one_r)
-            locked=(sl_now>=lock if side=="BUY" else sl_now<=lock)
-            if one_r>0 and reached and not locked:
-                await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                logger.info("AUTO_RUNNER_PROFIT_LOCK ticket=%s locked_R=0.5",ticket)
 
     fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
     if not fast_bot:
@@ -1029,7 +947,7 @@ async def auto_cycle():
     positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
     all_positions=positions_data.get("positions",[])
     bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_UNIFIED_SCORE or signal.news_block:
+    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE or signal.news_block:
         if not bot: AUTO_STATE["last_action"]="HOLD"
         logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s news_block=%s",
           "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SCORE_OR_NEWS_GATE",
@@ -1089,7 +1007,7 @@ async def auto_cycle():
     if m5_atr<=0 or spread>0.20*m5_atr:
         AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
     sl=float(signal.stop_loss)
-    fast_tp=price+1.25*risk_distance if signal.direction=="BUY" else price-1.25*risk_distance
+    fast_tp=price+3.0*risk_distance if signal.direction=="BUY" else price-3.0*risk_distance
     per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
     if per_leg_risk*3>equity*MAX_RISK_FRACTION:
         AUTO_STATE["last_action"]="BLOCKED_THREE_LEG_AGGREGATE_RISK_CAP"; return
@@ -1117,7 +1035,7 @@ async def auto_cycle():
     AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
     AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
     AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
-      "aggregate_volume":round(volume*3,4),"target_R":1.25,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
+      "aggregate_volume":round(volume*3,4),"target_R":1.25,"broker_emergency_tp_R":3.0,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
       "profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
       "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO,"max_auto_positions":3}
 
@@ -1178,7 +1096,7 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
       "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
       "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
       "strategy":"SNIPER: M5 breakout retest + M1 rejection; 3-leg unified basket; quick target and profit trail",
-      "unified_threshold":MIN_UNIFIED_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
+      "sniper_threshold":MIN_SNIPER_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":2.0,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
        "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO}
 
 @app.post("/v1/auto/stop")

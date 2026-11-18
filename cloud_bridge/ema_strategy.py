@@ -72,6 +72,44 @@ def indicators(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig()) -
     df["adx"] = dx.ewm(alpha=1/config.adx_period, adjust=False, min_periods=config.adx_period).mean()
     return df
 
+
+def protective_stop(side: str, entry_price: float, current_sl: float,
+                    take_profit: float, market_exit_price: float,
+                    tick_size: float, config: StrategyConfig = StrategyConfig()) -> float | None:
+    """Return a monotonic protective SL; None means no stage is armed or no safe improvement."""
+    side = str(side).upper()
+    if side not in ("BUY", "SELL"):
+        return None
+    values = (entry_price, current_sl, take_profit, market_exit_price, tick_size,
+              config.sl_atr, config.tp_atr)
+    if not all(np.isfinite(float(v)) for v in values) or tick_size <= 0 or config.tp_atr <= 0 or config.sl_atr <= 0:
+        return None
+    risk = abs(take_profit - entry_price) * config.sl_atr / config.tp_atr
+    if risk <= 0 or current_sl <= 0:
+        return None
+    direction = 1.0 if side == "BUY" else -1.0
+    favorable = (market_exit_price - entry_price) * direction
+    r_multiple = favorable / risk
+    candidate = None
+    if r_multiple >= 0.8:
+        candidate = entry_price
+    if r_multiple >= 1.2:
+        candidate = entry_price + direction * 0.3 * risk
+    if r_multiple >= 1.5:
+        candidate = market_exit_price - direction * 0.8 * risk
+    if candidate is None:
+        return None
+    # Round away from market so the stop remains on the protective side.
+    if side == "BUY":
+        candidate = np.floor(candidate / tick_size + 1e-9) * tick_size
+        if candidate <= current_sl + tick_size * 0.5 or candidate >= market_exit_price:
+            return None
+    else:
+        candidate = np.ceil(candidate / tick_size - 1e-9) * tick_size
+        if candidate >= current_sl - tick_size * 0.5 or candidate <= market_exit_price:
+            return None
+    return float(round(candidate, 10))
+
 def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
                spread: float = 0.0, news_blocked: bool = False,
                trend_frame: pd.DataFrame | None = None) -> Signal:

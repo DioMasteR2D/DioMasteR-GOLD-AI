@@ -297,6 +297,26 @@ async def ta(method,path,body=None,idem=False,idempotency_key=None):
     if not r.content: return {}
     return r.json()
 
+def _account_payload(payload):
+    current = payload if isinstance(payload, dict) else {}
+    for _ in range(3):
+        nested = None
+        for key in ('account', 'data', 'result'):
+            value = current.get(key)
+            if isinstance(value, dict) and any(k in value for k in ('id', 'accountId', 'isDemo', 'broker', 'server')):
+                nested = value
+                break
+        if nested is None:
+            break
+        current = nested
+    return current
+
+def _is_demo(value):
+    return value is True or (isinstance(value, str) and value.strip().lower() in ('true', 'demo', '1', 'yes'))
+
+def _server_matches(actual):
+    norm = lambda x: ''.join(ch for ch in str(x or '').lower() if ch.isalnum())
+    return bool(norm(actual) and norm(actual) == norm(BROKER_SERVER))
 async def create_demo_session(reason):
     global SESSION_ACCOUNT_ID, SESSION_LAST_RECONNECT_AT, SESSION_RECONNECT_LOCK
     if not BROKER_LOGIN or not BROKER_PASSWORD:
@@ -309,14 +329,14 @@ async def create_demo_session(reason):
         # all detect the same outage at nearly the same time.
         if SESSION_ACCOUNT_ID and time.time()-SESSION_LAST_RECONNECT_AT < 30:
             try:
-                current=await ta("GET",f"/v1/accounts/{SESSION_ACCOUNT_ID}")
-                if (current.get("isDemo") is True and
+                current=_account_payload(await ta("GET",f"/v1/accounts/{SESSION_ACCOUNT_ID}"))
+                if (_is_demo(current.get("isDemo")) and
                     str(current.get("status","")).lower() in ("online","connected")):
                     return current
             except Exception:
                 pass
             raise HTTPException(503,"Vantage DEMO reconnect is cooling down; retrying shortly.")
-        logger.warning("TickerAll DEMO session recovery started; reason=%s",str(reason)[:160])
+        logger.warning("TickerAll DEMO session recovery started; reason=%s expected_server=%s",str(reason)[:160],BROKER_SERVER)
         session=await ta("POST","/v1/sessions",{
             "broker":"mt5","server":BROKER_SERVER,
             "account":BROKER_LOGIN,"password":BROKER_PASSWORD
@@ -329,14 +349,14 @@ async def create_demo_session(reason):
             logger.error("TickerAll recovery session missing accountId; response_keys=%s",
                          sorted(payload.keys()))
             raise HTTPException(502,"TickerAll recovery did not return accountId")
-        detail=await ta("GET",f"/v1/accounts/{account_id}")
+        detail=_account_payload(await ta("GET",f"/v1/accounts/{account_id}"))
         if str(detail.get("id"))!=str(account_id):
             raise HTTPException(502,"TickerAll recovery account detail mismatch")
-        if detail.get("isDemo") is not True:
+        if not _is_demo(detail.get("isDemo")):
             raise HTTPException(403,"Recovered TickerAll account is not verified DEMO; trading blocked")
         if str(detail.get("broker","")).lower()!="mt5":
             raise HTTPException(403,"Recovered account is not MT5")
-        if str(detail.get("server","")).lower()!=BROKER_SERVER.lower():
+        if not _server_matches(detail.get("server")):
             raise HTTPException(403,"Recovered account server does not match configured Vantage DEMO server")
         account_number=str(detail.get("accountNumber","")).replace("*","")
         if BROKER_LOGIN and account_number and not account_number.endswith(BROKER_LOGIN[-4:]):
@@ -355,7 +375,7 @@ async def account():
     match=None
     if known_id:
         try:
-            match=await ta("GET",f"/v1/accounts/{known_id}")
+            match=_account_payload(await ta("GET",f"/v1/accounts/{known_id}"))
         except HTTPException as exc:
             # A 409 explicitly means the broker account is no longer connected.
             # Re-authenticate only with the configured credentials, then verify
@@ -368,12 +388,12 @@ async def account():
                 match=await create_demo_session(f"account lookup returned HTTP {exc.status_code}")
     if not match:
         match=await create_demo_session("no active TickerAll session")
-    if match.get("isDemo") is not True:
+    if not _is_demo(match.get("isDemo")):
         raise HTTPException(403,"TickerAll did not verify this as DEMO")
     if str(match.get("broker","")).lower()!="mt5":
         raise HTTPException(403,"Only MT5 is allowed")
-    if str(match.get("server","")).lower()!=BROKER_SERVER.lower():
-        raise HTTPException(403,"Unexpected broker server")
+    if not _server_matches(match.get("server")):
+        raise HTTPException(403,"Vantage DEMO server verification failed")
     account_number=str(match.get("accountNumber","")).replace("*","")
     if BROKER_LOGIN and account_number and not account_number.endswith(BROKER_LOGIN[-4:]):
         raise HTTPException(403,"Connected Vantage DEMO login does not match configured login")

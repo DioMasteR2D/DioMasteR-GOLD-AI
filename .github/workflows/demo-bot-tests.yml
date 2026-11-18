@@ -1,0 +1,25 @@
+name: DEMO bot tests
+
+on:
+  push:
+    branches:
+      - strategy/ema-9-21-h1-mtf-demo
+  pull_request:
+    branches:
+      - strategy/ema-9-21-h1-mtf-demo
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r cloud_bridge/requirements.txt
+      - name: Run strategy and protection tests
+        working-directory: cloud_bridge
+        run: python -m pytest -q

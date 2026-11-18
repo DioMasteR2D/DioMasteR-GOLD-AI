@@ -746,6 +746,9 @@ async def auto_cycle():
     if not await _check_daily_limits(equity): return
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
+    await _sync_consecutive_losses(row["id"],symbol)
+    if int(AUTO_STATE.get("consecutive_losses",0))>=AUTO_MAX_CONSECUTIVE_LOSSES:
+        await _kill_switch("CONSECUTIVE_LOSSES"); return
     if symbol not in SYMBOLS and symbol not in symbols: raise HTTPException(403,"Symbol is not allow-listed")
     tf=StrategyConfig().timeframe
     if tf not in AUTO_CANDLE_SECONDS: raise RuntimeError("Unsupported EMA timeframe")
@@ -772,6 +775,8 @@ async def auto_cycle():
         AUTO_STATE["last_action"]="ONE_POSITION_RULE_BLOCKED_ENTRY"; return
     if signal.direction not in ("BUY","SELL"):
         AUTO_STATE["last_action"]="HOLD_"+signal.reason; return
+    if datetime.now(timezone.utc).weekday()>=5:
+        AUTO_STATE["last_action"]="WEEKEND_ENTRY_BLOCKED"; return
     if not EXECUTION_ENABLED:
         AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
     if AUTO_STATE.get("kill_switch"): return

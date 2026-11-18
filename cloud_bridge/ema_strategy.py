@@ -117,14 +117,24 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
     if direction == "HOLD":
         for i in range(len(df) - 1, first - 1, -1):
             before, after = df.iloc[i - 1], df.iloc[i]
+            # Accept either a close-to-close reclaim OR an intrabar EMA20
+            # rejection confirmed by the closed candle. The previous rule only
+            # accepted a prior CLOSE on the other side of EMA20, missing normal
+            # wick retests in established trends.
+            bull_reclaim = (float(before["close"]) <= float(before["ema_fast"]) and
+                            float(after["close"]) > float(after["ema_fast"]))
+            bear_reclaim = (float(before["close"]) >= float(before["ema_fast"]) and
+                            float(after["close"]) < float(after["ema_fast"]))
+            bull_wick_rejection = (float(after["low"]) <= float(after["ema_fast"]) and
+                                   float(after["close"]) > float(after["ema_fast"]))
+            bear_wick_rejection = (float(after["high"]) >= float(after["ema_fast"]) and
+                                   float(after["close"]) < float(after["ema_fast"]))
             bull = (float(after["ema_fast"]) > float(after["ema_slow"]) and
                     float(after["close"]) > float(after["ema_trend"]) and
-                    float(before["close"]) <= float(before["ema_fast"]) and
-                    float(after["close"]) > float(after["ema_fast"]))
+                    (bull_reclaim or bull_wick_rejection))
             bear = (float(after["ema_fast"]) < float(after["ema_slow"]) and
                     float(after["close"]) < float(after["ema_trend"]) and
-                    float(before["close"]) >= float(before["ema_fast"]) and
-                    float(after["close"]) < float(after["ema_fast"]))
+                    (bear_reclaim or bear_wick_rejection))
             if bull and still_bullish and close > vals["ema_trend"]:
                 direction, reason = "BUY", "ema_trend_pullback_confirmed_on_close"
                 break

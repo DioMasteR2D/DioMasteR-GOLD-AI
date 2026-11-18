@@ -678,9 +678,10 @@ async def _kill_switch(reason):
     logger.error("EMA_AUTO_KILL_SWITCH reason=%s",reason)
 
 async def _check_daily_limits(equity):
+    if AUTO_STATE.get("kill_switch"): return False
     today=datetime.now(timezone.utc).date().isoformat()
     if AUTO_STATE.get("utc_day")!=today:
-        AUTO_STATE.update({"utc_day":today,"trades_today":0,"daily_start_equity":equity,"consecutive_losses":0,"kill_switch":False,"kill_reason":None})
+        AUTO_STATE.update({"utc_day":today,"trades_today":0,"daily_start_equity":equity})
     start=float(AUTO_STATE.get("daily_start_equity") or equity)
     if start<=0 or equity<=0: raise RuntimeError("Cannot verify DEMO equity; fail-closed")
     loss=(start-equity)/start
@@ -836,7 +837,7 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":1,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":1,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
 
 @app.post("/v1/auto/stop")
 @app.post("/v1/auto/kill")

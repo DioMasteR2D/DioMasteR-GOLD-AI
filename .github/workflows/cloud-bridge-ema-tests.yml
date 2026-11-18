@@ -1,0 +1,24 @@
+name: Cloud Bridge EMA Tests
+on:
+  push:
+    branches:
+      - strategy/ema-9-21-h1-mtf-demo
+    paths:
+      - "cloud_bridge/**"
+      - ".github/workflows/cloud-bridge-ema-tests.yml"
+  pull_request:
+    paths:
+      - "cloud_bridge/**"
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud_bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -v

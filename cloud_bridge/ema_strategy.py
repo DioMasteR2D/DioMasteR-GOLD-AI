@@ -178,6 +178,23 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
                 reason = ("ema50_deep_pullback_confirmed_on_close" if bear_ema50_rejection
                           else "ema_trend_pullback_confirmed_on_close")
                 break
+    # Faster M5 continuation entry: when the closed M15 trend is aligned,
+    # accept a decisive M5 candle continuing above/below EMA20 without waiting
+    # for another EMA20/50 crossover or a full retest. The ATR distance cap
+    # avoids chasing an already-extended candle; all existing risk gates remain.
+    if direction == "HOLD" and trend_frame is not None and trend_bias in ("BUY", "SELL"):
+        candle = df.iloc[-1]
+        body_up = float(candle["close"]) > float(candle["open"])
+        body_down = float(candle["close"]) < float(candle["open"])
+        near_fast = abs(close - vals["ema_fast"]) <= 0.85 * vals["atr"]
+        if (trend_bias == "BUY" and still_bullish and close > vals["ema_fast"]
+                and body_up and near_fast):
+            direction = "BUY"
+            reason = "m5_trend_continuation_confirmed_on_close"
+        elif (trend_bias == "SELL" and still_bearish and close < vals["ema_fast"]
+                and body_down and near_fast):
+            direction = "SELL"
+            reason = "m5_trend_continuation_confirmed_on_close"
     if direction == "HOLD":
         hold_reason = f"no_crossover_or_trend_pullback_within_{config.cross_lookback_bars}_closed_bars"
         if trend_bias == "HOLD":

@@ -403,7 +403,7 @@ async def account():
 async def account_detail():
     row=await account()
     detail=_account_payload(await ta("GET",f"/v1/accounts/{row['id']}"))
-    if detail.get("isDemo") is not True:
+    if not _is_demo(detail.get("isDemo")):
         raise HTTPException(403,"DEMO verification failed; trading blocked")
     if str(detail.get("status","")).lower() not in ("online","connected"):
         detail=await create_demo_session("account status offline/cold")
@@ -766,7 +766,7 @@ async def _sync_consecutive_losses(account_id,symbol):
 
 async def auto_cycle():
     row,detail=await account_detail()
-    if detail.get("isDemo") is not True: raise HTTPException(403,"DEMO verification failed")
+    if not _is_demo(detail.get("isDemo")): raise HTTPException(403,"DEMO verification failed")
     equity=float((detail.get("account") or {}).get("equity") or 0)
     if not await _check_daily_limits(equity): return
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
@@ -847,7 +847,7 @@ async def _auto_runner():
 async def auto_start(authorization:Optional[str]=Header(default=None)):
     global AUTO_TASK
     auth(authorization); row,detail=await account_detail()
-    if detail.get("isDemo") is not True: raise HTTPException(403,"AUTO is DEMO-only")
+    if not _is_demo(detail.get("isDemo")): raise HTTPException(403,"AUTO is DEMO-only")
     if not EXECUTION_ENABLED: raise HTTPException(423,"DEMO execution is disabled in Render; no orders can be sent")
     if AUTO_STATE.get("kill_switch"): raise HTTPException(423,"Kill switch active; manual review/reset required")
     await reconcile_orders(row["id"])

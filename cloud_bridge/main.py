@@ -659,6 +659,7 @@ from ema_strategy import StrategyConfig, get_signal
 AUTO_TASK=None
 AUTO_LOCK=asyncio.Lock()
 AUTO_TIMEFRAME=StrategyConfig().timeframe
+AUTO_TREND_TIMEFRAME=os.getenv("DIO_EMA_TREND_TIMEFRAME","M15").upper()
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_CONSECUTIVE_LOSSES=int(os.getenv("DIO_AUTO_MAX_CONSECUTIVE_LOSSES","3"))
@@ -782,12 +783,15 @@ async def auto_cycle():
     if symbol not in SYMBOLS and symbol not in symbols: raise HTTPException(403,"Symbol is not allow-listed")
     tf=StrategyConfig().timeframe
     if tf not in AUTO_CANDLE_SECONDS: raise RuntimeError("Unsupported EMA timeframe")
+    if AUTO_TREND_TIMEFRAME not in AUTO_CANDLE_SECONDS:
+        raise RuntimeError("Unsupported higher-timeframe trend filter")
     frame=await strategy_frame(row["id"],symbol,tf,int(os.getenv("DIO_EMA_HISTORY_HOURS","2400")))
+    trend_frame=await strategy_frame(row["id"],symbol,AUTO_TREND_TIMEFRAME,int(os.getenv("DIO_EMA_TREND_HISTORY_HOURS","2400")))
     q=LIVE_TICKS.get(symbol)
     if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
         AUTO_STATE["last_action"]="BLOCKED_NO_FRESH_TICK"; return
     spread=float(q["ask"])-float(q["bid"])
-    signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked())
+    signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked(),trend_frame)
     stamp=float(signal.candle_time or 0)
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None})
     if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
@@ -894,6 +898,7 @@ async def public_auto_health():
         "adx_threshold":StrategyConfig().adx_min,
         "cross_lookback_bars":StrategyConfig().cross_lookback_bars,
         "timeframe":StrategyConfig().timeframe,
+        "trend_timeframe":AUTO_TREND_TIMEFRAME,
         "last_error_present":bool(AUTO_STATE.get("last_error")),
         "kill_switch":bool(AUTO_STATE.get("kill_switch")),
         "reconciled":bool(AUTO_STATE.get("reconciled")),
@@ -903,7 +908,7 @@ async def public_auto_health():
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":MAX_BOT_POSITIONS,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"trend_timeframe":AUTO_TREND_TIMEFRAME,"max_auto_positions":MAX_BOT_POSITIONS,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

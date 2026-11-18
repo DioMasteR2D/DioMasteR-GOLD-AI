@@ -188,20 +188,39 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) { }
     }
 
+    private static final String AUTO_RESUME_PREF = "cloud_auto_resume_enabled";
+
     private void refreshCloudAutoState() {
         if (mt5BaseUrl == null || mt5BaseUrl.isEmpty() || mt5Token == null || mt5Token.isEmpty()) return;
         new Thread(() -> {
             try {
                 JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
                 boolean running = status.optBoolean("running", false);
+                boolean resumeWanted = getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE)
+                        .getBoolean(AUTO_RESUME_PREF, false);
                 runOnUiThread(() -> {
                     aiEngineStarted = running;
                     autoExecutionMessage = running
                             ? "CLOUD AUTO ΕΝΕΡΓΟ · συνεχίζει στον server DEMO"
-                            : "Cloud AUTO σταματημένο · DEMO";
+                            : (resumeWanted
+                                ? "ΕΠΑΝΑΦΟΡΑ CLOUD AUTO · έλεγχος DEMO…"
+                                : "Cloud AUTO σταματημένο · DEMO");
+                    render();
+                    // Recover only a session previously enabled by the user.
+                    // Explicit STOP clears the preference; APK launch alone never starts AUTO.
+                    if (!running && resumeWanted && !autoStartInFlight) {
+                        logAgentActivity("CLOUD AUTO", "RECOVERY_REQUESTED",
+                                "Επαναφορά προηγουμένως ενεργοποιημένου AUTO μετά από διακοπή server");
+                        startAiEngine();
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    autoExecutionMessage = "CLOUD AUTO STATUS ERROR · " +
+                            (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                     render();
                 });
-            } catch (Exception ignored) { }
+            }
         }, "DioMasteR-auto-state").start();
     }
 
@@ -1393,6 +1412,8 @@ public class MainActivity extends Activity {
                     Toast.makeText(this, autoExecutionMessage, Toast.LENGTH_LONG).show();
                 } else {
                     aiEngineStarted = true;
+                    getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                            .putBoolean(AUTO_RESUME_PREF, true).apply();
                     logAgentActivity("CLOUD AUTO", "START_CONFIRMED", "Ο server επιβεβαίωσε running=true · DEMO");
                     autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · EMA 20/50/200 · M15 · DEMO";
                     Toast.makeText(this, "Cloud AUTO ξεκίνησε στον server DEMO.", Toast.LENGTH_LONG).show();
@@ -1404,6 +1425,9 @@ public class MainActivity extends Activity {
 
     private void stopAiEngine() {
         if (autoStartInFlight) return;
+        // Explicit user STOP disables automatic recovery after later server restarts.
+        getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
+                .putBoolean(AUTO_RESUME_PREF, false).apply();
         aiEngineStarted = false;
         autoExecutionMessage = "Αποστολή εντολής STOP στο Cloud AUTO…";
         render();

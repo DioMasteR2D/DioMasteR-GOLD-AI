@@ -129,17 +129,30 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
                                    float(after["close"]) > float(after["ema_fast"]))
             bear_wick_rejection = (float(after["high"]) >= float(after["ema_fast"]) and
                                    float(after["close"]) < float(after["ema_fast"]))
+            # A deeper EMA50 retest is also valid, but only when the same
+            # completed candle rejects EMA50 and closes back beyond EMA20
+            # in the direction of the established EMA20/50/200 trend.
+            bull_ema50_rejection = (float(after["low"]) <= float(after["ema_slow"]) and
+                                    float(after["close"]) > float(after["ema_fast"]) and
+                                    float(after["close"]) > float(after["open"]))
+            bear_ema50_rejection = (float(after["high"]) >= float(after["ema_slow"]) and
+                                    float(after["close"]) < float(after["ema_fast"]) and
+                                    float(after["close"]) < float(after["open"]))
             bull = (float(after["ema_fast"]) > float(after["ema_slow"]) and
                     float(after["close"]) > float(after["ema_trend"]) and
-                    (bull_reclaim or bull_wick_rejection))
+                    (bull_reclaim or bull_wick_rejection or bull_ema50_rejection))
             bear = (float(after["ema_fast"]) < float(after["ema_slow"]) and
                     float(after["close"]) < float(after["ema_trend"]) and
-                    (bear_reclaim or bear_wick_rejection))
+                    (bear_reclaim or bear_wick_rejection or bear_ema50_rejection))
             if bull and still_bullish and close > vals["ema_trend"]:
-                direction, reason = "BUY", "ema_trend_pullback_confirmed_on_close"
+                direction = "BUY"
+                reason = ("ema50_deep_pullback_confirmed_on_close" if bull_ema50_rejection
+                          else "ema_trend_pullback_confirmed_on_close")
                 break
             if bear and still_bearish and close < vals["ema_trend"]:
-                direction, reason = "SELL", "ema_trend_pullback_confirmed_on_close"
+                direction = "SELL"
+                reason = ("ema50_deep_pullback_confirmed_on_close" if bear_ema50_rejection
+                          else "ema_trend_pullback_confirmed_on_close")
                 break
     if direction == "HOLD":
         return Signal("HOLD", stamp, close=close, **vals, reason=f"no_crossover_or_trend_pullback_within_{config.cross_lookback_bars}_closed_bars")

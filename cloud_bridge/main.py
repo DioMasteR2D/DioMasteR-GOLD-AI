@@ -831,29 +831,49 @@ async def auto_cycle():
     row,detail=await account_detail()
     if not _is_demo(detail.get("isDemo")): raise HTTPException(403,"DEMO verification failed")
     equity=float((detail.get("account") or {}).get("equity") or 0)
-    if not await _check_daily_limits(equity): return
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
+    if symbol not in SYMBOLS and symbol not in symbols: raise HTTPException(403,"Symbol is not allow-listed")
+
+    # ALWAYS reconcile and protect existing DEMO positions before any strategy
+    # candle/history request. A missing M15 EMA200 history must never skip SL care.
+    rows=await reconcile_orders(row["id"])
+    await manage_bot_positions(row["id"], symbol, rows)
+    AUTO_STATE["last_protection_cycle_at"]=datetime.now(timezone.utc).isoformat()
+
+    # Daily/consecutive-loss limits block NEW entries, not protection of open risk.
+    if not await _check_daily_limits(equity):
+        AUTO_STATE["last_action"]="PROTECTION_DONE_ENTRY_BLOCKED_BY_DAILY_LIMIT"
+        return
     await _sync_consecutive_losses(row["id"],symbol)
     if int(AUTO_STATE.get("consecutive_losses",0))>=AUTO_MAX_CONSECUTIVE_LOSSES:
         await _kill_switch("CONSECUTIVE_LOSSES"); return
-    if symbol not in SYMBOLS and symbol not in symbols: raise HTTPException(403,"Symbol is not allow-listed")
+
     tf=StrategyConfig().timeframe
     if tf not in AUTO_CANDLE_SECONDS: raise RuntimeError("Unsupported EMA timeframe")
     if AUTO_TREND_TIMEFRAME not in AUTO_CANDLE_SECONDS:
         raise RuntimeError("Unsupported higher-timeframe trend filter")
-    frame=await strategy_frame(row["id"],symbol,tf,int(os.getenv("DIO_EMA_HISTORY_HOURS","2400")))
-    trend_frame=await strategy_frame(row["id"],symbol,AUTO_TREND_TIMEFRAME,int(os.getenv("DIO_EMA_TREND_HISTORY_HOURS","2400")))
     q=LIVE_TICKS.get(symbol)
     if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
-        AUTO_STATE["last_action"]="BLOCKED_NO_FRESH_TICK"; return
+        AUTO_STATE["last_action"]="PROTECTION_DONE_BLOCKED_NO_FRESH_TICK"; return
+
+    # Strategy evaluation is isolated AFTER position protection. If M15 data is
+    # incomplete, keep managing existing positions and skip only fresh entries.
+    try:
+        frame=await strategy_frame(row["id"],symbol,tf,int(os.getenv("DIO_EMA_HISTORY_HOURS","2400")))
+        trend_frame=await strategy_frame(row["id"],symbol,AUTO_TREND_TIMEFRAME,int(os.getenv("DIO_EMA_TREND_HISTORY_HOURS","2400")))
+    except Exception as exc:
+        AUTO_STATE.update({
+            "last_strategy_data_error":str(exc)[:250],
+            "last_action":"PROTECTION_DONE_STRATEGY_DATA_UNAVAILABLE"
+        })
+        logger.warning("EMA strategy data unavailable after protection cycle; new entries paused: %s",str(exc)[:250])
+        return
+
     spread=float(q["ask"])-float(q["bid"])
     signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked(),trend_frame)
     stamp=float(signal.candle_time or 0)
-    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None})
-    # Position protection runs every AUTO cycle (5s), not only on a new closed M5 candle.
-    rows=await reconcile_orders(row["id"])
-    await manage_bot_positions(row["id"], symbol, rows)
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None,"last_strategy_data_error":None})
     if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
         AUTO_STATE["last_action"]="WAITING_FOR_NEW_CLOSED_CANDLE"; return
     AUTO_STATE["last_processed_candle"]=stamp

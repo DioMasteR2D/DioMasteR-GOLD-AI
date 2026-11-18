@@ -5,8 +5,8 @@ import java.util.List;
 
 /**
  * Android-side display adapter only.
- * All automatic XAUUSD decisions are made by the cloud Adaptive Liquidity Hunter.
- * This class deliberately does not generate competing local trade signals.
+ * Display-only adapter. The sole automatic strategy is cloud EMA 20/50/200 + ADX/ATR on M15 DEMO.
+ * This class never generates local orders or competing trading signals.
  */
 public final class GoldAiAgent {
     private GoldAiAgent() {}
@@ -23,9 +23,9 @@ public final class GoldAiAgent {
         }
     }
     public static Signal analyze(List<Double> prices,double current) {
-        return Signal.waiting("ADAPTIVE LIQUIDITY HUNTER · cloud AUTO owns all trade decisions.");
+        return Signal.waiting("EMA CROSSOVER 20/50/200 · M15 · ADX14 · ATR14 · DEMO cloud owns all trade decisions.");
     }
     public static Signal analyze(JSONArray h1,JSONArray h4,double executableReference) {
-        return Signal.waiting("ADAPTIVE LIQUIDITY HUNTER · H4/H1 trend · M15 setup · M5 confirmation · DEMO cloud.");
+        return Signal.waiting("EMA CROSSOVER 20/50/200 · M15 · ADX14 · ATR14 · DEMO cloud.");
     }
 }

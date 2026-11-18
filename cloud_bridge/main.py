@@ -715,6 +715,8 @@ async def strategy_frame(account_id,symbol,timeframe,hours):
 
 async def _sync_consecutive_losses(account_id,symbol):
     """Read broker closed history; count consecutive EMA bot losses, newest first."""
+    checked=AUTO_STATE.get("last_history_loss_check")
+    if checked and (datetime.now(timezone.utc)-datetime.fromisoformat(checked)).total_seconds()<30: return
     data=await ta("GET",f"/v1/accounts/{account_id}/history?limit=100")
     history=data.get("history",data.get("trades",[])) if isinstance(data,dict) else data
     if not isinstance(history,list): raise RuntimeError("Invalid closed history payload")

@@ -22,4 +22,4 @@ jobs:
           pip install -r cloud_bridge/requirements.txt
       - name: Run strategy and protection tests
         working-directory: cloud_bridge
-        run: python -m pytest -q --import-mode=importlib
+        run: python -m pytest -q tests

@@ -22,7 +22,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=3  # Maximum three concurrent AUTO FAST sniper positions; MANUAL orders excluded.
+MAX_BOT_POSITIONS=1  # EMA strategy: one position maximum.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
@@ -268,11 +268,11 @@ def configured():
     if not TA_TOKEN: raise HTTPException(503,"TickerAll API key is not configured")
     if not BRIDGE_TOKEN: raise HTTPException(503,"Bridge auth is not configured")
 
-async def ta(method,path,body=None,idem=False):
+async def ta(method,path,body=None,idem=False,idempotency_key=None):
     configured()
     headers={"Authorization":"Bearer "+TA_TOKEN,"Accept":"application/json"}
     if body is not None: headers["Content-Type"]="application/json"
-    if idem: headers["Idempotency-Key"]=str(uuid.uuid4())
+    if idem: headers["Idempotency-Key"]=str(idempotency_key or uuid.uuid4())
     # Retry only idempotent GETs on transient gateway/rate-limit responses.
     # Never retry order/session POSTs automatically.
     attempts=3 if method.upper()=="GET" else 1
@@ -629,492 +629,200 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
     return {"ok":bool(result.get("closed")),"account_mode":"DEMO","ticket":ticket,
       "deal":result.get("dealTicket"),"result":result}
 
-# Cloud strategy loop: all decisions are made on completed broker candles.
+# EMA crossover AUTO strategy. TickerAll, Android endpoints and data stores remain unchanged.
 import pandas as pd
-from adaptive_strategy import get_adaptive_signal, MIN_ADAPTIVE_SCORE
-MIN_SNIPER_SCORE = MIN_ADAPTIVE_SCORE
+from ema_strategy import StrategyConfig, get_signal
 AUTO_TASK=None
-AUTO_MANAGE_TASK=None
-
-async def _position_manager_loop():
-    """Independent DEMO position manager; strategy and exit conditions stay in auto_manage_positions()."""
-    logger.info("AUTO_POSITION_MANAGER_STARTED")
-    try:
-        while AUTO_STATE["running"]:
-            started=time.monotonic()
-            try:
-                await auto_manage_positions()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                AUTO_STATE["position_manager_last_error"]=str(exc)[:250]
-                logger.exception("AUTO_POSITION_MANAGER_ERROR error=%s",str(exc)[:250])
-            elapsed=time.monotonic()-started
-            await asyncio.sleep(max(0.25,1.0-elapsed))
-    finally:
-        logger.info("AUTO_POSITION_MANAGER_STOPPED")
-
-def ensure_position_manager():
-    """Restart only the manager task if it died; never restart or alter the trading runner."""
-    global AUTO_MANAGE_TASK
-    if not AUTO_STATE.get("running"):
-        return False
-    if AUTO_MANAGE_TASK is None or AUTO_MANAGE_TASK.done():
-        was_started=AUTO_MANAGE_TASK is not None
-        AUTO_MANAGE_TASK=asyncio.create_task(_position_manager_loop(),name="diomaster-position-manager")
-        if was_started:
-            logger.warning("AUTO_POSITION_MANAGER_WATCHDOG_RESTARTED")
-        else:
-            logger.info("AUTO_POSITION_MANAGER_WATCHDOG_STARTED")
-    return True
-
-AUTO_STATE={"running":False,"supported":True,"account_mode":"DEMO","last_action":"STOPPED","last_signal":None,"last_error":None,"last_cycle_at":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"initial_equity":None,"utc_day":None,"last_entry_bar_time":None}
 AUTO_LOCK=asyncio.Lock()
+AUTO_TIMEFRAME=StrategyConfig().timeframe
 AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
-AUTO_MAX_DRAWDOWN=float(os.getenv("DIO_AUTO_MAX_DRAWDOWN","0.15"))
-AUTO_FAST_PROFIT_TRAIL_START_USD=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_START_USD","1.5"))
-AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO=float(os.getenv("DIO_AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO","0.70"))
-AUTO_FAST_BASKET_TARGET_USD=float(os.getenv("DIO_AUTO_FAST_BASKET_TARGET_USD","2.0"))
+AUTO_MAX_CONSECUTIVE_LOSSES=int(os.getenv("DIO_AUTO_MAX_CONSECUTIVE_LOSSES","3"))
+AUTO_NEWS_WINDOWS=os.getenv("DIO_AUTO_NEWS_WINDOWS_UTC","").strip()
+AUTO_STATE={"running":False,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","last_action":"STOPPED","last_error":None,"last_signal":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"utc_day":None,"consecutive_losses":0,"known_ticket":None,"kill_switch":False,"reconciled":False,"last_order_key":None}
+AUTO_CANDLE_SECONDS={"M1":60,"M5":300,"M15":900,"M30":1800,"H1":3600,"H4":14400}
 
-async def strategy_frame(account_id,symbol,timeframe,hours,allow_insufficient=False):
-    cache_key=(symbol,timeframe)
-    cached_frame=AUTO_STRATEGY_CACHE.get(cache_key)
-    if cached_frame and time.time()-cached_frame["at"]<AUTO_STRATEGY_CACHE_TTL.get(timeframe,15):
-        return cached_frame["frame"].copy()
-    # Reuse the bridge's recently verified broker-candle cache before making
-    # another upstream request. The Android chart and AUTO share this cache.
-    # Only genuine broker OHLC is used; the forming candle is always excluded.
-    required={"H1":60,"H4":50}.get(timeframe,2)
-    bridge_cache_key=(symbol,timeframe,hours)
-    cached=CANDLE_CACHE.get(bridge_cache_key)
-    best=[]
-    if cached:
-        age=max(0.0,time.time()-float(cached.get("fetched_at",0)))
-        max_age=max(120.0,CANDLE_CACHE_TTL.get(timeframe,60)*2.0)
-        cached_rows=cached.get("candles",[])
-        if age<=max_age and isinstance(cached_rows,list):
-            parsed=[]
-            for x in cached_rows:
-                try:
-                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),
-                      "high":float(x["high"]),"low":float(x["low"]),"close":float(x["close"]),
-                      "tick_volume":float(x.get("tick_volume") or 0)})
-                except (KeyError,TypeError,ValueError):
-                    continue
-            parsed.sort(key=lambda x:x["timestamp"])
-            completed=parsed[:-1] if len(parsed)>1 else parsed
-            best=completed
-            if len(completed)>=required:
-                logger.info("AUTO candle cache hit symbol=%s timeframe=%s bars=%s age_seconds=%.1f",
-                            symbol,timeframe,len(completed),age)
-                frame=pd.DataFrame(completed)
-                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
-                return frame
-            logger.info("AUTO candle cache insufficient symbol=%s timeframe=%s bars=%s required=%s age_seconds=%.1f",
-                        symbol,timeframe,len(completed),required,age)
+def _news_blocked(now=None):
+    if not AUTO_NEWS_WINDOWS: return False
+    now=now or datetime.now(timezone.utc)
+    try:
+        current=now.strftime("%H:%M")
+        for item in AUTO_NEWS_WINDOWS.split(","):
+            a,b=[x.strip() for x in item.split("-",1)]
+            if a<=b and a<=current<=b: return True
+            if a>b and (current>=a or current<=b): return True
+        return False
+    except Exception:
+        logger.error("Invalid DIO_AUTO_NEWS_WINDOWS_UTC; fail-closed")
+        return True
 
-    # Retry the full lookback once, then use progressively shorter broker
-    # history windows. This avoids long stalls on TickerAll empty batches.
-    windows=[hours]
-    if not allow_insufficient and hours>=200:
-        windows.extend(sorted({max(100,hours//2),max(100,hours//4)},reverse=True))
-    last_payload=None
-    for window_index,window_hours in enumerate(windows):
-        attempts=2 if window_index==0 else 1
-        for attempt in range(attempts):
-            payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={window_hours}")
-            last_payload=payload
-            rows=payload.get("candles",[]) if isinstance(payload,dict) else []
-            if not isinstance(rows,list):
-                raise RuntimeError(f"{timeframe} candle payload invalid")
-            parsed=[]
-            for x in rows:
-                try:
-                    parsed.append({"timestamp":float(x["timestamp"]),"open":float(x["open"]),"high":float(x["high"]),
-                      "low":float(x["low"]),"close":float(x["close"]),"tick_volume":float(x.get("tickVolume") or 0)})
-                except (KeyError,TypeError,ValueError):
-                    continue
-            parsed.sort(key=lambda x:x["timestamp"])
-            # TickerAll includes the currently forming candle; exclude it.
-            clean=parsed[:-1] if len(parsed)>1 else parsed
-            if len(clean)>len(best):
-                best=clean
-            if len(clean)>=required:
-                if window_index or attempt:
-                    logger.info("AUTO candle history recovered symbol=%s timeframe=%s requested_hours=%s used_hours=%s bars=%s",
-                                symbol,timeframe,hours,window_hours,len(clean))
-                frame=pd.DataFrame(clean)
-                AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
-                return frame
-            if attempt<attempts-1:
-                logger.warning("AUTO candle retry symbol=%s timeframe=%s hours=%s attempt=%s raw=%s valid=%s stop=%s",
-                    symbol,timeframe,window_hours,attempt+1,len(rows),len(parsed),
-                    (payload.get("stopReason") if isinstance(payload,dict) else "invalid_payload"))
-                await asyncio.sleep(0.5)
-        if window_index+1<len(windows):
-            logger.warning("AUTO candle lookback fallback symbol=%s timeframe=%s hours=%s next_hours=%s best_completed=%s",
-                           symbol,timeframe,window_hours,windows[window_index+1],len(best))
-    if len(best)<2 and not allow_insufficient:
-        stop=(last_payload.get("stopReason") if isinstance(last_payload,dict) else "invalid_payload")
-        raise RuntimeError(f"Insufficient completed {timeframe} candles after cache/retries/fallback: {len(best)}; stop={stop}")
-    frame=pd.DataFrame(best)
-    if not frame.empty:
-        AUTO_STRATEGY_CACHE[cache_key]={"at":time.time(),"frame":frame}
-    return frame
+def _bot_positions(rows):
+    return [p for p in rows if str(p.get("comment","")).startswith("DioMasteR AUTO EMA")]
 
-async def auto_manage_positions():
-    """Single DEMO FAST basket manager for BUY and SELL; broker SL/TP remain hard safety limits."""
-    row,_=await account_detail()
-    pdata=await ta("GET",f"/v1/accounts/{row['id']}/positions")
-    positions=pdata.get("positions",[]) if isinstance(pdata,dict) else []
-    bot=[p for p in positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    cached=AUTO_STATE.get("management_indicators") or {}
-    fresh=(time.time()-float(cached.get("updated_at",0)))<=90 and cached.get("source_candles_fresh",True)
-    ind=cached if fresh else {}
-    AUTO_STATE["position_manager_last_seen_at"]=datetime.now(timezone.utc).isoformat()
-    AUTO_STATE["position_manager_positions"]=len(bot)
+async def reconcile_orders(account_id):
+    data=await ta("GET",f"/v1/accounts/{account_id}/positions")
+    rows=data.get("positions",[]) if isinstance(data,dict) else []
+    if not isinstance(rows,list): raise RuntimeError("Invalid broker positions payload")
+    bot=_bot_positions(rows)
+    if len(bot)>1: raise HTTPException(423,"Reconciliation failed: multiple EMA bot positions exist")
+    for p in bot:
+        if float(p.get("stopLoss") or 0)<=0 or float(p.get("takeProfit") or 0)<=0:
+            raise HTTPException(423,"Reconciliation failed: position missing server-side SL/TP")
+    AUTO_STATE["known_ticket"]=int(bot[0].get("ticket") or 0) if bot else None
+    AUTO_STATE["reconciled"]=True
+    AUTO_STATE["broker_bot_positions"]=len(bot)
+    return rows
 
-    fast_bot=[p for p in bot if "AUTO FAST" in str(p.get("comment","")).upper()]
-    if not fast_bot:
-        AUTO_STATE.pop("fast_basket_key",None)
-        AUTO_STATE.pop("fast_basket_peak_usd",None)
-        AUTO_STATE["fast_basket_positions"]=0
-        AUTO_STATE["fast_basket_profit"]=0.0
-        AUTO_STATE["fast_basket_trail_state"]="IDLE"
-        return
+async def _kill_switch(reason):
+    AUTO_STATE.update({"running":False,"kill_switch":True,"last_action":"KILL_SWITCH:"+reason,"kill_reason":reason,"reconciled":False})
+    logger.error("EMA_AUTO_KILL_SWITCH reason=%s",reason)
 
-    sides={str(p.get("side") or "").upper() for p in fast_bot}
-    if len(sides)!=1 or not sides.issubset({"BUY","SELL"}):
-        logger.error("AUTO_FAST_BASKET_INVALID sides=%s tickets=%s",sorted(sides),[p.get("ticket") for p in fast_bot])
-        return
-    basket_side=next(iter(sides))
-    tickets=sorted(int(p.get("ticket") or 0) for p in fast_bot if int(p.get("ticket") or 0)>0)
-    basket_key="|".join(map(str,tickets))
-    basket_profit=sum(float(p.get("profit") or 0) for p in fast_bot)
-    start=max(0.5,float(AUTO_FAST_PROFIT_TRAIL_START_USD))
-    keep=max(0.50,min(0.85,float(AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO)))
-    peak_key=AUTO_STATE.get("fast_basket_key")
-    if peak_key!=basket_key:
-        AUTO_STATE["fast_basket_key"]=basket_key
-        AUTO_STATE["fast_basket_peak_usd"]=basket_profit
-        AUTO_STATE["fast_basket_trail_armed"]=False
-    peak=max(float(AUTO_STATE.get("fast_basket_peak_usd",basket_profit)),basket_profit)
-    if basket_profit>=start:
-        AUTO_STATE["fast_basket_trail_armed"]=True
-    if AUTO_STATE.get("fast_basket_trail_armed"):
-        peak=max(peak,start)
-    AUTO_STATE["fast_basket_peak_usd"]=peak
-    trail_floor=max(0.0,peak*keep) if AUTO_STATE.get("fast_basket_trail_armed") else 0.0
+async def _check_daily_limits(equity):
+    today=datetime.now(timezone.utc).date().isoformat()
+    if AUTO_STATE.get("utc_day")!=today:
+        AUTO_STATE.update({"utc_day":today,"trades_today":0,"daily_start_equity":equity,"consecutive_losses":0,"kill_switch":False,"kill_reason":None})
+    start=float(AUTO_STATE.get("daily_start_equity") or equity)
+    if start<=0 or equity<=0: raise RuntimeError("Cannot verify DEMO equity; fail-closed")
+    loss=(start-equity)/start
+    AUTO_STATE["daily_loss_pct"]=round(loss*100,4)
+    if loss>=AUTO_DAILY_LOSS_LIMIT:
+        await _kill_switch("DAILY_LOSS_LIMIT"); return False
+    if int(AUTO_STATE.get("consecutive_losses",0))>=AUTO_MAX_CONSECUTIVE_LOSSES:
+        await _kill_switch("CONSECUTIVE_LOSSES"); return False
+    if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
+        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return False
+    return True
 
-    m1_opposing=(basket_side=="BUY" and ind.get("m1_bearish_candles",0)>=2) or (basket_side=="SELL" and ind.get("m1_bullish_candles",0)>=2)
-    confirmed_reversal=m1_opposing
-
-    AUTO_STATE["fast_basket_positions"]=len(fast_bot)
-    AUTO_STATE["fast_basket_profit"]=round(basket_profit,2)
-    AUTO_STATE["fast_basket_peak_usd"]=round(peak,2)
-    AUTO_STATE["fast_basket_trail_floor_usd"]=round(trail_floor,2)
-    AUTO_STATE["fast_basket_exit_check"]="TRAIL_FLOOR" if (AUTO_STATE.get("fast_basket_trail_armed") and basket_profit<=trail_floor) else ("CONFIRMED_REVERSAL" if confirmed_reversal else "HOLD")
-    now=time.time()
-    if now-float(AUTO_STATE.get("manager_log_at",0))>=10:
-        logger.info("AUTO_POSITION_MANAGER_TICK side=%s tickets=%s profit=%.2f peak=%.2f trail_floor=%.2f armed=%s fresh=%s reversal=%s",
-                    basket_side,tickets,basket_profit,peak,trail_floor,bool(AUTO_STATE.get("fast_basket_trail_armed")),fresh,confirmed_reversal)
-        AUTO_STATE["manager_log_at"]=now
-
-    # Ratchet broker-side SLs on every currently profitable leg once the
-    # aggregate basket is armed. This is symmetric for BUY and SELL and never
-    # loosens an existing stop. Aggregate exit below remains the final arbiter.
-    if AUTO_STATE.get("fast_basket_trail_armed"):
-        for p in fast_bot:
-            side=str(p.get("side") or "").upper()
-            entry=float(p.get("entryPrice") or 0)
-            current=float(p.get("currentPrice") or 0)
-            leg_profit=float(p.get("profit") or 0)
-            sl_now=float(p.get("stopLoss") or 0)
-            ticket=int(p.get("ticket") or 0)
-            if not ticket or side not in ("BUY","SELL") or entry<=0 or current<=0 or leg_profit<=0:
-                continue
-            lock=round(entry+(current-entry)*keep,int(p.get("digits") or 2))
-            tighter=(sl_now<=0 or lock>sl_now) if side=="BUY" else (sl_now<=0 or lock<sl_now)
-            if tighter:
-                try:
-                    result=await ta("PATCH",f"/v1/accounts/{row['id']}/positions/{ticket}",{"stopLoss":lock},idem=True)
-                    logger.info("AUTO_FAST_BASKET_TRAIL_LOCK ticket=%s side=%s aggregate_profit=%.2f peak=%.2f floor=%.2f stop_loss=%s result=%s",
-                                ticket,side,basket_profit,peak,trail_floor,lock,str(result)[:140])
-                except Exception as exc:
-                    logger.warning("AUTO_FAST_BASKET_TRAIL_LOCK_FAILED ticket=%s error=%s",ticket,str(exc)[:180])
-
-    # One exit authority: close all FAST legs only when the aggregate basket
-    # gives back its protected profit floor, or a fresh confirmed reversal
-    # arrives while the basket is still net profitable. Never close a FAST
-    # basket at a loss because of an indicator flip alone.
-    target_exit=basket_profit>=AUTO_FAST_BASKET_TARGET_USD
-    trail_exit=bool(AUTO_STATE.get("fast_basket_trail_armed")) and basket_profit<=trail_floor
-    reversal_exit=fresh and confirmed_reversal and basket_profit>0
-    if target_exit or trail_exit or reversal_exit:
-        reason="BASKET_QUICK_TARGET" if target_exit else ("BASKET_PROFIT_TRAIL" if trail_exit else "PROFITABLE_M1_REVERSAL")
-        attempted=[]
-        confirmed=[]
-        errors=[]
-        for p in fast_bot:
-            ticket=int(p.get("ticket") or 0)
-            if not ticket:
-                continue
-            attempted.append(ticket)
-            try:
-                result=await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True)
-                is_closed=bool(result.get("closed")) if isinstance(result,dict) else False
-                if is_closed:
-                    confirmed.append(ticket)
-                logger.info("AUTO_FAST_BASKET_CLOSE_RESULT reason=%s ticket=%s confirmed=%s result=%s",
-                            reason,ticket,is_closed,str(result)[:160])
-                if not is_closed:
-                    errors.append({"ticket":ticket,"error":"close_not_confirmed"})
-            except Exception as exc:
-                errors.append({"ticket":ticket,"error":str(exc)[:160]})
-                logger.exception("AUTO_FAST_BASKET_CLOSE_FAILED reason=%s ticket=%s",reason,ticket)
-        AUTO_STATE["last_close_attempted_tickets"]=attempted
-        AUTO_STATE["last_close_confirmed_tickets"]=confirmed
-        AUTO_STATE["last_close_errors"]=errors
-        AUTO_STATE["last_close_at"]=datetime.now(timezone.utc).isoformat()
-        AUTO_STATE["last_action"]="FAST_BASKET_"+reason
-        logger.info("AUTO_FAST_BASKET_CLOSED reason=%s attempted=%s confirmed=%s errors=%s profit=%.2f peak=%.2f floor=%.2f",
-                    reason,attempted,confirmed,len(errors),basket_profit,peak,trail_floor)
-        # Re-read broker state so partial close failures remain visible.
-        verify=await ta("GET",f"/v1/accounts/{row['id']}/positions")
-        remaining=[p for p in (verify.get("positions",[]) if isinstance(verify,dict) else [])
-                   if "AUTO FAST" in str(p.get("comment","")).upper() and str(p.get("comment","")).startswith("DioMasteR AUTO")]
-        AUTO_STATE["fast_basket_remaining_tickets"]=[int(p.get("ticket") or 0) for p in remaining]
-        if remaining:
-            logger.error("AUTO_FAST_BASKET_REMAINS_OPEN tickets=%s reason=%s",AUTO_STATE["fast_basket_remaining_tickets"],reason)
+async def strategy_frame(account_id,symbol,timeframe,hours):
+    key=(symbol,timeframe,hours)
+    cached=CANDLE_CACHE.get(key)
+    if cached and time.time()-cached["fetched_at"]<CANDLE_CACHE_TTL.get(timeframe,15):
+        rows=list(cached.get("candles",[]))
+    else:
+        payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+        rows=payload.get("candles",[]) if isinstance(payload,dict) else []
+    clean=[]
+    for bar in rows:
+        try:
+            clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),"high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),"tick_volume":float(bar.get("tickVolume",bar.get("tick_volume",0)) or 0),"spread":float(bar.get("spread") or 0)})
+        except (KeyError,TypeError,ValueError): continue
+    clean.sort(key=lambda x:x["timestamp"])
+    seconds=AUTO_CANDLE_SECONDS[timeframe]
+    clean=[x for x in clean if x["timestamp"]+seconds<=time.time()]
+    if len(clean)<205: raise RuntimeError(f"Not enough CLOSED {timeframe} OHLC candles for EMA200: {len(clean)}")
+    return pd.DataFrame(clean)
 
 async def auto_cycle():
     row,detail=await account_detail()
-    equity_now=float((detail.get("account") or {}).get("equity") or 0)
-    utc_day=datetime.now(timezone.utc).date().isoformat()
-    if AUTO_STATE.get("utc_day")!=utc_day:
-        AUTO_STATE["utc_day"]=utc_day
-        AUTO_STATE["trades_today"]=0
-        AUTO_STATE["daily_start_equity"]=equity_now if equity_now>0 else None
-    if AUTO_STATE.get("initial_equity") is None and equity_now>0:
-        AUTO_STATE["initial_equity"]=equity_now
+    if detail.get("isDemo") is not True: raise HTTPException(403,"DEMO verification failed")
+    equity=float((detail.get("account") or {}).get("equity") or 0)
+    if not await _check_daily_limits(equity): return
     symbols=(await ta("GET",f"/v1/accounts/{row['id']}/symbols")).get("symbols",[])
     symbol=choose_symbol(symbols)
-    # Sniper uses only completed M5 and M1 broker candles for fast entries.
-    m5,m1=await asyncio.gather(
-      strategy_frame(row["id"],symbol,"M5",48),
-      strategy_frame(row["id"],symbol,"M1",48))
-    if len(m5)<30 or len(m1)<25:
-        raise RuntimeError(f"Insufficient completed broker candles for Sniper: M5={len(m5)}/30 M1={len(m1)}/25")
-    now_ts=time.time()
-    candle_frames={"M5":(m5,300,720),"M1":(m1,60,180)}
-    candle_freshness={}
-    stale_frames=[]
-    for tf,(frame,period_seconds,max_age_seconds) in candle_frames.items():
-        last_open=float(frame["timestamp"].iloc[-1]) if not frame.empty else 0.0
-        age_seconds=max(0.0,now_ts-(last_open+period_seconds)) if last_open>0 else float("inf")
-        candle_freshness[tf]={"last_candle_at":datetime.fromtimestamp(last_open,timezone.utc).isoformat() if last_open>0 else None,
-                              "age_seconds":round(age_seconds,1) if age_seconds!=float("inf") else None,
-                              "max_age_seconds":max_age_seconds,"fresh":age_seconds<=max_age_seconds}
-        if age_seconds>max_age_seconds:
-            stale_frames.append(tf)
-    AUTO_STATE["candle_freshness"]=candle_freshness
-    if stale_frames:
-        cached_management=AUTO_STATE.get("management_indicators") or {}
-        cached_management["source_candles_fresh"]=False
-        cached_management["updated_at"]=now_ts
-        AUTO_STATE["management_indicators"]=cached_management
-        AUTO_STATE["last_action"]="BLOCKED_STALE_CANDLES"
-        AUTO_STATE["last_error"]=None
-        if now_ts-float(AUTO_STATE.get("candle_freshness_log_at",0))>=30:
-            logger.warning("AUTO_ENTRY_BLOCKED_STALE_CANDLES symbol=%s stale=%s freshness=%s",
-                           symbol,stale_frames,candle_freshness)
-            AUTO_STATE["candle_freshness_log_at"]=now_ts
-        return
-    # Exit manager gets a fresh M1 reversal read; no EMA or RSI rules.
-    m1_recent=m1.iloc[-2:]
-    m1_bearish=int((m1_recent["close"].astype(float)<m1_recent["open"].astype(float)).sum())
-    m1_bullish=int((m1_recent["close"].astype(float)>m1_recent["open"].astype(float)).sum())
-    AUTO_STATE["management_indicators"]={"m1_bearish_candles":m1_bearish,
-      "m1_bullish_candles":m1_bullish,"source_candles_fresh":True,"updated_at":time.time()}
-    signal=await asyncio.to_thread(get_adaptive_signal,None,None,m5,m1)
-    stamp=float(m5["timestamp"].iloc[-1])
-    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
-      "last_signal":{"direction":signal.direction,"score":signal.total_score,
-       "setup":signal.setup,"details":signal.details},"last_error":None})
-    logger.info("AUTO_SNIPER_DIAGNOSTIC symbol=%s M5=%s M1=%s signal=%s score=%s setup=%s details=%s",
-      symbol,len(m5),len(m1),signal.direction,signal.total_score,signal.setup,signal.details)
-    positions_data=await ta("GET",f"/v1/accounts/{row['id']}/positions")
-    all_positions=positions_data.get("positions",[])
-    bot=[p for p in all_positions if str(p.get("comment","")).startswith("DioMasteR AUTO")]
-    if signal.direction not in ("BUY","SELL") or signal.total_score<MIN_SNIPER_SCORE:
-        if not bot: AUTO_STATE["last_action"]="HOLD"
-        logger.info("AUTO_DECISION action=HOLD reason=%s direction=%s score=%s threshold=%s",
-          "NO_CONFIRMED_SIGNAL" if signal.direction=="HOLD" else "SNIPER_SIGNAL_NOT_CONFIRMED",
-          signal.direction,signal.total_score,MIN_SNIPER_SCORE)
-        return
-    if bot:
-        AUTO_STATE["last_action"]="FAST_BASKET_ALREADY_OPEN"; return
-    if AUTO_STATE.get("last_entry_bar_time")==stamp:
-        AUTO_STATE["last_action"]="ENTRY_ALREADY_ATTEMPTED_THIS_M5_BAR"; return
-    if not EXECUTION_ENABLED:
-        AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
-    if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
-        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
-    equity=float((detail.get("account") or {}).get("equity") or 0)
-    if equity<=0: raise RuntimeError("DEMO equity unavailable; entry blocked")
-    daily_start=AUTO_STATE.get("daily_start_equity") or equity
-    initial=AUTO_STATE.get("initial_equity") or equity
-    if equity<=daily_start*(1-AUTO_DAILY_LOSS_LIMIT):
-        AUTO_STATE["last_action"]="DAILY_LOSS_LIMIT"; return
-    if equity<=initial*(1-AUTO_MAX_DRAWDOWN):
-        AUTO_STATE["last_action"]="MAX_DRAWDOWN_LIMIT"; return
+    if symbol not in SYMBOLS and symbol not in symbols: raise HTTPException(403,"Symbol is not allow-listed")
+    tf=StrategyConfig().timeframe
+    if tf not in AUTO_CANDLE_SECONDS: raise RuntimeError("Unsupported EMA timeframe")
+    frame=await strategy_frame(row["id"],symbol,tf,int(os.getenv("DIO_EMA_HISTORY_HOURS","2400")))
     q=LIVE_TICKS.get(symbol)
     if not q or q.get("stale") or time.time()-float(q.get("received_at",0))>15:
-        AUTO_STATE["last_action"]="NO_FRESH_LIVE_QUOTE"; return
-    price=float(q["ask"] if signal.direction=="BUY" else q["bid"])
-    risk_distance=abs(float(signal.entry)-float(signal.stop_loss))
-    if risk_distance<=0:
-        AUTO_STATE["last_action"]="INVALID_STRATEGY_STOP"; return
-    spec_payload=await ta("GET",f"/v1/accounts/{row['id']}/symbols/{symbol}/spec")
-    spec=spec_payload.get("spec",{}) if isinstance(spec_payload,dict) else {}
-    volume=min(0.01,MAX_VOLUME)
-    volume_min=float(spec.get("volumeMin") or 0)
-    volume_step=float(spec.get("volumeStep") or 0)
-    volume_max=float(spec.get("volumeMax") or 0)
-    tick_size=float(spec.get("tickSize") or 0)
-    tick_value_account=float(spec.get("tickValueAccount") or 0)
-    if volume_min<=0 or volume_step<=0 or volume_max<=0 or tick_size<=0 or tick_value_account<=0:
-        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_BROKER_RISK_SPEC"; return
-    step_units=volume/volume_step
-    if volume<volume_min-1e-9 or volume>volume_max+1e-9 or abs(step_units-round(step_units))>1e-7:
-        AUTO_STATE["last_action"]="BLOCKED_VOLUME_NOT_BROKER_VALID"; return
-    risk_distance=(price-float(signal.stop_loss)) if signal.direction=="BUY" else (float(signal.stop_loss)-price)
-    if risk_distance<=0 or risk_distance>3.5*float(signal.atr):
-        AUTO_STATE["last_action"]="BLOCKED_STALE_OR_INVALID_STOP"; return
+        AUTO_STATE["last_action"]="BLOCKED_NO_FRESH_TICK"; return
     spread=float(q["ask"])-float(q["bid"])
-    # Compute M5 ATR locally from the completed M5 strategy frame.
-    if len(m5)>=25:
-        prev_close=m5["close"].astype(float).shift(1)
-        tr=pd.concat([
-            m5["high"].astype(float)-m5["low"].astype(float),
-            (m5["high"].astype(float)-prev_close).abs(),
-            (m5["low"].astype(float)-prev_close).abs()
-        ],axis=1).max(axis=1)
-        m5_atr=float(tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean().iloc[-1])
-    else:
-        m5_atr=0.0
-    if m5_atr<=0 or spread>0.20*m5_atr:
-        AUTO_STATE["last_action"]="BLOCKED_WIDE_SPREAD"; return
-    sl=float(signal.stop_loss)
-    fast_tp=price+3.0*risk_distance if signal.direction=="BUY" else price-3.0*risk_distance
-    per_leg_risk=(risk_distance/tick_size)*tick_value_account*volume
-    if per_leg_risk*3>equity*MAX_RISK_FRACTION:
-        AUTO_STATE["last_action"]="BLOCKED_THREE_LEG_AGGREGATE_RISK_CAP"; return
-    if AUTO_STATE["trades_today"]+3>AUTO_MAX_TRADES_PER_DAY:
-        AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return
-    opened=[]
-    try:
-        for leg in range(3):
-            req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=fast_tp,
-              client_order_id="AUTOFAST"+uuid.uuid4().hex[:12],order_origin="AUTO")
-            opened.append(await order(req,authorization="Bearer "+BRIDGE_TOKEN))
-    except Exception as exc:
-        rollback_errors=[]
-        for result in reversed(opened):
-            ticket=int(result.get("order") or 0)
-            if ticket:
-                try: await ta("DELETE","/v1/accounts/"+str(row["id"])+"/positions/"+str(ticket),{},idem=True)
-                except Exception as rollback_exc: rollback_errors.append(str(rollback_exc)[:120])
-            else: rollback_errors.append("opened leg ticket missing")
-        AUTO_STATE["last_action"]="FAST_BASKET_ENTRY_ROLLED_BACK" if not rollback_errors else "FAST_BASKET_PARTIAL_ROLLBACK_UNCONFIRMED"
-        AUTO_STATE["last_error"]=str(exc)[:180]+((" | rollback: "+"; ".join(rollback_errors)) if rollback_errors else "")
-        AUTO_STATE["last_order"]={"opened_legs":opened,"rollback_errors":rollback_errors}
-        AUTO_STATE["trades_today"]+=len(opened); AUTO_STATE["last_entry_bar_time"]=stamp
-        return
-    AUTO_STATE["trades_today"]+=3; AUTO_STATE["last_entry_bar_time"]=stamp
-    AUTO_STATE["last_action"]="OPENED_FAST_BASKET_"+signal.direction
-    AUTO_STATE["last_order"]={"fast_legs":opened,"legs":3,"volume_each":volume,
-      "aggregate_volume":round(volume*3,4),"target_R":1.25,"broker_emergency_tp_R":3.0,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
-      "profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,
-      "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO,"max_auto_positions":3}
+    signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked())
+    stamp=float(signal.candle_time or 0)
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr},"last_error":None})
+    if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
+        AUTO_STATE["last_action"]="WAITING_FOR_NEW_CLOSED_CANDLE"; return
+    AUTO_STATE["last_processed_candle"]=stamp
+    rows=await reconcile_orders(row["id"])
+    symbol_positions=[p for p in rows if str(p.get("symbol",""))==symbol]
+    bot=_bot_positions(rows)
+    if symbol_positions:
+        if bot and signal.direction in ("BUY","SELL") and signal.direction!=str(bot[0].get("side","")).upper():
+            ticket=int(bot[0].get("ticket") or 0)
+            if not ticket: raise RuntimeError("Opposite signal: missing broker ticket")
+            await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True,idempotency_key=f"ema-exit-{symbol}-{stamp:.0f}-{ticket}")
+            AUTO_STATE.update({"known_ticket":None,"last_action":"CLOSED_ON_OPPOSITE_SIGNAL"}); return
+        AUTO_STATE["last_action"]="ONE_POSITION_RULE_BLOCKED_ENTRY"; return
+    if signal.direction not in ("BUY","SELL"):
+        AUTO_STATE["last_action"]="HOLD_"+signal.reason; return
+    if not EXECUTION_ENABLED:
+        AUTO_STATE["last_action"]="SIGNAL_ONLY_EXECUTION_DISABLED"; return
+    if AUTO_STATE.get("kill_switch"): return
+    candle_key=f"{symbol}:{tf}:{stamp:.0f}"
+    if AUTO_STATE.get("last_order_key")==candle_key:
+        AUTO_STATE["last_action"]="DUPLICATE_CANDLE_BLOCKED"; return
+    price=float(q["ask"] if signal.direction=="BUY" else q["bid"])
+    sl=signal.stop_loss; tp=signal.take_profit
+    if (signal.direction=="BUY" and not sl<price<tp) or (signal.direction=="SELL" and not tp<price<sl):
+        AUTO_STATE["last_action"]="BLOCKED_INVALID_SERVER_SL_TP"; return
+    spec_data=await ta("GET",f"/v1/accounts/{row['id']}/symbols/{symbol}/spec")
+    spec=spec_data.get("spec",{}) if isinstance(spec_data,dict) else {}
+    tick_size=float(spec.get("tickSize") or 0); tick_value=float(spec.get("tickValueAccount") or 0)
+    vol_min=float(spec.get("volumeMin") or 0); vol_step=float(spec.get("volumeStep") or 0); vol_max=float(spec.get("volumeMax") or 0)
+    if min(tick_size,tick_value,vol_min,vol_step,vol_max)<=0:
+        AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_CONTRACT_SPEC"; return
+    budget=equity*MAX_RISK_FRACTION; risk_per_lot=(abs(price-sl)/tick_size)*tick_value
+    volume=min(MAX_VOLUME,vol_max,budget/risk_per_lot)
+    volume=round((volume-vol_min)//vol_step*vol_step+vol_min,8)
+    if volume<vol_min or volume>vol_max or volume<=0 or risk_per_lot*volume>budget+1e-8:
+        AUTO_STATE["last_action"]="BLOCKED_RISK_CAP_OR_MIN_VOLUME"; return
+    import hashlib
+    order_key="EMA"+hashlib.sha256(candle_key.encode()).hexdigest()[:24]
+    AUTO_STATE["last_order_key"]=candle_key
+    req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=tp,client_order_id=order_key,order_origin="AUTO")
+    result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
+    ticket=int(result.get("order") or 0)
+    if not ticket: raise RuntimeError("Broker did not confirm a position ticket")
+    AUTO_STATE.update({"known_ticket":ticket,"trades_today":AUTO_STATE["trades_today"]+1,"last_action":"OPENED_"+signal.direction,"last_order":result})
+
+async def _auto_runner():
+    while AUTO_STATE["running"]:
+        try: await auto_cycle()
+        except asyncio.CancelledError: raise
+        except Exception as exc:
+            AUTO_STATE.update({"last_error":str(exc)[:300],"last_action":"BLOCKED_ERROR"})
+            logger.exception("EMA AUTO cycle failed")
+            if "order" in str(exc).lower() or "timeout" in str(exc).lower():
+                await _kill_switch("UNCERTAIN_ORDER_OUTCOME")
+        await asyncio.sleep(5)
 
 @app.post("/v1/auto/start")
 async def auto_start(authorization:Optional[str]=Header(default=None)):
-    global AUTO_TASK, AUTO_MANAGE_TASK
-    print("AUTO_START_REQUEST received",flush=True)
-    auth(authorization)
-    row,detail=await account_detail()
-    if detail.get("isDemo") is not True:
-        print("AUTO_START_BLOCKED reason=account_not_demo",flush=True)
-        raise HTTPException(403,"AUTO is DEMO-only")
-    if not EXECUTION_ENABLED:
-        print("AUTO_START_BLOCKED reason=execution_disabled",flush=True)
-        raise HTTPException(423,"Cloud AUTO is installed but DEMO execution remains disabled pending validation")
+    global AUTO_TASK
+    auth(authorization); row,detail=await account_detail()
+    if detail.get("isDemo") is not True: raise HTTPException(403,"AUTO is DEMO-only")
+    if not EXECUTION_ENABLED: raise HTTPException(423,"DEMO execution is disabled in Render; no orders can be sent")
+    if AUTO_STATE.get("kill_switch"): raise HTTPException(423,"Kill switch active; manual review/reset required")
+    await reconcile_orders(row["id"])
     async with AUTO_LOCK:
         if AUTO_TASK and not AUTO_TASK.done():
-            ensure_position_manager()
-            print("AUTO_START_ALREADY_RUNNING",flush=True)
-            return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO",
-                    "manager_running":bool(AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done()),"state":AUTO_STATE}
+            return {"ok":True,"running":True,"account_mode":"DEMO","state":AUTO_STATE}
         AUTO_STATE.update({"running":True,"last_action":"STARTING","last_error":None})
-        print("AUTO_START_ACCEPTED account_mode=DEMO execution_enabled=true",flush=True)
-        ensure_position_manager()
-        async def runner():
-            while AUTO_STATE["running"]:
-                cycle_started=time.monotonic()
-                AUTO_STATE["last_cycle_started_at"]=datetime.now(timezone.utc).isoformat()
-                try:
-                    ensure_position_manager()
-                    print("AUTO_CYCLE_STARTED symbol=XAUUSD",flush=True)
-                    await auto_cycle()
-                    ensure_position_manager()
-                    duration=time.monotonic()-cycle_started
-                    AUTO_STATE["cycle_count"]=int(AUTO_STATE.get("cycle_count",0))+1
-                    AUTO_STATE["last_cycle_duration_seconds"]=round(duration,2)
-                    print("AUTO_CYCLE_COMPLETED duration_seconds=%.2f action=%s signal=%s" %
-                          (duration,AUTO_STATE.get("last_action"),
-                           AUTO_STATE.get("last_signal")),flush=True)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    duration=time.monotonic()-cycle_started
-                    AUTO_STATE.update({"last_error":str(exc)[:350],"last_action":"BLOCKED_ERROR",
-                                       "last_cycle_duration_seconds":round(duration,2)})
-                    import traceback
-                    print("DioMasteR AUTO cycle blocked: %s" % str(exc)[:350],flush=True)
-                    traceback.print_exc()
-                await asyncio.sleep(3)
-        AUTO_TASK=asyncio.create_task(runner())
-    return {"ok":True,"running":True,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO loop started"}
+        AUTO_TASK=asyncio.create_task(_auto_runner(),name="diomaster-ema-auto")
+    return {"ok":True,"running":True,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME}
 
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),
-      "manager_running":bool(AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done() and AUTO_STATE["running"]),
-      "manager_task_done":bool(AUTO_MANAGE_TASK.done()) if AUTO_MANAGE_TASK else None,
-      "supported":True,"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,
-      "strategy":"SNIPER: M5 breakout retest + M1 rejection; 3-leg unified basket; quick target and profit trail",
-      "sniper_threshold":MIN_SNIPER_SCORE,"max_auto_positions":3,"max_volume_each":min(0.01,MAX_VOLUME),"mode":"FAST_ONLY","target_R":1.25,"basket_target_usd":AUTO_FAST_BASKET_TARGET_USD,"profit_trail_start_usd":AUTO_FAST_PROFIT_TRAIL_START_USD,
-       "profit_trail_keep_ratio":AUTO_FAST_PROFIT_TRAIL_KEEP_RATIO}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":1,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
 
 @app.post("/v1/auto/stop")
+@app.post("/v1/auto/kill")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
-    global AUTO_TASK, AUTO_MANAGE_TASK
-    auth(authorization)
-    AUTO_STATE["running"]=False
+    global AUTO_TASK
+    auth(authorization); AUTO_STATE.update({"running":False,"last_action":"STOPPED","reconciled":False})
     if AUTO_TASK and not AUTO_TASK.done():
         AUTO_TASK.cancel()
         try: await AUTO_TASK
         except asyncio.CancelledError: pass
-    if AUTO_MANAGE_TASK and not AUTO_MANAGE_TASK.done():
-        AUTO_MANAGE_TASK.cancel()
-        try: await AUTO_MANAGE_TASK
-        except asyncio.CancelledError: pass
-    AUTO_STATE["last_action"]="STOPPED"
-    return {"running":False,"supported":True,"account_mode":"DEMO","message":"Cloud AUTO stopped"}
+    return {"running":False,"account_mode":"DEMO","message":"EMA AUTO stopped; broker SL/TP remain active"}
 
+@app.post("/v1/auto/kill/reset")
+async def reset_kill_switch(authorization:Optional[str]=Header(default=None)):
+    auth(authorization)
+    if AUTO_STATE.get("running"): raise HTTPException(423,"Stop AUTO before resetting kill switch")
+    AUTO_STATE.update({"kill_switch":False,"kill_reason":None,"consecutive_losses":0,"last_action":"KILL_SWITCH_RESET_REQUIRES_RECONCILIATION","reconciled":False})
+    return {"ok":True,"running":False,"account_mode":"DEMO","message":"Kill switch reset; reconciliation required before AUTO start"}
 
 @app.get("/assistant/snapshot")
 async def assistant_snapshot(limit:int=50,authorization:Optional[str]=Header(default=None)):

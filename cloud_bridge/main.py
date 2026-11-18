@@ -789,7 +789,7 @@ async def auto_cycle():
     spread=float(q["ask"])-float(q["bid"])
     signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked())
     stamp=float(signal.candle_time or 0)
-    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr},"last_error":None})
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None})
     if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
         AUTO_STATE["last_action"]="WAITING_FOR_NEW_CLOSED_CANDLE"; return
     AUTO_STATE["last_processed_candle"]=stamp

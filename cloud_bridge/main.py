@@ -22,7 +22,7 @@ EXECUTION_ENABLED=os.getenv("DIO_MT5_DEMO_EXECUTION_ENABLED","false").lower()=="
 SYMBOLS={x.strip() for x in os.getenv("DIO_MT5_ALLOWED_SYMBOLS","XAUUSD").split(",") if x.strip()}
 MAX_VOLUME=float(os.getenv("DIO_MT5_MAX_VOLUME","0.01"))
 MAX_RISK_FRACTION=float(os.getenv("DIO_MT5_MAX_RISK_FRACTION","0.0025"))
-MAX_BOT_POSITIONS=1  # EMA strategy: one position maximum.
+MAX_BOT_POSITIONS=2  # Two concurrent EMA legs; combined risk remains capped.
 app=FastAPI(title="DioMasteR GOLD AI TickerAll DEMO Bridge",version="2.2.0")
 from assistant_mcp import router as assistant_mcp_router
 app.include_router(assistant_mcp_router)
@@ -620,9 +620,13 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
     # Manual user orders must not consume the AI bot's own position quota.
     # Legacy DioMasteR-tagged positions remain counted conservatively.
     if origin=="AUTO":
-        if any(str(p.get("symbol",""))==req.symbol for p in open_rows):
-            raise HTTPException(423,"One-position rule: a position already exists for this symbol")
-        if not req.client_order_id.startswith("EMA"):
+        bot_symbol_positions=[p for p in open_rows if str(p.get("symbol",""))==req.symbol and str(p.get("comment","")).startswith("DioMasteR AUTO EMA")]
+        nonbot_symbol_positions=[p for p in open_rows if str(p.get("symbol",""))==req.symbol and not str(p.get("comment","")).startswith("DioMasteR AUTO EMA")]
+        if nonbot_symbol_positions:
+            raise HTTPException(423,"AUTO entry blocked: a non-bot position already exists for this symbol")
+        if len(bot_symbol_positions)>=MAX_BOT_POSITIONS:
+            raise HTTPException(423,"Two-position rule: EMA bot position limit reached")
+        if not req.client_order_id.startswith("EMA"): 
             raise HTTPException(422,"AUTO order requires EMA idempotency key")
     leg_tag=(" FAST" if "FAST" in req.client_order_id.upper() else
              " RUNNER" if "RUNNER" in req.client_order_id.upper() else "")
@@ -686,11 +690,12 @@ async def reconcile_orders(account_id):
     rows=data.get("positions",[]) if isinstance(data,dict) else []
     if not isinstance(rows,list): raise RuntimeError("Invalid broker positions payload")
     bot=_bot_positions(rows)
-    if len(bot)>1: raise HTTPException(423,"Reconciliation failed: multiple EMA bot positions exist")
+    if len(bot)>MAX_BOT_POSITIONS: raise HTTPException(423,"Reconciliation failed: EMA bot position limit exceeded")
     for p in bot:
         if float(p.get("stopLoss") or 0)<=0 or float(p.get("takeProfit") or 0)<=0:
             raise HTTPException(423,"Reconciliation failed: position missing server-side SL/TP")
     AUTO_STATE["known_ticket"]=int(bot[0].get("ticket") or 0) if bot else None
+    AUTO_STATE["known_tickets"]=[int(p.get("ticket") or 0) for p in bot]
     AUTO_STATE["reconciled"]=True
     AUTO_STATE["broker_bot_positions"]=len(bot)
     return rows
@@ -793,11 +798,12 @@ async def auto_cycle():
     bot=_bot_positions(rows)
     if symbol_positions:
         if bot and signal.direction in ("BUY","SELL") and signal.direction!=str(bot[0].get("side","")).upper():
-            ticket=int(bot[0].get("ticket") or 0)
-            if not ticket: raise RuntimeError("Opposite signal: missing broker ticket")
-            await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True,idempotency_key=f"ema-exit-{symbol}-{stamp:.0f}-{ticket}")
-            AUTO_STATE.update({"known_ticket":None,"last_action":"CLOSED_ON_OPPOSITE_SIGNAL"}); return
-        AUTO_STATE["last_action"]="ONE_POSITION_RULE_BLOCKED_ENTRY"; return
+            for existing in bot:
+                ticket=int(existing.get("ticket") or 0)
+                if not ticket: raise RuntimeError("Opposite signal: missing broker ticket")
+                await ta("DELETE",f"/v1/accounts/{row['id']}/positions/{ticket}",{},idem=True,idempotency_key=f"ema-exit-{symbol}-{stamp:.0f}-{ticket}")
+            AUTO_STATE.update({"known_ticket":None,"known_tickets":[],"last_action":"CLOSED_ON_OPPOSITE_SIGNAL"}); return
+        AUTO_STATE["last_action"]="TWO_POSITION_RULE_BLOCKED_ENTRY"; return
     if signal.direction not in ("BUY","SELL"):
         AUTO_STATE["last_action"]="HOLD_"+signal.reason; return
     if datetime.now(timezone.utc).weekday()>=5:
@@ -818,19 +824,26 @@ async def auto_cycle():
     vol_min=float(spec.get("volumeMin") or 0); vol_step=float(spec.get("volumeStep") or 0); vol_max=float(spec.get("volumeMax") or 0)
     if min(tick_size,tick_value,vol_min,vol_step,vol_max)<=0:
         AUTO_STATE["last_action"]="BLOCKED_UNKNOWN_CONTRACT_SPEC"; return
-    budget=equity*MAX_RISK_FRACTION; risk_per_lot=(abs(price-sl)/tick_size)*tick_value
-    volume=min(MAX_VOLUME,vol_max,budget/risk_per_lot)
+    combined_budget=equity*MAX_RISK_FRACTION
+    leg_budget=combined_budget/2.0
+    risk_per_lot=(abs(price-sl)/tick_size)*tick_value
+    volume=min(MAX_VOLUME,vol_max,leg_budget/risk_per_lot)
     volume=round((volume-vol_min)//vol_step*vol_step+vol_min,8)
-    if volume<vol_min or volume>vol_max or volume<=0 or risk_per_lot*volume>budget+1e-8:
-        AUTO_STATE["last_action"]="BLOCKED_RISK_CAP_OR_MIN_VOLUME"; return
+    if volume<vol_min or volume>vol_max or volume<=0 or risk_per_lot*volume>leg_budget+1e-8:
+        AUTO_STATE["last_action"]="BLOCKED_RISK_CAP_OR_MIN_VOLUME_FOR_TWO_LEGS"; return
     import hashlib
-    order_key="EMA"+hashlib.sha256(candle_key.encode()).hexdigest()[:24]
+    base_key="EMA"+hashlib.sha256(candle_key.encode()).hexdigest()[:24]
     AUTO_STATE["last_order_key"]=candle_key
-    req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=tp,client_order_id=order_key,order_origin="AUTO")
-    result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
-    ticket=int(result.get("order") or 0)
-    if not ticket: raise RuntimeError("Broker did not confirm a position ticket")
-    AUTO_STATE.update({"known_ticket":ticket,"trades_today":AUTO_STATE["trades_today"]+1,"last_action":"OPENED_"+signal.direction,"last_order":result})
+    opened=[]
+    for leg in ("FAST","RUNNER"):
+        order_key=base_key+leg
+        req=Order(symbol=symbol,side=signal.direction,volume=volume,stop_loss=sl,take_profit=tp,client_order_id=order_key,order_origin="AUTO")
+        result=await order(req,authorization="Bearer "+BRIDGE_TOKEN)
+        ticket=int(result.get("order") or 0)
+        if not ticket: raise RuntimeError("Broker did not confirm the "+leg+" position ticket")
+        opened.append({"leg":leg,"ticket":ticket,"result":result})
+        AUTO_STATE.update({"known_ticket":ticket,"known_tickets":[x["ticket"] for x in opened],"broker_bot_positions":len(opened),"last_action":"OPENED_"+signal.direction+"_"+leg})
+    AUTO_STATE.update({"trades_today":AUTO_STATE["trades_today"]+2,"last_action":"OPENED_TWO_"+signal.direction,"last_orders":opened})
 
 async def _auto_runner():
     while AUTO_STATE["running"]:
@@ -861,7 +874,7 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()
-    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":1,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
+    return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":MAX_BOT_POSITIONS,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
 
 @app.post("/v1/auto/stop")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):

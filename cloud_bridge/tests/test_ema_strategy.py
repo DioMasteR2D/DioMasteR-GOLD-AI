@@ -12,7 +12,7 @@ def candles(n=520):
 
 def test_strategy_defaults_match_requested_spec():
     c=StrategyConfig()
-    assert (c.timeframe,c.fast_ema,c.slow_ema,c.trend_ema)==("M15",20,50,200)
+    assert (c.timeframe,c.fast_ema,c.slow_ema,c.trend_ema)==("M5",20,50,200)
     assert (c.adx_period,c.adx_min,c.atr_period)==(14,20,14)
     assert (c.sl_atr,c.tp_atr)==(1.5,3.0)
 

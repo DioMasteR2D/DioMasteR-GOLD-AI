@@ -842,7 +842,6 @@ async def auto_status(authorization:Optional[str]=Header(default=None)):
     return {**AUTO_STATE,"running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE["running"]),"account_mode":"DEMO","supported":True,"execution_enabled":EXECUTION_ENABLED,"strategy":"EMA_CROSSOVER","mode":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME,"max_auto_positions":1,"risk_cap_fraction":MAX_RISK_FRACTION,"fast_ema":StrategyConfig().fast_ema,"slow_ema":StrategyConfig().slow_ema,"trend_ema":StrategyConfig().trend_ema,"adx_min":StrategyConfig().adx_min,"sl_atr":StrategyConfig().sl_atr,"tp_atr":StrategyConfig().tp_atr}
 
 @app.post("/v1/auto/stop")
-@app.post("/v1/auto/kill")
 async def auto_stop(authorization:Optional[str]=Header(default=None)):
     global AUTO_TASK
     auth(authorization); AUTO_STATE.update({"running":False,"last_action":"STOPPED","reconciled":False})
@@ -851,6 +850,17 @@ async def auto_stop(authorization:Optional[str]=Header(default=None)):
         try: await AUTO_TASK
         except asyncio.CancelledError: pass
     return {"running":False,"account_mode":"DEMO","message":"EMA AUTO stopped; broker SL/TP remain active"}
+
+@app.post("/v1/auto/kill")
+async def auto_kill(authorization:Optional[str]=Header(default=None)):
+    global AUTO_TASK
+    auth(authorization)
+    await _kill_switch("MANUAL_KILL_SWITCH")
+    if AUTO_TASK and not AUTO_TASK.done():
+        AUTO_TASK.cancel()
+        try: await AUTO_TASK
+        except asyncio.CancelledError: pass
+    return {"running":False,"kill_switch":True,"account_mode":"DEMO","message":"Kill switch latched; manual reset and reconciliation required"}
 
 @app.post("/v1/auto/kill/reset")
 async def reset_kill_switch(authorization:Optional[str]=Header(default=None)):

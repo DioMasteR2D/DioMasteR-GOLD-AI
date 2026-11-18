@@ -219,6 +219,11 @@ class EmaStrategyTests(unittest.TestCase):
         entry["atr"]=1.0
         entry["open"]=10.0
         entry["close"]=9.5
+        # Keep the mocked M5 OHLC prices aligned with its EMA scale. Otherwise
+        # the original ~2000-price highs falsely trigger the separate EMA50
+        # rejection path before the intended M5 continuation case is reached.
+        entry["high"]=9.9
+        entry["low"]=9.1
         higher=frame.copy()
         higher["ema_fast"]=10.0
         higher["ema_slow"]=11.0

@@ -85,7 +85,7 @@ class EmaStrategyTests(unittest.TestCase):
         with patch("ema_strategy.indicators", return_value=fake):
             signal=get_signal(frame,cfg,spread=0.1)
         self.assertEqual(signal.direction,"HOLD")
-        self.assertEqual(signal.reason,"no_qualified_crossover_within_3_closed_bars")
+        self.assertEqual(signal.reason,"no_crossover_or_trend_pullback_within_3_closed_bars")
 
     def test_wide_spread_blocks_signal(self):
         signal=get_signal(self.candles(),self.config(),spread=9)

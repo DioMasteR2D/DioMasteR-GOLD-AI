@@ -57,7 +57,6 @@ public class MainActivity extends Activity {
     private long quoteAt = 0L;
     private boolean fetching = false;
     private boolean pendingRefresh = false;
-    private long lastMtfDiagnosticsAt = 0L;
     private volatile long lastAccountRefreshAt = 0L;
     private volatile boolean accountRefreshInFlight = false;
     private boolean activityResumed = false;
@@ -78,7 +77,7 @@ public class MainActivity extends Activity {
     private long lastAutoSignalBar = 0L;
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
-    private String multiTimeframeStatus = "ΠΟΛΥΧΡΟΝΙΚΗ ΠΑΡΑΚΟΛΟΥΘΗΣΗ · ΑΝΑΜΟΝΗ";
+    private String multiTimeframeStatus = "EMA CROSSOVER 20/50/200 · M15 · ADX14 · ATR14 · DEMO";
     private final JSONArray agentActivityLog = new JSONArray();
     private static final String AUDIT_PREFS = "diomaster_ai_audit";
     private static final String AUDIT_EVENTS_KEY = "events";
@@ -349,18 +348,10 @@ public class MainActivity extends Activity {
 
                     // Chart and strategy history are loaded AFTER the live quote is already visible.
                     JSONObject candleData = client.candles(mt5Symbol, requestTimeframe, 48);
-                    JSONObject strategyH1Data = client.candles(mt5Symbol, "H1", 400);
-                    JSONObject strategyH4Data = client.candles(mt5Symbol, "H4", 1200);
-                    JSONArray strategyH1 = strategyH1Data.optJSONArray("candles");
-                    JSONArray strategyH4 = strategyH4Data.optJSONArray("candles");
-                    if (strategyH1 == null || strategyH4 == null)
-                        throw new IllegalStateException("Λείπουν τα H1/H4 candles της στρατηγικής.");
                     JSONArray rows = candleData.optJSONArray("candles");
                     if (rows == null || rows.length() < 2)
                         throw new IllegalStateException("Δεν υπάρχουν αρκετά broker OHLC candles.");
                     final JSONArray bars = rows;
-                    final JSONArray h1Bars = strategyH1;
-                    final JSONArray h4Bars = strategyH4;
                     final String effectiveTimeframe = candleData.optString("effective_timeframe",
                             candleData.optString("timeframe", requestTimeframe));
                     final long receivedAt = stamp;
@@ -391,16 +382,11 @@ public class MainActivity extends Activity {
                         feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + effectiveTimeframe +
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
-                        aiSignal = GoldAiAgent.analyze(h1Bars, h4Bars, latest);
+                        aiSignal = GoldAiAgent.Signal.waiting("CLOUD EMA 20/50/200 · M15 · ADX14 · ATR14 · DEMO");
                         engine.onQuote(latest);
-                        // AUTO strategy always uses the original H1 setup; selected chart timeframe is display-only.
-                        if (aiEngineStarted) evaluateAutoSignal(h1Bars, h4Bars, receivedAt);
+                        if (aiEngineStarted) evaluateAutoSignal(receivedAt);
                         render();
                     });
-                    // Diagnostic-only MTF scan runs after the selected chart/signal is delivered.
-                    // It cannot delay the selected-timeframe analysis or feed the order engine.
-                    if (requestTimeframe.equals(selectedTimeframe))
-                        runMultiTimeframeDiagnostics(requestId, requestTimeframe, candleData);
                 } catch (Exception e) {
                     runOnUiThread(() -> {
                         if (requestId != fetchSequence) return;
@@ -455,51 +441,6 @@ public class MainActivity extends Activity {
                 });
             }
         })).start();
-    }
-
-    private void runMultiTimeframeDiagnostics(int requestId, String requestTimeframe, JSONObject selectedData) {
-        // MTF is diagnostic-only, so avoid repeating its six broker requests on every 30s refresh.
-        long now = System.currentTimeMillis();
-        if (now - lastMtfDiagnosticsAt < 120000L) return;
-        lastMtfDiagnosticsAt = now;
-        new Thread(() -> {
-            try {
-                final String[] scanFrames = {"M1","M5","M15","M30","H1","H4"};
-                StringBuilder scan = new StringBuilder("MTF DEMO · ");
-                for (String frame : scanFrames) {
-                    int lookbackHours = "H4".equals(frame) ? 240 : 48;
-                    JSONObject frameData = frame.equalsIgnoreCase(requestTimeframe)
-                            ? selectedData : new Mt5DemoClient(mt5BaseUrl, mt5Token)
-                                    .candles(mt5Symbol, frame, lookbackHours);
-                    JSONArray frameRows = frameData.optJSONArray("candles");
-                    ArrayList<Double> framePrices = new ArrayList<>();
-                    if (frameRows != null) {
-                        for (int k = 0; k < frameRows.length(); k++) {
-                            JSONObject bar = frameRows.optJSONObject(k);
-                            if (bar != null && bar.optDouble("close", 0) > 0)
-                                framePrices.add(bar.optDouble("close"));
-                        }
-                    }
-                    GoldAiAgent.Signal frameSignal = GoldAiAgent.analyze(framePrices,
-                            framePrices.isEmpty() ? 0 : framePrices.get(framePrices.size()-1));
-                    if (scan.length() > 10) scan.append(" | ");
-                    scan.append(frame).append(": ").append(frameSignal.side)
-                            .append(" ").append(frameSignal.confidence).append("%")
-                            .append(" (").append(framePrices.size()).append(" candles)");
-                }
-                final String result = scan.toString();
-                runOnUiThread(() -> {
-                    if (requestId != fetchSequence || !activityResumed
-                            || !requestTimeframe.equals(selectedTimeframe)) return;
-                    multiTimeframeStatus = result;
-                    logAgentActivity("MULTI-TIMEFRAME", "SCAN", result);
-                    render();
-                });
-            } catch (Exception e) {
-                logAgentActivity("MULTI-TIMEFRAME", "DIAGNOSTIC_DELAYED",
-                        e.getMessage() == null ? "MTF diagnostic unavailable" : e.getMessage());
-            }
-        }).start();
     }
 
     private boolean quoteFresh() {
@@ -945,9 +886,9 @@ public class MainActivity extends Activity {
         market.addView(periods);
         LinearLayout chartLegend=new LinearLayout(this);
         chartLegend.setOrientation(LinearLayout.HORIZONTAL);
-        chartLegend.addView(text("● EMA 9",10,0xFF28B8FF,true));
-        TextView ema21Legend=text("● EMA 21",10,GOLD,true);
-        ema21Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema21Legend);
+        chartLegend.addView(text("● EMA 20",10,0xFF28B8FF,true));
+        TextView ema50Legend=text("● EMA 50",10,GOLD,true);
+        ema50Legend.setPadding(dp(16),0,0,0); chartLegend.addView(ema50Legend);
         market.addView(chartLegend);
         addSpace(5);
         GoldChartView chart = new GoldChartView(this);
@@ -960,13 +901,13 @@ public class MainActivity extends Activity {
         indicators.setOrientation(LinearLayout.HORIZONTAL);
         boolean haveOhlc=brokerChartActive && brokerCandles.length()>=26;
         double rsiValue=calcRsi14(), macdValue=calcMacd(), atrValue=calcAtr14();
-        double emaFast=calcEma(9), emaSlow=calcEma(21);
+        double emaFast=calcEma(20), emaSlow=calcEma(50);
         indicators.addView(metric("RSI (14)",haveOhlc?String.format(Locale.US,"%.1f · %s",rsiValue,rsiValue>=70?"Overbought":rsiValue<=30?"Oversold":"Neutral"):"—",GREEN),weight());
         indicators.addView(metric("MACD",haveOhlc?String.format(Locale.US,"%+.2f",macdValue):"—",macdValue>=0?GREEN:RED),weight());
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
-        indicators.addView(metric("Τάση EMA 9/21",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
+        indicators.addView(metric("Τάση EMA 20/50",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        TextView chartNote = text(brokerChartActive ? "Στρατηγική AUTO: H1 EMA 9 / 21 · H4 EMA 50." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
+        TextView chartNote = text(brokerChartActive ? "AUTO: EMA 20/50 crossover · EMA 200 trend · ADX 14 · SL 1.5×ATR · TP 3×ATR · M15 DEMO." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
         root.addView(market);
@@ -1286,9 +1227,9 @@ public class MainActivity extends Activity {
         addSpace(10);
 
         LinearLayout mtfCard = card();
-        addLabel(mtfCard, "MULTI-TIMEFRAME MONITOR · ΔΙΑΓΝΩΣΤΙΚΟ");
+        addLabel(mtfCard, "EMA CROSSOVER · CLOUD AUTO STATUS");
         mtfCard.addView(text(multiTimeframeStatus, 11, GOLD, true));
-        mtfCard.addView(text("M1/M5/M15/M30/H1/H4 · Ανεξάρτητη ανάλυση · Δεν επηρεάζει BUY/SELL ή εντολές.", 10, MUTED, false));
+        mtfCard.addView(text("XAUUSD · M15 · EMA 20/50/200 · ADX 14 · ATR 14 · DEMO only · χωρίς παλιά MTF στρατηγική.", 10, MUTED, false));
         root.addView(mtfCard);
         addSpace(10);
 
@@ -1453,7 +1394,7 @@ public class MainActivity extends Activity {
                 } else {
                     aiEngineStarted = true;
                     logAgentActivity("CLOUD AUTO", "START_CONFIRMED", "Ο server επιβεβαίωσε running=true · DEMO");
-                    autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · Unified 8/10 · DEMO";
+                    autoExecutionMessage = "CLOUD AUTO ΕΝΕΡΓΟ · EMA 20/50/200 · M15 · DEMO";
                     Toast.makeText(this, "Cloud AUTO ξεκίνησε στον server DEMO.", Toast.LENGTH_LONG).show();
                 }
                 render();
@@ -1489,11 +1430,29 @@ public class MainActivity extends Activity {
         render();
     }
 
-    // Diagnostics explain every local gate; Original EMA 9/21 H1 strategy diagnostics.
-    private void evaluateAutoSignal(JSONArray bars, JSONArray h4Bars, long quoteTimestamp) {
+    // The cloud is the single source of truth for EMA AUTO status and decisions.
+    private void evaluateAutoSignal(long quoteTimestamp) {
         if (!aiEngineStarted) return;
-        // AUTO decisions and orders are exclusively handled by the cloud Unified 8/10 engine.
-        setAutoDiagnostic("CLOUD AUTO · Adaptive Liquidity Hunter · H4/H1 + M15 + M5 · DEMO.");
+        new Thread(() -> {
+            try {
+                JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
+                JSONObject signal = status.optJSONObject("last_signal");
+                String detail = "CLOUD EMA AUTO · " + status.optString("strategy", "EMA_CROSSOVER")
+                        + " · " + status.optString("timeframe", "M15")
+                        + " · EMA " + status.optInt("fast_ema", 20) + "/" + status.optInt("slow_ema", 50)
+                        + "/" + status.optInt("trend_ema", 200)
+                        + " · ADX>" + status.optDouble("adx_min", 20)
+                        + " · SL " + status.optDouble("sl_atr", 1.5) + " ATR"
+                        + " · TP " + status.optDouble("tp_atr", 3.0) + " ATR"
+                        + " · " + (status.optBoolean("running") ? "RUNNING" : "STOPPED")
+                        + (signal == null ? "" : " · " + signal.optString("direction", "HOLD")
+                        + " · " + signal.optString("reason", ""))
+                        + (status.optString("last_action").isEmpty() ? "" : " · " + status.optString("last_action"));
+                runOnUiThread(() -> { if (aiEngineStarted) setAutoDiagnostic(detail); });
+            } catch (Exception e) {
+                runOnUiThread(() -> { if (aiEngineStarted) setAutoDiagnostic("EMA CLOUD STATUS ERROR · " + e.getMessage()); });
+            }
+        }).start();
     }
 
     private String cleanBridgeToken(String value) {

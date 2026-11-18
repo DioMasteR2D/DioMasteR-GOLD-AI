@@ -871,6 +871,26 @@ async def auto_start(authorization:Optional[str]=Header(default=None)):
         AUTO_TASK=asyncio.create_task(_auto_runner(),name="diomaster-ema-auto")
     return {"ok":True,"running":True,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","timeframe":AUTO_TIMEFRAME}
 
+@app.get("/public/auto/health")
+async def public_auto_health():
+    """Read-only, credential-free AUTO diagnostics; never exposes account IDs or secrets."""
+    signal=AUTO_STATE.get("last_signal") or {}
+    return {
+        "ok":True,
+        "running":bool(AUTO_TASK and not AUTO_TASK.done() and AUTO_STATE.get("running")),
+        "account_mode":"DEMO",
+        "strategy":"EMA_CROSSOVER",
+        "execution_enabled":EXECUTION_ENABLED,
+        "last_action":str(AUTO_STATE.get("last_action") or "UNKNOWN")[:80],
+        "last_cycle_at":AUTO_STATE.get("last_cycle_at"),
+        "last_signal_direction":str(signal.get("direction") or "WAIT")[:12],
+        "last_signal_reason":str(signal.get("reason") or "")[:160],
+        "last_error_present":bool(AUTO_STATE.get("last_error")),
+        "kill_switch":bool(AUTO_STATE.get("kill_switch")),
+        "reconciled":bool(AUTO_STATE.get("reconciled")),
+        "max_auto_positions":MAX_BOT_POSITIONS,
+    }
+
 @app.get("/v1/auto/status")
 async def auto_status(authorization:Optional[str]=Header(default=None)):
     auth(authorization); await account_detail()

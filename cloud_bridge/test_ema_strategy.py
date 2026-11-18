@@ -181,6 +181,46 @@ class EmaStrategyTests(unittest.TestCase):
         self.assertEqual(signal.direction,"HOLD")
         self.assertEqual(signal.reason,"m5_signal_conflicts_with_m15_trend")
 
+    def test_m5_continuation_entry_does_not_wait_for_new_crossover(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        entry=frame.copy()
+        entry["ema_fast"]=11.0
+        entry["ema_slow"]=10.0
+        entry["ema_trend"]=9.0
+        entry["adx"]=30.0
+        entry["atr"]=1.0
+        entry["open"]=11.0
+        entry["close"]=11.5
+        higher=frame.copy()
+        higher["ema_fast"]=11.0
+        higher["ema_slow"]=10.0
+        higher["ema_trend"]=9.0
+        with patch("ema_strategy.indicators", side_effect=[entry,higher]):
+            signal=get_signal(frame,cfg,spread=0.1,trend_frame=frame)
+        self.assertEqual(signal.direction,"BUY")
+        self.assertEqual(signal.reason,"m5_trend_continuation_confirmed_on_close")
+
+    def test_m5_continuation_entry_requires_m15_direction(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        entry=frame.copy()
+        entry["ema_fast"]=10.0
+        entry["ema_slow"]=11.0
+        entry["ema_trend"]=12.0
+        entry["adx"]=30.0
+        entry["atr"]=1.0
+        entry["open"]=10.0
+        entry["close"]=9.5
+        higher=frame.copy()
+        higher["ema_fast"]=10.0
+        higher["ema_slow"]=11.0
+        higher["ema_trend"]=12.0
+        with patch("ema_strategy.indicators", side_effect=[entry,higher]):
+            signal=get_signal(frame,cfg,spread=0.1,trend_frame=frame)
+        self.assertEqual(signal.direction,"SELL")
+        self.assertEqual(signal.reason,"m5_trend_continuation_confirmed_on_close")
+
     def test_old_crossover_is_not_reused(self):
         cfg=self.config()
         frame=self.candles(30)

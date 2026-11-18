@@ -51,6 +51,12 @@ class EmaStrategyTests(unittest.TestCase):
         fake["close"]=np.array([9.0]*28+[10.5,9.0])
         fake.loc[28,"close"]=10.5
         fake.loc[29,"close"]=9.0
+        # Keep the synthetic OHLC candles on the same price scale as the
+        # mocked EMA values, so this case tests an EMA20 reclaim rather than
+        # accidentally satisfying the separate EMA50 wick-rejection rule.
+        fake["open"]=fake["close"]+0.1
+        fake["high"]=fake["close"]+0.4
+        fake["low"]=fake["close"]-0.4
         with patch("ema_strategy.indicators", return_value=fake):
             signal=get_signal(frame,cfg,spread=0.1)
         self.assertEqual(signal.direction,"SELL")
@@ -176,6 +182,7 @@ class EmaStrategyTests(unittest.TestCase):
         higher["ema_fast"]=9.0
         higher["ema_slow"]=10.0
         higher["ema_trend"]=12.0
+        higher["close"]=9.0  # bearish M15 close must also be below EMA200
         with patch("ema_strategy.indicators", side_effect=[entry,higher]):
             signal=get_signal(frame,cfg,spread=0.1,trend_frame=frame)
         self.assertEqual(signal.direction,"HOLD")
@@ -216,6 +223,7 @@ class EmaStrategyTests(unittest.TestCase):
         higher["ema_fast"]=10.0
         higher["ema_slow"]=11.0
         higher["ema_trend"]=12.0
+        higher["close"]=9.5  # bearish M15 close must also be below EMA200
         with patch("ema_strategy.indicators", side_effect=[entry,higher]):
             signal=get_signal(frame,cfg,spread=0.1,trend_frame=frame)
         self.assertEqual(signal.direction,"SELL")

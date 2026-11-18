@@ -655,7 +655,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 
 # EMA crossover AUTO strategy. TickerAll, Android endpoints and data stores remain unchanged.
 import pandas as pd
-from ema_strategy import StrategyConfig, get_signal
+from ema_strategy import StrategyConfig, get_signal, protective_stop
 AUTO_TASK=None
 AUTO_LOCK=asyncio.Lock()
 AUTO_TIMEFRAME=StrategyConfig().timeframe
@@ -770,6 +770,63 @@ async def _sync_consecutive_losses(account_id,symbol):
     AUTO_STATE["consecutive_losses"]=streak
     AUTO_STATE["last_history_loss_check"]=datetime.now(timezone.utc).isoformat()
 
+
+async def manage_bot_positions(account_id, symbol, rows):
+    """Manage only existing DioMasteR AUTO positions; never changes entry logic or TP."""
+    bot = [p for p in _bot_positions(rows) if str(p.get("symbol", "")) == symbol]
+    if not bot:
+        return
+    q = LIVE_TICKS.get(symbol)
+    if not q or q.get("stale") or time.time() - float(q.get("received_at", 0)) > 15:
+        AUTO_STATE["protection_status"] = "WAITING_FOR_FRESH_TICK"
+        return
+    spec_data = await ta("GET", f"/v1/accounts/{account_id}/symbols/{symbol}/spec")
+    spec = spec_data.get("spec", {}) if isinstance(spec_data, dict) else {}
+    tick_size = float(spec.get("tickSize") or 0)
+    if tick_size <= 0:
+        AUTO_STATE["protection_status"] = "BLOCKED_UNKNOWN_TICK_SIZE"
+        logger.error("EMA_PROTECTION_BLOCKED unknown tick size symbol=%s", symbol)
+        return
+    cfg = StrategyConfig()
+    changed = []
+    for p in bot:
+        try:
+            ticket = int(p.get("ticket") or 0)
+            side = str(p.get("side", "")).upper()
+            entry = float(p.get("entryPrice") or 0)
+            old_sl = float(p.get("stopLoss") or 0)
+            tp = float(p.get("takeProfit") or 0)
+            # A BUY closes at bid; a SELL closes at ask.
+            exit_price = float(q["bid"] if side == "BUY" else q["ask"])
+            if not ticket or entry <= 0 or old_sl <= 0 or tp <= 0 or side not in ("BUY", "SELL"):
+                logger.error("EMA_PROTECTION_SKIP invalid broker position fields ticket=%s", ticket)
+                continue
+            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, cfg)
+            if new_sl is None:
+                continue
+            # Broker-side modification; TP is deliberately omitted and therefore preserved.
+            key = f"ema-protect-{ticket}-{int(round(new_sl / tick_size))}"
+            result = await ta("PATCH", f"/v1/accounts/{account_id}/positions/{ticket}",
+                              {"stopLoss": new_sl}, idem=True, idempotency_key=key)
+            # Re-read broker state; never report protection as active on an unverified response.
+            latest = await ta("GET", f"/v1/accounts/{account_id}/positions")
+            latest_rows = latest.get("positions", []) if isinstance(latest, dict) else latest
+            current = next((x for x in latest_rows if int(x.get("ticket") or 0) == ticket), None)
+            actual_sl = float(current.get("stopLoss") or 0) if current else 0
+            if not current or abs(actual_sl - new_sl) > tick_size * 0.51:
+                raise RuntimeError(f"broker did not confirm protective SL for ticket {ticket}")
+            changed.append({"ticket": ticket, "stop_loss": actual_sl, "result": result})
+            logger.info("EMA_PROTECTION_CONFIRMED ticket=%s side=%s old_sl=%s new_sl=%s tp_preserved=%s",
+                        ticket, side, old_sl, actual_sl, tp)
+        except Exception as exc:
+            logger.error("EMA_PROTECTION_FAILED ticket=%s error=%s", p.get("ticket"), str(exc)[:250])
+    if changed:
+        AUTO_STATE["protection_status"] = "BROKER_CONFIRMED"
+        AUTO_STATE["last_protection_changes"] = changed
+    elif AUTO_STATE.get("protection_status") != "WAITING_FOR_FRESH_TICK":
+        AUTO_STATE["protection_status"] = "MONITORING"
+
+
 async def auto_cycle():
     row,detail=await account_detail()
     if not _is_demo(detail.get("isDemo")): raise HTTPException(403,"DEMO verification failed")
@@ -794,10 +851,12 @@ async def auto_cycle():
     signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked(),trend_frame)
     stamp=float(signal.candle_time or 0)
     AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None})
+    # Position protection runs every AUTO cycle (5s), not only on a new closed M5 candle.
+    rows=await reconcile_orders(row["id"])
+    await manage_bot_positions(row["id"], symbol, rows)
     if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
         AUTO_STATE["last_action"]="WAITING_FOR_NEW_CLOSED_CANDLE"; return
     AUTO_STATE["last_processed_candle"]=stamp
-    rows=await reconcile_orders(row["id"])
     symbol_positions=[p for p in rows if str(p.get("symbol",""))==symbol]
     bot=_bot_positions(rows)
     if symbol_positions:

@@ -660,7 +660,9 @@ AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_CONSECUTIVE_LOSSES=int(os.getenv("DIO_AUTO_MAX_CONSECUTIVE_LOSSES","3"))
 AUTO_NEWS_WINDOWS=os.getenv("DIO_AUTO_NEWS_WINDOWS_UTC","").strip()
 AUTO_STATE={"running":False,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","last_action":"STOPPED","last_error":None,"last_signal":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"utc_day":None,"consecutive_losses":0,"known_ticket":None,"kill_switch":False,"reconciled":False,"last_order_key":None}
-AUTO_CANDLE_SECONDS={"M1":60,"M5":300,"M15":900,"M30":1800,"H1":3600,"H4":14400}\nAUTO_FRAME_CACHE={}\nAUTO_FRAME_CACHE_TTL=float(os.getenv("DIO_AUTO_CANDLE_CACHE_SECONDS","15"))
+AUTO_CANDLE_SECONDS={"M1":60,"M5":300,"M15":900,"M30":1800,"H1":3600,"H4":14400}
+AUTO_FRAME_CACHE={}
+AUTO_FRAME_CACHE_TTL=float(os.getenv("DIO_AUTO_CANDLE_CACHE_SECONDS","15"))
 
 def _news_blocked(now=None):
     if not AUTO_NEWS_WINDOWS: return False

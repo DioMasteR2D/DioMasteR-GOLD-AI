@@ -73,6 +73,40 @@ class EmaStrategyTests(unittest.TestCase):
         self.assertEqual(signal.direction,"BUY")
         self.assertEqual(signal.reason,"ema_trend_pullback_confirmed_on_close")
 
+    def test_bearish_ema20_wick_rejection_can_trigger_sell(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        fake=frame.copy()
+        fake["ema_fast"]=10.0
+        fake["ema_slow"]=11.0
+        fake["ema_trend"]=12.0
+        fake["adx"]=30.0
+        fake["atr"]=1.0
+        fake["close"]=9.0
+        fake["high"]=9.5
+        fake.loc[29,"high"]=10.2
+        with patch("ema_strategy.indicators", return_value=fake):
+            signal=get_signal(frame,cfg,spread=0.1)
+        self.assertEqual(signal.direction,"SELL")
+        self.assertEqual(signal.reason,"ema_trend_pullback_confirmed_on_close")
+
+    def test_bullish_ema20_wick_rejection_can_trigger_buy(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        fake=frame.copy()
+        fake["ema_fast"]=11.0
+        fake["ema_slow"]=10.0
+        fake["ema_trend"]=9.0
+        fake["adx"]=30.0
+        fake["atr"]=1.0
+        fake["close"]=12.0
+        fake["low"]=11.5
+        fake.loc[29,"low"]=10.8
+        with patch("ema_strategy.indicators", return_value=fake):
+            signal=get_signal(frame,cfg,spread=0.1)
+        self.assertEqual(signal.direction,"BUY")
+        self.assertEqual(signal.reason,"ema_trend_pullback_confirmed_on_close")
+
     def test_old_crossover_is_not_reused(self):
         cfg=self.config()
         frame=self.candles(30)

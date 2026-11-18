@@ -628,12 +628,12 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
             raise HTTPException(423,"Two-position rule: EMA bot position limit reached")
         if not req.client_order_id.startswith("EMA"): 
             raise HTTPException(422,"AUTO order requires EMA idempotency key")
-    leg_tag=(" FAST" if "FAST" in req.client_order_id.upper() else
-             " RUNNER" if "RUNNER" in req.client_order_id.upper() else "")
+    # TickerAll limits order comments to 31 characters. Preserve the AUTO EMA
+    # prefix used by reconciliation and leave 12 chars for the unique leg suffix.
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
       "stopLoss":sl,"takeProfit":tp,
       "comment":"DioMasteR MANUAL "+req.client_order_id[-14:] if origin=="MANUAL"
-                else "DioMasteR AUTO EMA "+req.client_order_id[-14:]}
+                else "DioMasteR AUTO EMA "+req.client_order_id[-12:]}
     result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True,idempotency_key=req.client_order_id)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
       "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,
@@ -856,7 +856,16 @@ async def _auto_runner():
         except Exception as exc:
             AUTO_STATE.update({"last_error":str(exc)[:300],"last_action":"BLOCKED_ERROR"})
             logger.exception("EMA AUTO cycle failed")
-            if "order" in str(exc).lower() or "timeout" in str(exc).lower():
+            # A 400 validation response (e.g. an overlong order comment) is a
+            # definite rejection, not an unknown fill. Latch the kill switch only
+            # when transport/server responses leave broker execution uncertain.
+            uncertain = (
+                isinstance(exc, (httpx.TimeoutException, httpx.NetworkError))
+                or (isinstance(exc, HTTPException) and exc.status_code in (408, 409, 500, 502, 503, 504))
+                or "timeout" in str(exc).lower()
+                or "connection reset" in str(exc).lower()
+            )
+            if uncertain:
                 await _kill_switch("UNCERTAIN_ORDER_OUTCOME")
         await asyncio.sleep(5)
 

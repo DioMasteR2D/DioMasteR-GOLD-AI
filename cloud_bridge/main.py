@@ -600,17 +600,17 @@ async def order(req:Order,authorization:Optional[str]=Header(default=None)):
     # Manual user orders must not consume the AI bot's own position quota.
     # Legacy DioMasteR-tagged positions remain counted conservatively.
     if origin=="AUTO":
-        bot=[p for p in open_rows if str(p.get("comment","")).startswith("DioMasteR")
-             and not str(p.get("comment","")).startswith("DioMasteR MANUAL")]
-        if len(bot)>=MAX_BOT_POSITIONS:
-            raise HTTPException(423,f"Maximum of {MAX_BOT_POSITIONS} bot positions reached")
+        if any(str(p.get("symbol",""))==req.symbol for p in open_rows):
+            raise HTTPException(423,"One-position rule: a position already exists for this symbol")
+        if not req.client_order_id.startswith("EMA"):
+            raise HTTPException(422,"AUTO order requires EMA idempotency key")
     leg_tag=(" FAST" if "FAST" in req.client_order_id.upper() else
              " RUNNER" if "RUNNER" in req.client_order_id.upper() else "")
     body={"type":"market","symbol":req.symbol,"side":side,"volume":req.volume,
       "stopLoss":sl,"takeProfit":tp,
       "comment":"DioMasteR MANUAL "+req.client_order_id[-14:] if origin=="MANUAL"
-                else "DioMasteR AUTO"+leg_tag}
-    result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True)
+                else "DioMasteR AUTO EMA "+req.client_order_id[-14:]}
+    result=await ta("POST",f"/v1/accounts/{row['id']}/orders",body,idem=True,idempotency_key=req.client_order_id)
     return {"ok":True,"account_mode":"DEMO","symbol":req.symbol,"side":side,
       "volume":req.volume,"order":int(result.get("ticket") or 0),"deal":0,
       "price":float(result.get("price") or ref),"retcode":10009 if result.get("status")=="open" else 0,

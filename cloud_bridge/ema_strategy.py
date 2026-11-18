@@ -90,12 +90,13 @@ def protective_stop(side: str, entry_price: float, current_sl: float,
     direction = 1.0 if side == "BUY" else -1.0
     favorable = (market_exit_price - entry_price) * direction
     r_multiple = favorable / risk
+    # Avoid floating-point boundary misses at exact R thresholds (e.g. 3.6 / 3.0).
     candidate = None
-    if r_multiple >= 0.8:
+    if r_multiple + 1e-9 >= 0.8:
         candidate = entry_price
-    if r_multiple >= 1.2:
+    if r_multiple + 1e-9 >= 1.2:
         candidate = entry_price + direction * 0.3 * risk
-    if r_multiple >= 1.5:
+    if r_multiple + 1e-9 >= 1.5:
         candidate = market_exit_price - direction * 0.8 * risk
     if candidate is None:
         return None

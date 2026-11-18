@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from ema_strategy import StrategyConfig, indicators, get_signal
+from ema_strategy import StrategyConfig, indicators, get_signal, protective_stop
 
 class EmaStrategyTests(unittest.TestCase):
     def candles(self, n=260):
@@ -220,6 +220,25 @@ class EmaStrategyTests(unittest.TestCase):
             signal=get_signal(frame,cfg,spread=0.1,trend_frame=frame)
         self.assertEqual(signal.direction,"SELL")
         self.assertEqual(signal.reason,"m5_trend_continuation_confirmed_on_close")
+
+    def test_protective_stop_stages_for_sell(self):
+        cfg=self.config()
+        # TP distance 6.0 with SL:TP ATR ratio 1:2 => initial risk 3.0
+        self.assertIsNone(protective_stop("SELL",100,106,94,98,0.01,cfg))
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.5,0.01,cfg),100.0)
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,96.4,0.01,cfg),99.1)
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,95.5,0.01,cfg),97.9)
+
+    def test_protective_stop_stages_for_buy(self):
+        cfg=self.config()
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,102.5,0.01,cfg),100.0)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,103.6,0.01,cfg),100.9)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,104.5,0.01,cfg),102.1)
+
+    def test_protective_stop_never_widens_existing_stop(self):
+        cfg=self.config()
+        self.assertIsNone(protective_stop("SELL",100,99,94,96.4,0.01,cfg))
+        self.assertIsNone(protective_stop("BUY",100,101,106,103.6,0.01,cfg))
 
     def test_old_crossover_is_not_reused(self):
         cfg=self.config()

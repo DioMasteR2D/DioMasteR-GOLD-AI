@@ -2,6 +2,7 @@ import sys, unittest
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from ema_strategy import StrategyConfig, indicators, get_signal
 
@@ -23,6 +24,35 @@ class EmaStrategyTests(unittest.TestCase):
         signal=get_signal(df,self.config(),spread=0.1)
         self.assertEqual(signal.candle_time,float(df.timestamp.iloc[-1]))
         self.assertIn(signal.direction,("BUY","SELL","HOLD"))
+    def test_recent_closed_crossover_is_not_missed(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        fake=frame.copy()
+        fake["ema_fast"]=np.array([9.0]*27+[9.0,11.0,12.0])
+        fake["ema_slow"]=10.0
+        fake["ema_trend"]=8.0
+        fake["adx"]=30.0
+        fake["atr"]=1.0
+        fake.loc[29,"close"]=12.0
+        with patch("ema_strategy.indicators", return_value=fake):
+            signal=get_signal(frame,cfg,spread=0.1)
+        self.assertEqual(signal.direction,"BUY")
+        self.assertEqual(signal.reason,"ema_crossover_confirmed_on_close")
+
+    def test_old_crossover_is_not_reused(self):
+        cfg=self.config()
+        frame=self.candles(30)
+        fake=frame.copy()
+        fake["ema_fast"]=np.array([9.0]+[11.0]*29)
+        fake["ema_slow"]=10.0
+        fake["ema_trend"]=8.0
+        fake["adx"]=30.0
+        fake["atr"]=1.0
+        with patch("ema_strategy.indicators", return_value=fake):
+            signal=get_signal(frame,cfg,spread=0.1)
+        self.assertEqual(signal.direction,"HOLD")
+        self.assertEqual(signal.reason,"no_qualified_crossover_within_3_closed_bars")
+
     def test_wide_spread_blocks_signal(self):
         signal=get_signal(self.candles(),self.config(),spread=9)
         self.assertEqual(signal.direction,"HOLD")

@@ -110,11 +110,32 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
     direction = ("BUY" if cross_direction == "BUY" and still_bullish and close > vals["ema_trend"]
                  else "SELL" if cross_direction == "SELL" and still_bearish and close < vals["ema_trend"]
                  else "HOLD")
+    reason = "ema_crossover_confirmed_on_close" if direction in ("BUY", "SELL") else ""
+    # Trend-continuation fallback: when EMA20/50/200 are already aligned and
+    # ADX confirms strength, allow a closed-candle pullback/reclaim of EMA20.
+    # This avoids waiting for a brand-new EMA20/50 cross in an established trend.
     if direction == "HOLD":
-        return Signal("HOLD", stamp, close=close, **vals, reason=f"no_qualified_crossover_within_{config.cross_lookback_bars}_closed_bars")
+        for i in range(len(df) - 1, first - 1, -1):
+            before, after = df.iloc[i - 1], df.iloc[i]
+            bull = (float(after["ema_fast"]) > float(after["ema_slow"]) and
+                    float(after["close"]) > float(after["ema_trend"]) and
+                    float(before["close"]) <= float(before["ema_fast"]) and
+                    float(after["close"]) > float(after["ema_fast"]))
+            bear = (float(after["ema_fast"]) < float(after["ema_slow"]) and
+                    float(after["close"]) < float(after["ema_trend"]) and
+                    float(before["close"]) >= float(before["ema_fast"]) and
+                    float(after["close"]) < float(after["ema_fast"]))
+            if bull and still_bullish and close > vals["ema_trend"]:
+                direction, reason = "BUY", "ema_trend_pullback_confirmed_on_close"
+                break
+            if bear and still_bearish and close < vals["ema_trend"]:
+                direction, reason = "SELL", "ema_trend_pullback_confirmed_on_close"
+                break
+    if direction == "HOLD":
+        return Signal("HOLD", stamp, close=close, **vals, reason=f"no_crossover_or_trend_pullback_within_{config.cross_lookback_bars}_closed_bars")
     distance = config.sl_atr * vals["atr"]
     reward = config.tp_atr * vals["atr"]
     sl = close - distance if direction == "BUY" else close + distance
     tp = close + reward if direction == "BUY" else close - reward
     return Signal(direction, stamp, close, vals["ema_fast"], vals["ema_slow"], vals["ema_trend"],
-                  vals["adx"], vals["atr"], sl, tp, "ema_crossover_confirmed_on_close")
+                  vals["adx"], vals["atr"], sl, tp, reason)

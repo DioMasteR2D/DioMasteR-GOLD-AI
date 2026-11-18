@@ -13,7 +13,8 @@ Keep the existing `TICKERALL_API_KEY`, `DIO_BRIDGE_TOKEN`, TickerAll account/ses
 ## EMA strategy configuration
 - `DIO_EMA_TIMEFRAME` (default M15; supports M1/M5/M15/M30/H1/H4)
 - `DIO_EMA_FAST` (20), `DIO_EMA_SLOW` (50), `DIO_EMA_TREND` (200)
-- `DIO_ADX_PERIOD` (14), `DIO_ADX_MIN` (20)
+- `DIO_ADX_PERIOD` (14), `DIO_ADX_MIN` (20; current Render override is 15)
+- `DIO_EMA_CROSS_LOOKBACK_BARS` (3; accepts a fresh crossover in the last 3 fully closed candles only while EMA alignment and EMA200 trend remain valid)
 - `DIO_ATR_PERIOD` (14), `DIO_SL_ATR` (1.5), `DIO_TP_ATR` (3.0)
 - `DIO_MAX_SPREAD` (0.50; in XAUUSD price units)
 - `DIO_EMA_HISTORY_HOURS` (2400)
@@ -26,7 +27,7 @@ Keep the existing `TICKERALL_API_KEY`, `DIO_BRIDGE_TOKEN`, TickerAll account/ses
 - Strict DEMO identity check (MT5 and configured Vantage DEMO server); fail closed otherwise.
 - Symbol allow-list; one open XAUUSD position maximum.
 - Broker-side mandatory SL/TP; risk sizing uses broker tick size/value and is capped at 0.25% equity.
-- Entries only on closed broker OHLC candles, with EMA crossover, EMA200 trend filter, ADX and spread checks.
+- Entries only on closed broker OHLC candles, with a fresh EMA crossover (up to 3 closed candles old by default), EMA200 trend alignment, ADX and spread checks. The crossover is never reused after the configured lookback.
 - Weekend entries blocked. Optional UTC news windows block entries.
 - Reconciliation checks bot-tagged broker positions and verifies SL/TP before AUTO start.
 - Deterministic per-candle idempotency key is sent to TickerAll.

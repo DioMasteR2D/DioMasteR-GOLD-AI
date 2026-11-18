@@ -712,6 +712,33 @@ async def strategy_frame(account_id,symbol,timeframe,hours):
     if len(clean)<205: raise RuntimeError(f"Not enough CLOSED {timeframe} OHLC candles for EMA200: {len(clean)}")
     return pd.DataFrame(clean)
 
+async def _sync_consecutive_losses(account_id,symbol):
+    """Read broker closed history; count consecutive EMA bot losses, newest first."""
+    data=await ta("GET",f"/v1/accounts/{account_id}/history?limit=100")
+    history=data.get("history",data.get("trades",[])) if isinstance(data,dict) else data
+    if not isinstance(history,list): raise RuntimeError("Invalid closed history payload")
+    candidates=[]
+    for trade in history:
+        if not isinstance(trade,dict): continue
+        comment=str(trade.get("comment") or "")
+        if "DioMasteR AUTO EMA" not in comment: continue
+        if str(trade.get("symbol") or symbol)!=symbol: continue
+        pnl=None
+        for key in ("profit","realizedProfit","profitLoss","netProfit","pnl"):
+            if trade.get(key) is not None:
+                try: pnl=float(trade[key]); break
+                except (TypeError,ValueError): pass
+        if pnl is None: continue
+        stamp=trade.get("closeTime",trade.get("closedAt",trade.get("time",trade.get("timestamp",0))))
+        candidates.append((str(stamp),pnl))
+    candidates.sort(key=lambda x:x[0],reverse=True)
+    streak=0
+    for _,pnl in candidates:
+        if pnl<0: streak+=1
+        else: break
+    AUTO_STATE["consecutive_losses"]=streak
+    AUTO_STATE["last_history_loss_check"]=datetime.now(timezone.utc).isoformat()
+
 async def auto_cycle():
     row,detail=await account_detail()
     if detail.get("isDemo") is not True: raise HTTPException(403,"DEMO verification failed")

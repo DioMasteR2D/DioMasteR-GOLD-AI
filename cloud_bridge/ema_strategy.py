@@ -18,6 +18,7 @@ class StrategyConfig:
     max_spread: float = float(os.getenv("DIO_MAX_SPREAD", "0.50"))
     news_before_minutes: int = int(os.getenv("DIO_NEWS_BLOCK_BEFORE_MIN", "0"))
     news_after_minutes: int = int(os.getenv("DIO_NEWS_BLOCK_AFTER_MIN", "0"))
+    cross_lookback_bars: int = max(1, min(5, int(os.getenv("DIO_EMA_CROSS_LOOKBACK_BARS", "3"))))
 
 @dataclass(frozen=True)
 class Signal:
@@ -93,11 +94,24 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
         return Signal("HOLD", stamp, close=close, **vals, reason="spread_filter")
     if vals["adx"] <= config.adx_min:
         return Signal("HOLD", stamp, close=close, **vals, reason="adx_filter")
-    cross_up = float(prev["ema_fast"]) <= float(prev["ema_slow"]) and vals["ema_fast"] > vals["ema_slow"]
-    cross_down = float(prev["ema_fast"]) >= float(prev["ema_slow"]) and vals["ema_fast"] < vals["ema_slow"]
-    direction = "BUY" if cross_up and close > vals["ema_trend"] else "SELL" if cross_down and close < vals["ema_trend"] else "HOLD"
+    # Recover a fresh closed-bar cross if a restart or short feed delay skipped its
+    # exact candle. The current EMA relationship and EMA trend must still agree.
+    cross_direction = None
+    first = max(1, len(df) - config.cross_lookback_bars)
+    for i in range(len(df) - 1, first - 1, -1):
+        before, after = df.iloc[i - 1], df.iloc[i]
+        up = float(before["ema_fast"]) <= float(before["ema_slow"]) and float(after["ema_fast"]) > float(after["ema_slow"])
+        down = float(before["ema_fast"]) >= float(before["ema_slow"]) and float(after["ema_fast"]) < float(after["ema_slow"])
+        if up or down:
+            cross_direction = "BUY" if up else "SELL"
+            break
+    still_bullish = vals["ema_fast"] > vals["ema_slow"]
+    still_bearish = vals["ema_fast"] < vals["ema_slow"]
+    direction = ("BUY" if cross_direction == "BUY" and still_bullish and close > vals["ema_trend"]
+                 else "SELL" if cross_direction == "SELL" and still_bearish and close < vals["ema_trend"]
+                 else "HOLD")
     if direction == "HOLD":
-        return Signal("HOLD", stamp, close=close, **vals, reason="no_qualified_crossover")
+        return Signal("HOLD", stamp, close=close, **vals, reason=f"no_qualified_crossover_within_{config.cross_lookback_bars}_closed_bars")
     distance = config.sl_atr * vals["atr"]
     reward = config.tp_atr * vals["atr"]
     sl = close - distance if direction == "BUY" else close + distance

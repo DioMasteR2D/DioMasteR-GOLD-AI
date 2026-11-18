@@ -1,42 +1,39 @@
 # DioMasteR GOLD AI
 
-Native Android XAUUSD trading dashboard with a MetaApi Cloud connection to a Vantage MT5 DEMO account.
+Native Android XAUUSD trading dashboard connected to the existing TickerAll service and Vantage MT5 DEMO account.
 
-## Android release 2.5.0
-- Native Android interface, animated gold dashboard and indicative XAU/USD spot chart.
-- Paper trading remains available.
-- Optional authenticated MetaApi Cloud bridge connection for Vantage MT5 DEMO.
-- App BUY/SELL controls send manual broker orders only when the cloud bridge confirms a connected DEMO account and execution is enabled.
-- Orders require broker-valid volume, mandatory server-side Stop Loss and Take Profit, an allow-listed gold symbol, and a 0.25% equity risk cap (cloud bridge).
-- MT5 positions can be viewed and bot-owned positions can be closed.
-- No LIVE trading path exists. The bridge fails closed if the account is not explicitly identified as DEMO.
+## Single automatic strategy
 
-## Cloud bridge
-The Linux-compatible service is in `cloud_bridge/`. It does not use the Windows-only MetaTrader5 Python package and does not require the user's PC or Windows VPS.
+The only automatic trading strategy is **EMA Crossover**:
+- Symbol: XAUUSD (broker-supported gold alias only when explicitly returned by TickerAll)
+- Main timeframe: M15; decisions use completed broker OHLC candles only
+- EMA 20 / EMA 50 crossover
+- EMA 200 trend filter
+- ADX(14) > 20 entry filter
+- ATR(14): server-side Stop Loss = 1.5 × ATR; Take Profit = 3 × ATR
+- BUY only when EMA20 crosses above EMA50 and close is above EMA200
+- SELL only when EMA20 crosses below EMA50 and close is below EMA200
+- One open bot position maximum; exit on broker SL/TP or opposite qualified signal
 
-Deploy it as a separate Render web service with root directory `cloud_bridge`, build command `pip install -r requirements.txt`, and start command `uvicorn main:app --host 0.0.0.0 --port $PORT`. A continuously running paid service is required for unattended availability; free instances may sleep.
+## DEMO-only safety
 
-Set these secrets in Render, never in the APK or GitHub:
-- `METAAPI_TOKEN`
-- `METAAPI_ACCOUNT_ID`
-- `DIO_BRIDGE_TOKEN` (generate a long random secret)
-- Optional: `METAAPI_CLIENT_API` for the MetaApi region
-- `DIO_MT5_ALLOWED_SYMBOLS` exact Vantage symbol (e.g. XAUUSD or XAUUSDm)
-- `DIO_MT5_MAX_VOLUME` (default 0.01)
-- `DIO_MT5_MAX_RISK_FRACTION` (default 0.0025)
-- `DIO_MT5_DEMO_EXECUTION_ENABLED` (default false; enable only after MetaApi has confirmed the Vantage DEMO account and the quote/specification are verified)
+- TickerAll remains the sole broker/API provider; Vantage MT5 DEMO is verified before account actions.
+- No LIVE trading mode or LIVE order path is permitted.
+- Maximum risk is capped at 0.25% equity per trade.
+- Mandatory broker-side SL/TP, symbol allow-list, spread filter, weekend entry block, optional UTC news windows, per-candle idempotency, order reconciliation, daily loss and consecutive-loss kill switches.
+- Manual orders remain separate from AUTO and are subject to the same DEMO and risk gates.
 
-Configure the broker account in MetaApi using its secure end-user configuration link. Do not send broker passwords or MetaApi tokens in chat. The Android app receives only the Render HTTPS URL and the separate `DIO_BRIDGE_TOKEN`.
+## Cloud service
 
-## Current scope and limitations
-- Manual BUY/SELL from the Android app is supported by the cloud bridge once deployment and MetaApi account configuration are complete.
-- Cloud auto-start endpoints deliberately report unsupported. The old Windows auto loop is not used by this cloud service. Automatic strategy execution will only be enabled after candle-based strategy logic, order reconciliation, duplicate-order protection, kill switch and broker-specific DEMO validation are complete.
-- The Android AI panel is a deterministic signal helper, not a trained machine-learning model; its current spot sampling is not a substitute for broker M5 OHLC candles.
-- MetaApi is a third-party paid cloud service. This repository change does not create a MetaApi subscription, provision the broker account, deploy Render, or place an order.
-- This build has not yet been verified against the user's Vantage account. Confirm the account's exact server and symbol before enabling execution.
+The Render service is in `cloud_bridge/`:
+- Build: `pip install -r cloud_bridge/requirements.txt`
+- Start: `cd cloud_bridge && uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Health: `/health`
 
-## Legacy bridge
-The original `bridge/` folder remains for Windows MT5 terminal use. Do not deploy it to Linux Render; it imports the Windows terminal integration.
+Keep existing TickerAll and bridge secrets only in Render. Never commit or paste credentials into source control or chat.
 
-## Build
-GitHub Actions runs Android unit tests and builds the debug APK artifact.
+## Android
+
+The Android application displays the cloud EMA AUTO status and strategy parameters. Its chart indicators use EMA20/EMA50; cloud AUTO remains the sole authority for entry/exit decisions. The old Adaptive Liquidity Hunter, H4/H1 + M15 + M5 strategy display, EMA9/21 strategy display, and alternate legacy MT5 bridge have been removed.
+
+GitHub Actions runs the cloud EMA tests and builds the Android debug APK.

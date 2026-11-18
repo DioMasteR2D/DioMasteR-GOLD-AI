@@ -89,7 +89,7 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
     close = float(cur["close"])
     if news_blocked:
         return Signal("HOLD", stamp, close=close, **vals, reason="news_window")
-    if spread < 0 or spread > config.max_spread:
+    if not np.isfinite(spread) or spread < 0 or spread > config.max_spread:
         return Signal("HOLD", stamp, close=close, **vals, reason="spread_filter")
     if vals["adx"] <= config.adx_min:
         return Signal("HOLD", stamp, close=close, **vals, reason="adx_filter")

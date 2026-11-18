@@ -402,7 +402,7 @@ async def account():
 
 async def account_detail():
     row=await account()
-    detail=await ta("GET",f"/v1/accounts/{row['id']}")
+    detail=_account_payload(await ta("GET",f"/v1/accounts/{row['id']}"))
     if detail.get("isDemo") is not True:
         raise HTTPException(403,"DEMO verification failed; trading blocked")
     if str(detail.get("status","")).lower() not in ("online","connected"):

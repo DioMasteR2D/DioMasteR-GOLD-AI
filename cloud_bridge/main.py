@@ -723,23 +723,93 @@ async def _check_daily_limits(equity):
     return True
 
 async def strategy_frame(account_id,symbol,timeframe,hours):
+    """Return a verified closed-candle frame without letting transient empty
+    or truncated TickerAll responses replace the last known-good strategy data."""
+    if timeframe not in AUTO_CANDLE_SECONDS:
+        raise RuntimeError(f"Unsupported strategy timeframe: {timeframe}")
     key=(symbol,timeframe,hours)
-    cached=CANDLE_CACHE.get(key)
-    if cached and time.time()-cached["fetched_at"]<CANDLE_CACHE_TTL.get(timeframe,15):
-        rows=list(cached.get("candles",[]))
-    else:
-        payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
-        rows=payload.get("candles",[]) if isinstance(payload,dict) else []
-    clean=[]
-    for bar in rows:
-        try:
-            clean.append({"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),"high":float(bar["high"]),"low":float(bar["low"]),"close":float(bar["close"]),"tick_volume":float(bar.get("tickVolume",bar.get("tick_volume",0)) or 0),"spread":float(bar.get("spread") or 0)})
-        except (KeyError,TypeError,ValueError): continue
-    clean.sort(key=lambda x:x["timestamp"])
     seconds=AUTO_CANDLE_SECONDS[timeframe]
-    clean=[x for x in clean if x["timestamp"]+seconds<=time.time()]
-    if len(clean)<205: raise RuntimeError(f"Not enough CLOSED {timeframe} OHLC candles for EMA200: {len(clean)}")
-    return pd.DataFrame(clean)
+    max_stale_seconds=max(seconds*3,180)
+    now=time.time()
+
+    def usable_cached():
+        cached=AUTO_FRAME_CACHE.get(key)
+        if not cached:
+            return None
+        frame=cached.get("frame")
+        age=now-float(cached.get("fetched_at",0))
+        if not isinstance(frame,pd.DataFrame) or len(frame)<205 or age>max_stale_seconds:
+            return None
+        last_bar=float(frame.iloc[-1]["timestamp"])
+        if now-(last_bar+seconds)>max_stale_seconds:
+            return None
+        return frame.copy()
+
+    cached=AUTO_FRAME_CACHE.get(key)
+    if cached and now-float(cached.get("fetched_at",0))<AUTO_FRAME_CACHE_TTL:
+        frame=usable_cached()
+        if frame is not None:
+            return frame
+
+    errors=[]
+    for attempt in range(3):
+        try:
+            payload=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+            if not isinstance(payload,dict):
+                raise RuntimeError("TickerAll candle response is not an object")
+            rows=payload.get("candles")
+            if not isinstance(rows,list):
+                raise RuntimeError("TickerAll candle response has no valid candles list")
+            if payload.get("truncated") is True or str(payload.get("coverage","")).lower()=="partial":
+                raise RuntimeError(
+                    f"TickerAll returned incomplete {timeframe} history "
+                    f"(coverage={payload.get('coverage')}, truncated={payload.get('truncated')})"
+                )
+
+            clean=[]
+            for bar in rows:
+                if not isinstance(bar,dict):
+                    continue
+                try:
+                    item={"timestamp":float(bar["timestamp"]),"open":float(bar["open"]),
+                          "high":float(bar["high"]),"low":float(bar["low"]),
+                          "close":float(bar["close"]),
+                          "tick_volume":float(bar.get("tickVolume",bar.get("tick_volume",0)) or 0),
+                          "spread":float(bar.get("spread") or 0)}
+                    if all(pd.notna(item[k]) and abs(item[k])!=float("inf")
+                           for k in ("timestamp","open","high","low","close")) and item["high"]>=item["low"]:
+                        clean.append(item)
+                except (KeyError,TypeError,ValueError,OverflowError):
+                    continue
+
+            clean.sort(key=lambda x:x["timestamp"])
+            # Deduplicate provider rows by candle open timestamp.
+            by_timestamp={int(x["timestamp"]):x for x in clean}
+            clean=[by_timestamp[t] for t in sorted(by_timestamp)]
+            clean=[x for x in clean if x["timestamp"]+seconds<=time.time()]
+            if len(clean)<205:
+                raise RuntimeError(f"Not enough CLOSED {timeframe} OHLC candles for EMA200: {len(clean)}")
+
+            last_closed=float(clean[-1]["timestamp"])+seconds
+            if time.time()-last_closed>max_stale_seconds:
+                raise RuntimeError(f"Latest closed {timeframe} candle is stale")
+            frame=pd.DataFrame(clean)
+            AUTO_FRAME_CACHE[key]={"frame":frame.copy(),"fetched_at":time.time(),
+                                   "last_bar_time":float(frame.iloc[-1]["timestamp"])}
+            return frame
+        except Exception as exc:
+            errors.append(f"{type(exc).__name__}: {str(exc)[:180]}")
+            if attempt<2:
+                await asyncio.sleep(0.5*(attempt+1))
+
+    # A recent, previously verified frame may bridge a brief provider outage.
+    # Stale history is never used to trigger a new entry.
+    frame=usable_cached()
+    if frame is not None:
+        logger.warning("TickerAll %s history refresh failed; using recent verified closed-candle cache: %s",
+                       timeframe," | ".join(errors)[-350:])
+        return frame
+    raise RuntimeError("TickerAll strategy history unavailable after retries: "+" | ".join(errors)[-450:])
 
 async def _sync_consecutive_losses(account_id,symbol):
     """Read broker closed history; count consecutive EMA bot losses, newest first."""

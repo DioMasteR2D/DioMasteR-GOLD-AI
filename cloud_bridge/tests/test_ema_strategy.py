@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from ema_strategy import StrategyConfig, indicators, get_signal
+from ema_strategy import StrategyConfig, indicators, get_signal, protective_stop
 from backtest import BacktestConfig, run_backtest
 
 def candles(n=520):
@@ -55,3 +55,45 @@ def test_backtest_rejects_invalid_ohlc():
     frame.loc[0,"high"]=frame.loc[0,"low"]-1
     with pytest.raises(ValueError):
         run_backtest(frame)
+
+
+@pytest.mark.parametrize(
+    "market, expected_sl",
+    [
+        (103.90, 100.00),  # 0.39R: break-even
+        (107.00, 101.50),  # 0.70R: lock +0.15R
+        (110.00, 103.50),  # 1.00R: lock +0.35R
+        (115.00, 107.00),  # 1.50R: trail 0.80R behind market
+    ],
+)
+def test_profit_protection_schedule_buy(market, expected_sl):
+    result = protective_stop(
+        "BUY", 100.0, 90.0, 130.0, market, 0.01,
+        initial_risk=10.0,
+    )
+    assert result == pytest.approx(expected_sl)
+
+
+@pytest.mark.parametrize(
+    "market, expected_sl",
+    [
+        (96.10, 100.00),  # 0.39R: break-even
+        (93.00, 98.50),   # 0.70R: lock +0.15R
+        (90.00, 96.50),   # 1.00R: lock +0.35R
+        (85.00, 93.00),   # 1.50R: trail 0.80R behind market
+    ],
+)
+def test_profit_protection_schedule_sell(market, expected_sl):
+    result = protective_stop(
+        "SELL", 100.0, 110.0, 70.0, market, 0.01,
+        initial_risk=10.0,
+    )
+    assert result == pytest.approx(expected_sl)
+
+
+def test_profit_protection_does_not_move_sl_before_039r():
+    result = protective_stop(
+        "BUY", 100.0, 90.0, 130.0, 103.89, 0.01,
+        initial_risk=10.0,
+    )
+    assert result is None

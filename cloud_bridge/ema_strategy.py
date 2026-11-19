@@ -76,7 +76,8 @@ def indicators(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig()) -
 def protective_stop(side: str, entry_price: float, current_sl: float,
                     take_profit: float, market_exit_price: float,
                     tick_size: float, config: StrategyConfig = StrategyConfig(),
-                    initial_risk: float | None = None) -> float | None:
+                    initial_risk: float | None = None,
+                    be_profit_price_distance: float | None = None) -> float | None:
     """Return a monotonic protective SL; None means no stage is armed or no safe improvement."""
     side = str(side).upper()
     if side not in ("BUY", "SELL"):
@@ -102,10 +103,12 @@ def protective_stop(side: str, entry_price: float, current_sl: float,
     # Avoid floating-point boundary misses at exact R thresholds (e.g. 3.6 / 3.0).
     candidate = None
     # Profit protection schedule requested for existing positions only:
-    # 0.39R -> break-even; 0.70R -> lock +0.15R;
+    # 0.39R -> lock a fixed account-currency profit; 0.70R -> lock +0.15R;
     # 1.00R -> lock +0.35R; 1.50R -> trail 0.80R behind market.
-    if r_multiple + 1e-9 >= 0.39:
-        candidate = entry_price
+    if r_multiple + 1e-9 >= 0.39 and be_profit_price_distance is not None:
+        distance = float(be_profit_price_distance)
+        if np.isfinite(distance) and distance > 0:
+            candidate = entry_price + direction * distance
     if r_multiple + 1e-9 >= 0.70:
         candidate = entry_price + direction * 0.15 * risk
     if r_multiple + 1e-9 >= 1.00:

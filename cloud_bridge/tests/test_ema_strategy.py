@@ -60,7 +60,7 @@ def test_backtest_rejects_invalid_ohlc():
 @pytest.mark.parametrize(
     "market, expected_sl",
     [
-        (103.90, 100.00),  # 0.39R: break-even
+        (103.90, 100.30),  # 0.39R: lock $3 for the test contract
         (107.00, 101.50),  # 0.70R: lock +0.15R
         (110.00, 103.50),  # 1.00R: lock +0.35R
         (115.00, 107.00),  # 1.50R: trail 0.80R behind market
@@ -69,7 +69,7 @@ def test_backtest_rejects_invalid_ohlc():
 def test_profit_protection_schedule_buy(market, expected_sl):
     result = protective_stop(
         "BUY", 100.0, 90.0, 130.0, market, 0.01,
-        initial_risk=10.0,
+        initial_risk=10.0, be_profit_price_distance=0.30,
     )
     assert result == pytest.approx(expected_sl)
 
@@ -77,7 +77,7 @@ def test_profit_protection_schedule_buy(market, expected_sl):
 @pytest.mark.parametrize(
     "market, expected_sl",
     [
-        (96.10, 100.00),  # 0.39R: break-even
+        (96.10, 99.70),   # 0.39R: lock $3 for the test contract
         (93.00, 98.50),   # 0.70R: lock +0.15R
         (90.00, 96.50),   # 1.00R: lock +0.35R
         (85.00, 93.00),   # 1.50R: trail 0.80R behind market

@@ -875,6 +875,7 @@ async def manage_bot_positions(account_id, symbol, rows):
     spec_data = await ta("GET", f"/v1/accounts/{account_id}/symbols/{symbol}/spec")
     spec = spec_data.get("spec", {}) if isinstance(spec_data, dict) else {}
     tick_size = float(spec.get("tickSize") or 0)
+    tick_value_account = float(spec.get("tickValueAccount") or 0)
     if tick_size <= 0:
         AUTO_STATE["protection_status"] = "BLOCKED_UNKNOWN_TICK_SIZE"
         logger.error("EMA_PROTECTION_BLOCKED unknown tick size symbol=%s", symbol)
@@ -922,7 +923,20 @@ async def manage_bot_positions(account_id, symbol, rows):
                 logger.info("EMA_PROTECTION_STAGE ticket=%s side=%s stage=%s r=%.4f initial_risk=%s current_sl=%s",
                             ticket, side, stage, r_multiple, risk, old_sl)
                 stages[str(ticket)] = stage
-            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, cfg, initial_risk=float(risk))
+            # Convert the requested $3 per-position lock into an exact price
+            # distance using the broker's account-currency tick value and this
+            # position's actual volume. If contract data is unavailable, do not
+            # pretend a zero-profit break-even stop is a $3 lock.
+            volume = float(p.get("volume") or 0)
+            be_profit_price_distance = (
+                3.0 / ((tick_value_account / tick_size) * volume)
+                if tick_value_account > 0 and volume > 0 else None
+            )
+            new_sl = protective_stop(
+                side, entry, old_sl, tp, exit_price, tick_size, cfg,
+                initial_risk=float(risk),
+                be_profit_price_distance=be_profit_price_distance,
+            )
             if new_sl is None:
                 continue
             # Broker-side modification; TP is deliberately omitted and therefore preserved.

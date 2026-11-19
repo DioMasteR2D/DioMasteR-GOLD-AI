@@ -473,10 +473,33 @@ CANDLE_CACHE_TTL={"M1":3,"M5":5,"M15":10,"M30":20,"H1":30,"H4":60,"D1":120,"W1":
 
 async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
     try:
-        data=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
-        rows=data.get("candles",[])
-        if not isinstance(rows,list):
-            raise ValueError("TickerAll candle payload is invalid")
+        # TickerAll can occasionally answer a candle-history GET with an empty
+        # or partial page (coverage=partial/truncated=true). Retry that response
+        # before exposing it to the UI; never mark an empty result as a fresh cache.
+        data=None
+        rows=[]
+        incomplete_reason=None
+        for attempt in range(3):
+            data=await ta("GET",f"/v1/accounts/{account_id}/candles?symbol={symbol}&timeframe={timeframe}&hours={hours}")
+            if not isinstance(data,dict):
+                raise ValueError("TickerAll candle payload is not an object")
+            rows=data.get("candles",[])
+            if not isinstance(rows,list):
+                raise ValueError("TickerAll candle payload is invalid")
+            partial=(data.get("truncated") is True or
+                     str(data.get("coverage","")).lower()=="partial")
+            if partial or len(rows)<2:
+                incomplete_reason=("partial/truncated response" if partial else
+                                   f"insufficient candle rows: {len(rows)}")
+                if attempt<2:
+                    await asyncio.sleep(0.6*(attempt+1))
+                    continue
+                logger.warning("TickerAll candle refresh abandoned after retries: symbol=%s timeframe=%s reason=%s; previous cache preserved",
+                               symbol,timeframe,incomplete_reason)
+                return
+            incomplete_reason=None
+            break
+
         clean=[]
         invalid_rows=0
         first_keys=sorted(rows[0].keys()) if rows and isinstance(rows[0],dict) else []
@@ -494,16 +517,15 @@ async def refresh_candle_cache(key, account_id, symbol, timeframe, hours):
            data.get("stopReason"),str(data.get("note") or "")[:180],sorted(data.keys())))
         print(diagnostic,flush=True)
         logger.info(diagnostic)
-        # Keep only valid real broker OHLC. Empty/partial failures never erase a
-        # previously good cache.
+        # Only complete, usable real broker OHLC may refresh the cache.
+        # Empty/partial/invalid responses never erase or poison a good cache.
         if len(clean)>=2:
             CANDLE_CACHE[key]={"candles":clean,"fetched_at":time.time(),
               "coverage":data.get("coverage"),"truncated":bool(data.get("truncated",False)),
               "served":data.get("served")}
-        elif key not in CANDLE_CACHE:
-            CANDLE_CACHE[key]={"candles":clean,"fetched_at":time.time(),
-              "coverage":data.get("coverage"),"truncated":bool(data.get("truncated",False)),
-              "served":data.get("served")}
+        else:
+            logger.warning("TickerAll candle refresh rejected after parsing: symbol=%s timeframe=%s raw=%s valid=%s; previous cache preserved",
+                           symbol,timeframe,len(rows),len(clean))
     except Exception as exc:
         logger.warning("TickerAll candle refresh failed: symbol=%s timeframe=%s error=%s",
                        symbol,timeframe,str(exc)[:200])

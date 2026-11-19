@@ -21,6 +21,12 @@ public final class GoldAiAgent {
         public static Signal waiting(String reason) {
             return new Signal("HOLD",reason,0,0,0,0,false);
         }
+        public static Signal cloud(String side,String reason,int confidence,double entry,double stopLoss,double takeProfit) {
+            boolean valid = ("BUY".equals(side) || "SELL".equals(side))
+                    && entry > 0 && stopLoss > 0 && takeProfit > 0;
+            return new Signal(valid ? side : "HOLD", reason, confidence,
+                    valid ? entry : 0, valid ? stopLoss : 0, valid ? takeProfit : 0, valid);
+        }
     }
     public static Signal analyze(List<Double> prices,double current) {
         return Signal.waiting("EMA CROSSOVER 20/50/200 · M15 · ADX14 · ATR14 · DEMO cloud owns all trade decisions.");

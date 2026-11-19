@@ -921,7 +921,7 @@ async def manage_bot_positions(account_id, symbol, rows):
                 logger.info("EMA_PROTECTION_STAGE ticket=%s side=%s stage=%s r=%.4f initial_risk=%s current_sl=%s",
                             ticket, side, stage, r_multiple, risk, old_sl)
                 stages[str(ticket)] = stage
-            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, float(risk), cfg)
+            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, cfg, initial_risk=float(risk))
             if new_sl is None:
                 continue
             # Broker-side modification; TP is deliberately omitted and therefore preserved.

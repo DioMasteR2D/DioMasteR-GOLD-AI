@@ -75,17 +75,26 @@ def indicators(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig()) -
 
 def protective_stop(side: str, entry_price: float, current_sl: float,
                     take_profit: float, market_exit_price: float,
-                    tick_size: float, config: StrategyConfig = StrategyConfig()) -> float | None:
+                    tick_size: float, config: StrategyConfig = StrategyConfig(),
+                    initial_risk: float | None = None) -> float | None:
     """Return a monotonic protective SL; None means no stage is armed or no safe improvement."""
     side = str(side).upper()
     if side not in ("BUY", "SELL"):
         return None
     values = (entry_price, current_sl, take_profit, market_exit_price, tick_size,
               config.sl_atr, config.tp_atr)
-    if not all(np.isfinite(float(v)) for v in values) or tick_size <= 0 or config.tp_atr <= 0 or config.sl_atr <= 0:
+    if not all(np.isfinite(float(v)) for v in values) or tick_size <= 0:
         return None
-    risk = abs(take_profit - entry_price) * config.sl_atr / config.tp_atr
-    if risk <= 0 or current_sl <= 0:
+    # Production position management always supplies the actual initial
+    # fill-to-original-SL risk. The TP-derived fallback is retained only for
+    # backwards-compatible standalone strategy tests/callers.
+    if initial_risk is None:
+        risk = abs(take_profit - entry_price) * config.sl_atr / config.tp_atr if config.tp_atr > 0 else 0
+    else:
+        if not np.isfinite(float(initial_risk)) or float(initial_risk) <= 0:
+            return None
+        risk = float(initial_risk)
+    if current_sl <= 0:
         return None
     direction = 1.0 if side == "BUY" else -1.0
     favorable = (market_exit_price - entry_price) * direction

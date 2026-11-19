@@ -686,7 +686,7 @@ AUTO_MAX_TRADES_PER_DAY=int(os.getenv("DIO_AUTO_MAX_TRADES_PER_DAY","20"))
 AUTO_DAILY_LOSS_LIMIT=float(os.getenv("DIO_AUTO_DAILY_LOSS_LIMIT","0.05"))
 AUTO_MAX_CONSECUTIVE_LOSSES=int(os.getenv("DIO_AUTO_MAX_CONSECUTIVE_LOSSES","3"))
 AUTO_NEWS_WINDOWS=os.getenv("DIO_AUTO_NEWS_WINDOWS_UTC","").strip()
-AUTO_STATE={"running":False,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","last_action":"STOPPED","last_error":None,"last_signal":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"utc_day":None,"consecutive_losses":0,"known_ticket":None,"kill_switch":False,"reconciled":False,"last_order_key":None}
+AUTO_STATE={"running":False,"account_mode":"DEMO","strategy":"EMA_CROSSOVER","last_action":"STOPPED","last_error":None,"last_signal":None,"last_bar_time":None,"trades_today":0,"daily_start_equity":None,"utc_day":None,"consecutive_losses":0,"known_ticket":None,"kill_switch":False,"reconciled":False,"last_order_key":None,"initial_risk_by_ticket":{},"protection_stage_by_ticket":{}}
 AUTO_CANDLE_SECONDS={"M1":60,"M5":300,"M15":900,"M30":1800,"H1":3600,"H4":14400}
 AUTO_FRAME_CACHE={}
 AUTO_FRAME_CACHE_TTL=float(os.getenv("DIO_AUTO_CANDLE_CACHE_SECONDS","15"))
@@ -893,7 +893,35 @@ async def manage_bot_positions(account_id, symbol, rows):
             if not ticket or entry <= 0 or old_sl <= 0 or tp <= 0 or side not in ("BUY", "SELL"):
                 logger.error("EMA_PROTECTION_SKIP invalid broker position fields ticket=%s", ticket)
                 continue
-            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, cfg)
+            risk_map = AUTO_STATE.setdefault("initial_risk_by_ticket", {})
+            risk = risk_map.get(str(ticket))
+            if risk is None:
+                # Safe recovery is possible only while the broker SL is still the
+                # original adverse-side stop. Never infer original risk from a
+                # moved-to-BE/profit-lock/trailing SL after a process restart.
+                if side == "SELL" and old_sl > entry:
+                    risk = old_sl - entry
+                elif side == "BUY" and old_sl < entry:
+                    risk = entry - old_sl
+                else:
+                    logger.error("EMA_PROTECTION_UNRECOVERABLE_INITIAL_RISK ticket=%s entry=%s current_sl=%s",
+                                 ticket, entry, old_sl)
+                    continue
+                if risk <= 0:
+                    logger.error("EMA_PROTECTION_INVALID_INITIAL_RISK ticket=%s risk=%s", ticket, risk)
+                    continue
+                risk_map[str(ticket)] = float(risk)
+            direction = 1.0 if side == "BUY" else -1.0
+            r_multiple = ((exit_price - entry) * direction) / float(risk)
+            stage = ("TRAILING" if r_multiple >= 1.5 else
+                     "PROFIT_LOCK" if r_multiple >= 1.2 else
+                     "BREAK_EVEN" if r_multiple >= 0.8 else "INITIAL_SL")
+            stages = AUTO_STATE.setdefault("protection_stage_by_ticket", {})
+            if stages.get(str(ticket)) != stage:
+                logger.info("EMA_PROTECTION_STAGE ticket=%s side=%s stage=%s r=%.4f initial_risk=%s current_sl=%s",
+                            ticket, side, stage, r_multiple, risk, old_sl)
+                stages[str(ticket)] = stage
+            new_sl = protective_stop(side, entry, old_sl, tp, exit_price, tick_size, cfg, initial_risk=float(risk))
             if new_sl is None:
                 continue
             # Broker-side modification; TP is deliberately omitted and therefore preserved.
@@ -1041,6 +1069,11 @@ async def auto_cycle():
         ticket=int(result.get("order") or 0)
         if not ticket: raise RuntimeError("Broker did not confirm the "+leg+" position ticket")
         opened.append({"leg":leg,"ticket":ticket,"result":result})
+        fill_price = float(result.get("price") or price)
+        initial_risk = abs(fill_price - sl)
+        if initial_risk <= 0:
+            raise RuntimeError("Broker fill produced invalid initial risk; refusing to track protection")
+        AUTO_STATE.setdefault("initial_risk_by_ticket", {})[str(ticket)] = initial_risk
         AUTO_STATE.update({"known_ticket":ticket,"known_tickets":[x["ticket"] for x in opened],"broker_bot_positions":len(opened),"last_action":"OPENED_"+signal.direction+"_"+leg})
     AUTO_STATE.update({"trades_today":AUTO_STATE["trades_today"]+2,"last_action":"OPENED_TWO_"+signal.direction,"last_orders":opened})
 

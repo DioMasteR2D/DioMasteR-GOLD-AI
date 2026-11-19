@@ -655,7 +655,7 @@ async def close(ticket:int,authorization:Optional[str]=Header(default=None)):
 
 # EMA crossover AUTO strategy. TickerAll, Android endpoints and data stores remain unchanged.
 import pandas as pd
-from ema_strategy import StrategyConfig, get_signal, protective_stop
+from ema_strategy import StrategyConfig, get_signal, protective_stop, indicators
 AUTO_TASK=None
 AUTO_LOCK=asyncio.Lock()
 AUTO_TIMEFRAME=StrategyConfig().timeframe
@@ -943,7 +943,31 @@ async def auto_cycle():
     spread=float(q["ask"])-float(q["bid"])
     signal=await asyncio.to_thread(get_signal,frame,StrategyConfig(),spread,_news_blocked(),trend_frame)
     stamp=float(signal.candle_time or 0)
-    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,"last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,"ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,"adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},"last_error":None,"last_strategy_data_error":None})
+    # Safe, read-only diagnostics for the actual M5 entry and M15 trend gates.
+    cfg=StrategyConfig()
+    m5=indicators(frame,cfg).iloc[-1]
+    m15=indicators(trend_frame,cfg).iloc[-1]
+    m15_close=float(m15["close"])
+    m15_fast=float(m15["ema_fast"]); m15_slow=float(m15["ema_slow"]); m15_trend=float(m15["ema_trend"])
+    m15_bias=("BUY" if m15_fast>m15_slow and m15_close>m15_trend else
+              "SELL" if m15_fast<m15_slow and m15_close<m15_trend else "HOLD")
+    m5_open=float(m5["open"]); m5_close=float(m5["close"])
+    m5_fast=float(m5["ema_fast"]); m5_slow=float(m5["ema_slow"])
+    m5_atr=float(m5["atr"])
+    distance_atr=(abs(m5_close-m5_fast)/m5_atr) if m5_atr>0 else None
+    symbol_positions=[p for p in rows if str(p.get("symbol",""))==symbol]
+    AUTO_STATE.update({"last_cycle_at":datetime.now(timezone.utc).isoformat(),"last_bar_time":stamp,
+      "last_signal":{"direction":signal.direction,"reason":signal.reason,"close":signal.close,
+        "ema_fast":signal.ema_fast,"ema_slow":signal.ema_slow,"ema_trend":signal.ema_trend,
+        "adx":signal.adx,"atr":signal.atr,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit},
+      "last_diagnostics":{"m15_bias":m15_bias,"m15_close":m15_close,"m15_ema_fast":m15_fast,
+        "m15_ema_slow":m15_slow,"m15_ema200":m15_trend,"m5_open":m5_open,"m5_close":m5_close,
+        "m5_ema20":m5_fast,"m5_ema50":m5_slow,"m5_atr":m5_atr,
+        "m5_distance_from_ema20_atr":distance_atr,"m5_bull_body":m5_close>m5_open,
+        "m5_bear_body":m5_close<m5_open,"spread":spread,
+        "symbol_open_positions":len(symbol_positions),
+        "fresh_tick_age_seconds":round(time.time()-float(q.get("received_at",time.time())),2)},
+      "last_error":None,"last_strategy_data_error":None})
     if stamp<=0 or stamp==AUTO_STATE.get("last_processed_candle"):
         AUTO_STATE["last_action"]="WAITING_FOR_NEW_CLOSED_CANDLE"; return
     AUTO_STATE["last_processed_candle"]=stamp
@@ -1053,6 +1077,8 @@ async def public_auto_health():
         "last_signal_ema_trend":signal.get("ema_trend"),
         "last_signal_adx":signal.get("adx"),
         "last_signal_atr":signal.get("atr"),
+        "diagnostics":AUTO_STATE.get("last_diagnostics"),
+        "entry_blocker":str(AUTO_STATE.get("last_action") or "UNKNOWN")[:100],
         "adx_threshold":StrategyConfig().adx_min,
         "cross_lookback_bars":StrategyConfig().cross_lookback_bars,
         "timeframe":StrategyConfig().timeframe,

@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
     private boolean pendingRefresh = false;
     private volatile long lastAccountRefreshAt = 0L;
     private volatile boolean accountRefreshInFlight = false;
+    private volatile long lastCloudStatusRefreshAt = 0L;
     private boolean activityResumed = false;
     private int fetchSequence = 0;
     private String feedMessage = "Σύνδεση με την τιμή χρυσού…";
@@ -401,9 +402,8 @@ public class MainActivity extends Activity {
                         feedMessage = "VANTAGE MT5 DEMO · LIVE BID/ASK TICK · " + effectiveTimeframe +
                                 ("tickerall_live_ticks".equals(candleData.optString("source")) ? " · LIVE TICK CHART" : "") + " · " +
                                 new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(receivedAt));
-                        aiSignal = GoldAiAgent.Signal.waiting("CLOUD EMA 20/50/200 · M15 · ADX14 · ATR14 · DEMO");
                         engine.onQuote(latest);
-                        if (aiEngineStarted) evaluateAutoSignal(receivedAt);
+                        if (mt5Status != null && mt5Status.startsWith("DEMO")) evaluateAutoSignal(receivedAt);
                         render();
                     });
                 } catch (Exception e) {
@@ -955,7 +955,7 @@ public class MainActivity extends Activity {
         TextView confidenceLabel=text("ΕΜΠΙΣΤΟΣΥΝΗ AI",9,MUTED,true);
         confidenceLabel.setGravity(Gravity.RIGHT);
         confidenceBox.addView(confidenceLabel);
-        TextView confidence = text(aiSignal.ready ? aiSignal.confidence + "%" : "—", 22, signalColor, true);
+        TextView confidence = text(aiSignal.ready && aiSignal.confidence >= 0 ? aiSignal.confidence + "%" : "—", 22, signalColor, true);
         confidence.setGravity(Gravity.RIGHT);
         confidenceBox.addView(confidence);
         signalHead.addView(confidenceBox,new LinearLayout.LayoutParams(0,-2,1));
@@ -965,11 +965,16 @@ public class MainActivity extends Activity {
         agent.addView(reason);
         LinearLayout signalLevels = new LinearLayout(this);
         signalLevels.setOrientation(LinearLayout.HORIZONTAL);
-        boolean showLevels=aiSignal.ready && ("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
-                && aiSignal.entry>0 && aiSignal.stopLoss>0 && aiSignal.takeProfit>0;
-        signalLevels.addView(metric("ENTRY",showLevels?String.format(Locale.US,"%,.2f",aiSignal.entry):"—",0xFF75C9FF),weight());
-        signalLevels.addView(metric("STOP LOSS",showLevels?String.format(Locale.US,"%,.2f",aiSignal.stopLoss):"—",RED),weight());
-        signalLevels.addView(metric("TAKE PROFIT",showLevels?String.format(Locale.US,"%,.2f",aiSignal.takeProfit):"—",GREEN),weight());
+        JSONObject displayedPosition = mt5OpenPositions.length() > 0 ? mt5OpenPositions.optJSONObject(0) : null;
+        boolean hasBrokerPosition = displayedPosition != null;
+        double displayEntry = hasBrokerPosition ? displayedPosition.optDouble("entryPrice", displayedPosition.optDouble("price_open", 0)) : aiSignal.entry;
+        double displaySl = hasBrokerPosition ? displayedPosition.optDouble("stopLoss", displayedPosition.optDouble("sl", 0)) : aiSignal.stopLoss;
+        double displayTp = hasBrokerPosition ? displayedPosition.optDouble("takeProfit", displayedPosition.optDouble("tp", 0)) : aiSignal.takeProfit;
+        boolean showLevels=(hasBrokerPosition || aiSignal.ready) && ("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
+                && displayEntry>0 && displaySl>0 && displayTp>0;
+        signalLevels.addView(metric(hasBrokerPosition ? "BROKER ENTRY" : "SIGNAL PRICE",showLevels?String.format(Locale.US,"%,.2f",displayEntry):"—",0xFF75C9FF),weight());
+        signalLevels.addView(metric("STOP LOSS",showLevels?String.format(Locale.US,"%,.2f",displaySl):"—",RED),weight());
+        signalLevels.addView(metric("TAKE PROFIT",showLevels?String.format(Locale.US,"%,.2f",displayTp):"—",GREEN),weight());
         agent.addView(signalLevels);
         LinearLayout evaluation = new LinearLayout(this);
         evaluation.setOrientation(LinearLayout.HORIZONTAL);
@@ -1457,29 +1462,69 @@ public class MainActivity extends Activity {
         render();
     }
 
-    // The cloud is the single source of truth for EMA AUTO status and decisions.
+    // Cloud DEMO is the single source of truth for the live signal and its blockers.
+    // Polling this display endpoint never starts/stops AUTO and never places an order.
     private void evaluateAutoSignal(long quoteTimestamp) {
-        if (!aiEngineStarted) return;
+        long now = System.currentTimeMillis();
+        if (now - lastCloudStatusRefreshAt < 5000L) return;
+        lastCloudStatusRefreshAt = now;
         new Thread(() -> {
             try {
                 JSONObject status = new Mt5DemoClient(mt5BaseUrl, mt5Token).autoStatus();
                 JSONObject signal = status.optJSONObject("last_signal");
-                String detail = "CLOUD EMA AUTO · " + status.optString("strategy", "EMA_CROSSOVER")
-                        + " · " + status.optString("timeframe", "M15")
-                        + " · EMA " + status.optInt("fast_ema", 20) + "/" + status.optInt("slow_ema", 50)
-                        + "/" + status.optInt("trend_ema", 200)
-                        + " · ADX>" + status.optDouble("adx_min", 20)
-                        + " · SL " + status.optDouble("sl_atr", 1.5) + " ATR"
-                        + " · TP " + status.optDouble("tp_atr", 3.0) + " ATR"
-                        + " · " + (status.optBoolean("running") ? "RUNNING" : "STOPPED")
-                        + (signal == null ? "" : " · " + signal.optString("direction", "HOLD")
-                        + " · " + signal.optString("reason", ""))
-                        + (status.optString("last_action").isEmpty() ? "" : " · " + status.optString("last_action"));
-                runOnUiThread(() -> { if (aiEngineStarted) setAutoDiagnostic(detail); });
+                JSONObject diagnostics = status.optJSONObject("last_diagnostics");
+                String side = signal == null ? "HOLD" : signal.optString("direction", "HOLD");
+                String reason = signal == null ? "Ο server δεν έχει ακόμη ολοκληρωμένο σήμα." : signal.optString("reason", "Αναμονή νέου κλεισμένου κεριού.");
+                StringBuilder detail = new StringBuilder("CLOUD DEMO · ")
+                        .append(status.optBoolean("running") ? "AUTO RUNNING" : "AUTO STOPPED")
+                        .append(" · ").append(status.optString("timeframe", "M5"))
+                        .append(" / ").append(status.optString("trend_timeframe", "M15"))
+                        .append(" · ").append(status.optString("last_action", "WAITING"));
+                if (diagnostics != null) {
+                    detail.append(" · M15 ").append(diagnostics.optString("m15_bias", "—"))
+                            .append(" · M5 close ").append(String.format(Locale.US, "%.2f", diagnostics.optDouble("m5_close", 0)))
+                            .append(" · EMA20 ").append(String.format(Locale.US, "%.2f", diagnostics.optDouble("m5_ema20", 0)))
+                            .append(" · EMA50 ").append(String.format(Locale.US, "%.2f", diagnostics.optDouble("m5_ema50", 0)))
+                            .append(" · ADX ").append(String.format(Locale.US, "%.1f", signal == null ? 0 : signal.optDouble("adx", 0)))
+                            .append(" · απόσταση EMA20 ").append(String.format(Locale.US, "%.2f", diagnostics.optDouble("m5_distance_from_ema20_atr", 0))).append(" ATR");
+                }
+                final String diagnosticText = detail.toString();
+                final String finalSide = side;
+                final String finalReason = reason;
+                final double signalPrice = signal == null ? 0 : signal.optDouble("close", 0);
+                final double signalSl = signal == null ? 0 : signal.optDouble("stop_loss", 0);
+                final double signalTp = signal == null ? 0 : signal.optDouble("take_profit", 0);
+                runOnUiThread(() -> {
+                    aiEngineStarted = status.optBoolean("running", false);
+                    JSONObject brokerPosition = mt5OpenPositions.length() > 0 ? mt5OpenPositions.optJSONObject(0) : null;
+                    if (brokerPosition != null) {
+                        String brokerSide = brokerPosition.optString("side",
+                                brokerPosition.optInt("type", 0) == 0 ? "BUY" : "SELL").toUpperCase(Locale.US);
+                        double entry = brokerPosition.optDouble("entryPrice", brokerPosition.optDouble("price_open", 0));
+                        double sl = brokerPosition.optDouble("stopLoss", brokerPosition.optDouble("sl", 0));
+                        double tp = brokerPosition.optDouble("takeProfit", brokerPosition.optDouble("tp", 0));
+                        aiSignal = GoldAiAgent.Signal.cloud(brokerSide,
+                                "ΑΝΟΙΧΤΗ ΘΕΣΗ BROKER #" + brokerPosition.optString("ticket", "—")
+                                        + " · πραγματικές τιμές MT5 · " + finalReason,
+                                -1, entry, sl, tp);
+                    } else if ("BUY".equals(finalSide) || "SELL".equals(finalSide)) {
+                        double executableReference = price > 0 ? price : signalPrice;
+                        aiSignal = GoldAiAgent.Signal.cloud(finalSide, finalReason, -1,
+                                executableReference, signalSl, signalTp);
+                    } else {
+                        aiSignal = GoldAiAgent.Signal.waiting(finalReason);
+                    }
+                    setAutoDiagnostic(diagnosticText);
+                    render();
+                });
             } catch (Exception e) {
-                runOnUiThread(() -> { if (aiEngineStarted) setAutoDiagnostic("EMA CLOUD STATUS ERROR · " + e.getMessage()); });
+                runOnUiThread(() -> {
+                    aiSignal = GoldAiAgent.Signal.waiting("Αδυναμία ανάγνωσης Cloud DEMO: " + e.getMessage());
+                    setAutoDiagnostic("EMA CLOUD STATUS ERROR · " + e.getMessage());
+                    render();
+                });
             }
-        }).start();
+        }, "DioMasteR-cloud-signal").start();
     }
 
     private String cleanBridgeToken(String value) {

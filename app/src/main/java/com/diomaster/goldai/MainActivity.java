@@ -1241,6 +1241,9 @@ public class MainActivity extends Activity {
             }
             Button reloadHistory=actionButton("↻ ΑΝΑΝΕΩΣΗ MT5 ΙΣΤΟΡΙΚΟΥ",0xFF292C34,this::loadMt5AccountData);
             history.addView(reloadHistory);
+            Button resetKill=actionButton("🔐 ΕΠΑΝΑΦΟΡΑ KILL SWITCH · TOKEN",0xFFB58A35,this::promptKillSwitchReset);
+            history.addView(resetKill);
+            history.addView(text("Για ξεμπλοκάρισμα μετά από timeout. Το token ζητείται κάθε φορά και δεν αποθηκεύεται από αυτό το κουμπί. Μετά την επαναφορά απαιτείται νέος έλεγχος broker πριν ξεκινήσει το AUTO.",10,MUTED,false));
         }
         root.addView(history);
         addSpace(10);
@@ -1485,6 +1488,76 @@ public class MainActivity extends Activity {
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
         return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
     }
+    private void promptKillSwitchReset() {
+        if (mt5BaseUrl == null || !mt5BaseUrl.startsWith("https://")) {
+            Toast.makeText(this, "Δεν υπάρχει έγκυρο HTTPS bridge URL.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        EditText tokenInput = new EditText(this);
+        tokenInput.setSingleLine(true);
+        tokenInput.setTextColor(Color.WHITE);
+        tokenInput.setHintTextColor(MUTED);
+        tokenInput.setHint("DIO_BRIDGE_TOKEN");
+        tokenInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(8), dp(4), dp(8), dp(4));
+        form.addView(tokenInput);
+        TextView note = text("Πληκτρολόγησε το DIO_BRIDGE_TOKEN από τα Render secrets. Χρησιμοποιείται μόνο για αυτή την επαναφορά και δεν αποθηκεύεται. Δεν είναι το TickerAll API key.", 11, MUTED, false);
+        note.setPadding(0, dp(8), 0, 0);
+        form.addView(note);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Επαναφορά Kill Switch · MT5 DEMO")
+                .setMessage("Η ενέργεια δεν ανοίγει συναλλαγές και δεν αλλάζει τη στρατηγική. Ο server πρέπει να επιβεβαιώσει ότι το AUTO είναι σταματημένο.")
+                .setView(form)
+                .setNegativeButton("Ακύρωση", null)
+                .setPositiveButton("ΕΠΑΝΑΦΟΡΑ", null)
+                .create();
+        dialog.setOnShowListener(v -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            String secret = cleanBridgeToken(tokenInput.getText().toString());
+            if (secret.length() < 16) {
+                tokenInput.setError("Χρειάζεται έγκυρο bridge token.");
+                return;
+            }
+            dialog.dismiss();
+            autoExecutionMessage = "ΑΠΟΣΤΟΛΗ RESET KILL SWITCH · ΕΛΕΓΧΟΣ DEMO…";
+            logAgentActivity("CLOUD AUTO", "KILL_RESET_REQUESTED", "Χειροκίνητη επαναφορά από το Ιστορικό");
+            render();
+            new Thread(() -> {
+                String result;
+                boolean ok = false;
+                try {
+                    Mt5DemoClient client = new Mt5DemoClient(mt5BaseUrl, secret);
+                    JSONObject reset = client.resetKillSwitch();
+                    JSONObject status = client.autoStatus();
+                    boolean killActive = status.optBoolean("kill_switch", false);
+                    boolean running = status.optBoolean("running", false);
+                    if (killActive) throw new IllegalStateException("Ο server εξακολουθεί να αναφέρει ενεργό Kill Switch.");
+                    if (running) throw new IllegalStateException("Το AUTO εμφανίζεται ήδη ενεργό· δεν έγινε νέα εκκίνηση.");
+                    result = reset.optString("message", "Kill Switch reset επιβεβαιώθηκε.");
+                    result += " · AUTO παραμένει STOPPED. Κάνε START AUTO αφού ολοκληρωθεί ο έλεγχος broker.";
+                    ok = true;
+                } catch (Exception e) {
+                    result = "RESET FAILED · " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                }
+                final String message = result;
+                final boolean confirmed = ok;
+                runOnUiThread(() -> {
+                    autoExecutionMessage = message;
+                    if (confirmed) {
+                        aiEngineStarted = false;
+                        logAgentActivity("CLOUD AUTO", "KILL_SWITCH_RESET_CONFIRMED", "Ο server επιβεβαίωσε kill_switch=false · AUTO stopped");
+                    } else {
+                        logAgentActivity("CLOUD AUTO", "KILL_SWITCH_RESET_FAILED", message);
+                    }
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    render();
+                });
+            }, "DioMasteR-kill-reset").start();
+        }));
+        dialog.show();
+    }
+
     private void configureMt5Bridge() {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);

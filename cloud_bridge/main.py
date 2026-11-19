@@ -913,9 +913,10 @@ async def manage_bot_positions(account_id, symbol, rows):
                 risk_map[str(ticket)] = float(risk)
             direction = 1.0 if side == "BUY" else -1.0
             r_multiple = ((exit_price - entry) * direction) / float(risk)
-            stage = ("TRAILING" if r_multiple >= 1.5 else
-                     "PROFIT_LOCK" if r_multiple >= 1.2 else
-                     "BREAK_EVEN" if r_multiple >= 0.8 else "INITIAL_SL")
+            stage = ("ADVANCED_TRAILING" if r_multiple >= 1.5 else
+                     "TRAILING" if r_multiple >= 1.0 else
+                     "PROFIT_LOCK" if r_multiple >= 0.70 else
+                     "BREAK_EVEN" if r_multiple >= 0.39 else "INITIAL_SL")
             stages = AUTO_STATE.setdefault("protection_stage_by_ticket", {})
             if stages.get(str(ticket)) != stage:
                 logger.info("EMA_PROTECTION_STAGE ticket=%s side=%s stage=%s r=%.4f initial_risk=%s current_sl=%s",

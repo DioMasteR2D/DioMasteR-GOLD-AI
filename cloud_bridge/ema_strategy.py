@@ -101,12 +101,17 @@ def protective_stop(side: str, entry_price: float, current_sl: float,
     r_multiple = favorable / risk
     # Avoid floating-point boundary misses at exact R thresholds (e.g. 3.6 / 3.0).
     candidate = None
-    if r_multiple + 1e-9 >= 0.8:
+    # Profit protection schedule requested for existing positions only:
+    # 0.39R -> break-even; 0.70R -> lock +0.15R;
+    # 1.00R -> lock +0.35R; 1.50R -> trail 0.80R behind market.
+    if r_multiple + 1e-9 >= 0.39:
         candidate = entry_price
-    if r_multiple + 1e-9 >= 1.2:
-        candidate = entry_price + direction * 0.3 * risk
-    if r_multiple + 1e-9 >= 1.5:
-        candidate = market_exit_price - direction * 0.8 * risk
+    if r_multiple + 1e-9 >= 0.70:
+        candidate = entry_price + direction * 0.15 * risk
+    if r_multiple + 1e-9 >= 1.00:
+        candidate = entry_price + direction * 0.35 * risk
+    if r_multiple + 1e-9 >= 1.50:
+        candidate = market_exit_price - direction * 0.80 * risk
     if candidate is None:
         return None
     # Round away from market so the stop remains on the protective side.

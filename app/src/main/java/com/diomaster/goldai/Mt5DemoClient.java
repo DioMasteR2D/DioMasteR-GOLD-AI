@@ -79,6 +79,7 @@ public final class Mt5DemoClient {
     public JSONObject autoStart() throws Exception { return request("POST", "/v1/auto/start", new JSONObject()); }
     public JSONObject autoStop() throws Exception { return request("POST", "/v1/auto/stop", new JSONObject()); }
     public JSONObject autoStatus() throws Exception { return request("GET", "/v1/auto/status", null); }
+    public JSONObject resetKillSwitch() throws Exception { return request("POST", "/v1/auto/kill/reset", new JSONObject()); }
     public JSONObject order(String symbol, String side, double volume, double sl, double tp) throws Exception {
         return order(symbol, side, volume, sl, tp, "AUTO");
     }

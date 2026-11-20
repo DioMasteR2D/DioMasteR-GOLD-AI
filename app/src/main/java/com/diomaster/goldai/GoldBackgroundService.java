@@ -29,6 +29,7 @@ public final class GoldBackgroundService extends Service {
     private long lastCandleFetchAt = 0L;
     private long nextPollDelayMs = 20000L;
     private boolean initialized = false;
+    private boolean cloudAutoRunning = false;
     private PowerManager.WakeLock wakeLock;
 
     @Override public void onCreate() {
@@ -86,6 +87,14 @@ public final class GoldBackgroundService extends Service {
             JSONObject status = client.status();
             if (!"DEMO".equals(status.optString("account_mode")) || !status.optBoolean("terminal_connected"))
                 throw new IllegalStateException("MT5 DEMO αποσυνδεδεμένο");
+            // Mirror the cloud AUTO state without starting/stopping it from Android.
+            try {
+                JSONObject auto = client.autoStatus();
+                cloudAutoRunning = auto.optBoolean("running", false);
+                getSharedPreferences("diomaster_background_monitor", MODE_PRIVATE).edit()
+                        .putBoolean("cloud_auto_running", cloudAutoRunning)
+                        .putLong("cloud_auto_checked_at", System.currentTimeMillis()).apply();
+            } catch (Exception ignored) { /* market monitoring remains independent */ }
             JSONObject quote = client.quote(symbol);
             double bid = quote.optDouble("bid", 0);
             double ask = quote.optDouble("ask", 0);
@@ -180,7 +189,7 @@ public final class GoldBackgroundService extends Service {
             nextPollDelayMs = 20000L;
             initialized = true;
             getSharedPreferences("diomaster_background_monitor", MODE_PRIVATE).edit().putBoolean("offline", false).apply();
-            updateForeground("Συνδεδεμένο · " + symbol + " · " + positions.length() + " ανοιχτές θέσεις · LIVE TickerAll");
+            updateForeground("Συνδεδεμένο · " + symbol + " · " + positions.length() + " θέσεις · LIVE" + (cloudAutoRunning ? " · CLOUD AUTO ΕΝΕΡΓΟ" : ""));
             getSharedPreferences("diomaster_mt5_demo", MODE_PRIVATE).edit()
                     .putString("status", "DEMO · TickerAll LIVE").apply();
         } catch (Exception e) {
@@ -219,7 +228,9 @@ public final class GoldBackgroundService extends Service {
 
     private Notification buildStatus(String text) {
         Intent open = new Intent(this, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(this, 0, open,
+        // Reuse the existing app task/activity when the persistent notification is tapped.
+        open.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 7301, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
@@ -250,6 +261,13 @@ public final class GoldBackgroundService extends Service {
                 .setAutoCancel(true).setCategory(Notification.CATEGORY_STATUS);
         ((NotificationManager)getSystemService(NOTIFICATION_SERVICE))
                 .notify((int)(System.currentTimeMillis() & 0x7fffffff), b.build());
+    }
+
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        // Keep the foreground market monitor alive when the user swipes the app task away.
+        handler.removeCallbacks(pollLoop);
+        handler.post(pollLoop);
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override public void onDestroy() {

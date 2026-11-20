@@ -86,7 +86,7 @@ def test_profit_protection_schedule_buy(market, expected_sl):
 def test_profit_protection_schedule_sell(market, expected_sl):
     result = protective_stop(
         "SELL", 100.0, 110.0, 70.0, market, 0.01,
-        initial_risk=10.0,
+        initial_risk=10.0, be_profit_price_distance=0.30,
     )
     assert result == pytest.approx(expected_sl)
 

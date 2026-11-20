@@ -842,7 +842,7 @@ public class MainActivity extends Activity {
         instrument.setOrientation(LinearLayout.HORIZONTAL);
         instrument.setGravity(Gravity.CENTER_VERTICAL);
         instrument.setPadding(dp(10),dp(9),dp(10),dp(9));
-        instrument.setBackground(goldShell(0xFF090909,0xFFFFC83D));
+        instrument.setBackground(round(0xFF0C1722,22,0xFFB98B32));
         TextView goldIcon = text("◆",30,GOLD,true);
         goldIcon.setPadding(dp(4),0,dp(10),0);
         instrument.addView(goldIcon);
@@ -882,7 +882,7 @@ public class MainActivity extends Activity {
             chip.setPadding(dp(8),dp(14),dp(8),dp(14));
             chip.setClickable(true);
             chip.setFocusable(true);
-            chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+            chip.setBackground(selectedTimeframe.equals(frame)?round(GOLD,12,0xFFFFE18A):round(0xFF111B27,12,0xFF34485A));
             chip.setOnClickListener(v->{
                 if (!tf.equals(selectedTimeframe)) {
                     selectedTimeframe=tf;
@@ -896,7 +896,7 @@ public class MainActivity extends Activity {
                             TextView item=(TextView)child;
                             boolean active=tf.equals(item.getText().toString());
                             item.setTextColor(active?Color.BLACK:0xFFE8E8EA);
-                            item.setBackground(active?round(GOLD,9,0xFFFFE18A):round(0xFF171A20,9,0xFF343944));
+                            item.setBackground(active?round(GOLD,12,0xFFFFE18A):round(0xFF111B27,12,0xFF34485A));
                         }
                     }
                     fetchPrice(true);
@@ -928,20 +928,28 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA 20/50",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
-        // Keep the four existing cards at their original width; place the live cloud ADX
-        // directly beneath them so it remains readable on narrow phone screens.
+        // Full-width ADX status bar, sourced from the cloud strategy's last closed M5 candle.
         LinearLayout adxRow = new LinearLayout(this);
         adxRow.setOrientation(LinearLayout.HORIZONTAL);
-        adxRow.setGravity(Gravity.LEFT);
-        String adxText = Double.isFinite(latestCloudAdx)
-                ? String.format(Locale.US, "%.2f · όριο 15", latestCloudAdx) : "—";
-        int adxColor = Double.isFinite(latestCloudAdx) && latestCloudAdx > 15.0 ? GREEN : GOLD;
-        adxRow.addView(metric("ADX (14) · M5", adxText, adxColor), weight());
-        adxRow.addView(new View(this), weight());
-        adxRow.addView(new View(this), weight());
-        adxRow.addView(new View(this), weight());
+        adxRow.setGravity(Gravity.CENTER_VERTICAL);
+        adxRow.setPadding(dp(14), dp(11), dp(14), dp(11));
+        GradientDrawable adxFace = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF30240D, 0xFF111923, 0xFF0B1119});
+        adxFace.setCornerRadius(dp(17));
+        adxFace.setStroke(dp(2), 0xFFE8B84B);
+        adxRow.setBackground(adxFace);
+        TextView adxTitle = text("◈  ADX (14)", 13, 0xFFFFD36A, true);
+        adxRow.addView(adxTitle, new LinearLayout.LayoutParams(0, -2, 1.1f));
+        TextView adxValue = text(Double.isFinite(latestCloudAdx)
+                ? String.format(Locale.US, "%.2f", latestCloudAdx) : "—",
+                25, Double.isFinite(latestCloudAdx) && latestCloudAdx > 15.0 ? GREEN : GOLD, true);
+        adxValue.setGravity(Gravity.CENTER);
+        adxRow.addView(adxValue, new LinearLayout.LayoutParams(0, -2, 0.8f));
+        TextView adxLimit = text("Όριο εισόδου: 15", 11, 0xFFB8C2CE, true);
+        adxLimit.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        adxRow.addView(adxLimit, new LinearLayout.LayoutParams(0, -2, 1.1f));
         LinearLayout.LayoutParams adxParams = new LinearLayout.LayoutParams(-1, -2);
-        adxParams.setMargins(0, dp(6), 0, 0);
+        adxParams.setMargins(0, dp(8), 0, 0);
         market.addView(adxRow, adxParams);
         TextView chartNote = text(brokerChartActive ? "AUTO: EMA 20/50 crossover · EMA 200 trend · ADX 14 · SL 1.5×ATR · TP 3×ATR · M15 DEMO." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
@@ -1820,9 +1828,9 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(16), dp(16), dp(16));
         GradientDrawable shell = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF1A202B, 0xFF11151D, 0xFF151923});
-        shell.setCornerRadius(dp(22));
-        shell.setStroke(dp(1), 0xFF554522);
+                new int[]{0xFF1A2634, 0xFF0E151F, 0xFF080E16});
+        shell.setCornerRadius(dp(24));
+        shell.setStroke(dp(1), 0xFF34495D);
         box.setBackground(shell);
         box.setElevation(dp(3));
         return box;
@@ -1832,8 +1840,12 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(12), dp(13), dp(12), dp(13));
-        box.setBackground(goldShell(0xFF111113,0xFF493918));
-        box.setElevation(dp(2));
+        GradientDrawable metricFace = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF1B2735, 0xFF101923, 0xFF080E16});
+        metricFace.setCornerRadius(dp(18));
+        metricFace.setStroke(dp(1), 0xFF34485A);
+        box.setBackground(metricFace);
+        box.setElevation(dp(3));
         TextView title = text(label, 9, 0xFFB8AA8E, true);
         title.setLetterSpacing(0.045f);
         box.addView(title);

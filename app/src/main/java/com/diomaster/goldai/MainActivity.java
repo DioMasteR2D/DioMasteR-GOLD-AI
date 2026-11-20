@@ -9,6 +9,11 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
+import android.graphics.ColorFilter;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.Drawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -33,6 +38,56 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends Activity {
+    // Decorative gold light trails for the premium header. Purely visual; no status or trading logic.
+    private static final class GoldHeaderGlow extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        @Override public void draw(Canvas canvas) {
+            RectF b = new RectF(getBounds());
+            float w = b.width(), h = b.height();
+            paint.setStyle(Paint.Style.FILL);
+            paint.setShader(new LinearGradient(0, 0, w, h,
+                    new int[]{0xFF101B29, 0xFF080D15, 0xFF05080E}, null, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(b, 25f, 25f, paint);
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            paint.setColor(0xFFB98B32);
+            canvas.drawRoundRect(new RectF(b.left+1,b.top+1,b.right-1,b.bottom-1),25f,25f,paint);
+            canvas.save();
+            canvas.clipRect(b.left+w*.62f,b.top,b.right,b.bottom);
+            Path glow = new Path();
+            glow.moveTo(b.left+w*.55f,b.top+h*.92f);
+            glow.cubicTo(b.left+w*.76f,b.top+h*.78f,b.left+w*.78f,b.top+h*.38f,b.left+w*1.04f,b.top+h*.16f);
+            glow.cubicTo(b.left+w*.88f,b.top+h*.34f,b.left+w*.78f,b.top+h*.62f,b.left+w*.61f,b.top+h*.78f);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(Math.max(2f,h*.018f));
+            paint.setShader(new LinearGradient(b.left+w*.62f,b.top+h*.9f,b.right,b.top+h*.1f,
+                    new int[]{0x00E8B84B,0x99E8B84B,0xFFE8B84B,0x55FFF0B0},null,Shader.TileMode.CLAMP));
+            canvas.drawPath(glow,paint);
+            Path second = new Path();
+            second.moveTo(b.left+w*.67f,b.top+h*.96f);
+            second.cubicTo(b.left+w*.83f,b.top+h*.74f,b.left+w*.91f,b.top+h*.50f,b.right+w*.08f,b.top+h*.28f);
+            paint.setStrokeWidth(Math.max(1.2f,h*.009f));
+            paint.setShader(new LinearGradient(b.left+w*.65f,b.top+h*.95f,b.right,b.top+h*.2f,
+                    new int[]{0x00E8B84B,0x88E8B84B,0xFFE8B84B},null,Shader.TileMode.CLAMP));
+            canvas.drawPath(second,paint);
+            Path third = new Path();
+            third.moveTo(b.left+w*.72f,b.top+h*.98f);
+            third.cubicTo(b.left+w*.87f,b.top+h*.78f,b.left+w*.95f,b.top+h*.62f,b.right+w*.05f,b.top+h*.43f);
+            paint.setStrokeWidth(Math.max(1f,h*.006f));
+            paint.setShader(new LinearGradient(b.left+w*.7f,b.top+h*.95f,b.right,b.top+h*.35f,
+                    new int[]{0x00E8B84B,0x66E8B84B,0xCCFFF0B0},null,Shader.TileMode.CLAMP));
+            canvas.drawPath(third,paint);
+            canvas.restore();
+            paint.setShader(null);
+            paint.setStyle(Paint.Style.FILL);
+        }
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }
+        @Override public void setColorFilter(ColorFilter colorFilter) { paint.setColorFilter(colorFilter); invalidateSelf(); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
     private final int BG = 0xFF080A0F;
     private final int PANEL = 0xFF121722;
     private final int GOLD = 0xFFE8B84B;
@@ -739,11 +794,7 @@ public class MainActivity extends Activity {
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
         hero.setPadding(dp(10),dp(10),dp(10),dp(10));
-        GradientDrawable heroFace = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF101B29, 0xFF080D15, 0xFF05080E});
-        heroFace.setCornerRadius(dp(25));
-        heroFace.setStroke(dp(2), 0xFFB98B32);
-        hero.setBackground(heroFace);
+        hero.setBackground(new GoldHeaderGlow());
         hero.setElevation(dp(5));
         ImageView headerArt = new ImageView(this);
         headerArt.setImageResource(R.drawable.lion_crown_header);

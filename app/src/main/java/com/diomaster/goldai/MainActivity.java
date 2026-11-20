@@ -1558,7 +1558,7 @@ public class MainActivity extends Activity {
         if (value == null) return "";
         // Accept either a raw token or a pasted "Bearer <token>" header value.
         String cleaned = value.trim().replaceFirst("(?i)^Bearer\\s+", "");
-        return cleaned.replaceAll("[\\\\r\\\\n\\\\t ]+", "");
+        return cleaned.replaceAll("[\\r\\n\\t ]+", "");
     }
     private void promptKillSwitchReset() {
         if (mt5BaseUrl == null || !mt5BaseUrl.startsWith("https://")) {

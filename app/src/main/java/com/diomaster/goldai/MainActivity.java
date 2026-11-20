@@ -738,36 +738,42 @@ public class MainActivity extends Activity {
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.HORIZONTAL);
         hero.setGravity(Gravity.CENTER_VERTICAL);
-        hero.setPadding(dp(7),dp(7),dp(9),dp(7));
-        hero.setBackground(goldShell(0xFF050506,0xFFFFC64A));
+        hero.setPadding(dp(10),dp(10),dp(10),dp(10));
+        GradientDrawable heroFace = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF101B29, 0xFF080D15, 0xFF05080E});
+        heroFace.setCornerRadius(dp(25));
+        heroFace.setStroke(dp(2), 0xFFB98B32);
+        hero.setBackground(heroFace);
+        hero.setElevation(dp(5));
         ImageView headerArt = new ImageView(this);
         headerArt.setImageResource(R.drawable.lion_crown_header);
         headerArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         headerArt.setAdjustViewBounds(true);
-        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(126),dp(126)));
+        headerArt.setBackground(round(0xFF090F18,18,0xFFB98B32));
+        hero.addView(headerArt,new LinearLayout.LayoutParams(dp(104),dp(112)));
         LinearLayout brandText=new LinearLayout(this);
         brandText.setOrientation(LinearLayout.VERTICAL);
-        brandText.setGravity(Gravity.CENTER);
-        TextView crownMark=text("♛",27,0xFFFFD45A,true);
-        crownMark.setGravity(Gravity.CENTER);
+        brandText.setGravity(Gravity.CENTER_VERTICAL);
+        TextView crownMark=text("♛",23,0xFFFFD45A,true);
+        crownMark.setGravity(Gravity.LEFT);
         brandText.addView(crownMark);
-        TextView brandTitle=text("DioMasteR2D",20,0xFFFFD45A,true);
-        brandTitle.setGravity(Gravity.CENTER);
+        TextView brandTitle=text("DioMasteR2D",19,Color.WHITE,true);
+        brandTitle.setGravity(Gravity.LEFT);
         brandTitle.setLetterSpacing(0.015f);
         brandText.addView(brandTitle);
-        TextView goldTitle=text("GOLD AI",30,0xFFFFD45A,true);
-        goldTitle.setGravity(Gravity.CENTER);
+        TextView goldTitle=text("GOLD AI",31,0xFFFFD45A,true);
+        goldTitle.setGravity(Gravity.LEFT);
         brandText.addView(goldTitle);
         TextView terminalTitle=text("TRADING TERMINAL",10,0xFFFFE6A0,true);
-        terminalTitle.setGravity(Gravity.CENTER);
+        terminalTitle.setGravity(Gravity.LEFT);
         terminalTitle.setLetterSpacing(0.09f);
         brandText.addView(terminalTitle);
-        TextView brandSub=text("AI TRADER  ·  MT5 DEMO  ·  XAUUSD",8,0xFFFFD98A,true);
-        brandSub.setGravity(Gravity.CENTER);
+        TextView brandSub=text("AI TRADER  ·  MT5 DEMO  ·  XAUUSD",8,0xFFE4EAF2,true);
+        brandSub.setGravity(Gravity.LEFT);
         brandSub.setPadding(0,dp(4),0,0);
         brandText.addView(brandSub);
         LinearLayout.LayoutParams brandLp=new LinearLayout.LayoutParams(0,-2,1);
-        brandLp.leftMargin=dp(2);
+        brandLp.leftMargin=dp(12);
         hero.addView(brandText,brandLp);
         LinearLayout heroRight=new LinearLayout(this);
         heroRight.setOrientation(LinearLayout.VERTICAL);
@@ -776,14 +782,15 @@ public class MainActivity extends Activity {
         TextView statusPill=text(liveHeader?"● LIVE":"OFFLINE",10,liveHeader?0xFF062416:0xFFFFE5A3,true);
         statusPill.setGravity(Gravity.CENTER);
         statusPill.setPadding(dp(10),dp(8),dp(10),dp(8));
-        statusPill.setBackground(round(liveHeader?0xFF16E68A:0xFF302515,18,liveHeader?GREEN:GOLD));
+        statusPill.setBackground(round(liveHeader?0xFF063B2A:0xFF302515,20,liveHeader?0xFF00E68A:GOLD));
+        statusPill.setElevation(dp(4));
         statusPill.setOnClickListener(v -> configureMt5Bridge());
         heroRight.addView(statusPill);
         TextView version=text("v2.0",12,0xFFFFE6A0,true);
         version.setPadding(0,dp(10),0,0);
         heroRight.addView(version);
         hero.addView(heroRight);
-        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(150)));
+        root.addView(hero,new LinearLayout.LayoutParams(-1,dp(148)));
         addSpace(8);
 
         // Primary navigation is intentionally kept at the bottom of the dashboard.
@@ -797,8 +804,15 @@ public class MainActivity extends Activity {
             final int statusIndex = i;
             TextView pill = text(statusLabels[i], 9, statusColors[i], true);
             pill.setGravity(Gravity.CENTER);
-            pill.setPadding(dp(3), dp(9), dp(3), dp(9));
-            pill.setBackground(goldShell(0xFF090909, 0xFF74541B));
+            pill.setPadding(dp(3), dp(10), dp(3), dp(10));
+            GradientDrawable pillFace = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    i == 0 && quoteFresh()
+                            ? new int[]{0xFF06412D, 0xFF071B18}
+                            : new int[]{0xFF1A2939, 0xFF0B121C});
+            pillFace.setCornerRadius(dp(22));
+            pillFace.setStroke(dp(1), i == 0 && quoteFresh() ? 0xFF00D987 : 0xFF40566C);
+            pill.setBackground(pillFace);
+            pill.setElevation(dp(3));
             pill.setClickable(true);
             pill.setFocusable(true);
             pill.setOnClickListener(v -> {

@@ -237,7 +237,7 @@ class EmaStrategyTests(unittest.TestCase):
     def test_protective_stop_stages_for_sell(self):
         cfg=self.config()
         # Initial risk is 3.0. The first stage locks $3; later stages lock 0.15R, 0.35R, then trail 0.80R.
-        self.assertIsNone(protective_stop("SELL",100,106,94,98,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30))
+        self.assertIsNone(protective_stop("SELL",100,106,94,98.84,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30))
         self.assertAlmostEqual(protective_stop("SELL",100,106,94,98.83,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),99.7)
         self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.9,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),99.55)
         self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.0,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),98.95)

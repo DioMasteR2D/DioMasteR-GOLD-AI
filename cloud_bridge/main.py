@@ -896,21 +896,21 @@ async def manage_bot_positions(account_id, symbol, rows):
             risk_map = AUTO_STATE.setdefault("initial_risk_by_ticket", {})
             risk = risk_map.get(str(ticket))
             if risk is None:
-                # Safe recovery is possible only while the broker SL is still the
-                # original adverse-side stop. Never infer original risk from a
-                # moved-to-BE/profit-lock/trailing SL after a process restart.
-                if side == "SELL" and old_sl > entry:
-                    risk = old_sl - entry
-                elif side == "BUY" and old_sl < entry:
-                    risk = entry - old_sl
-                else:
-                    logger.error("EMA_PROTECTION_UNRECOVERABLE_INITIAL_RISK ticket=%s entry=%s current_sl=%s",
-                                 ticket, entry, old_sl)
+                # Recover original risk after a process restart. The broker TP is
+                # preserved from entry and was created at tp_atr versus sl_atr;
+                # a moved-to-profit SL must never be mistaken for initial risk.
+                tp_distance = abs(tp - entry)
+                if tp_distance <= tick_size or cfg.tp_atr <= 0 or cfg.sl_atr <= 0:
+                    logger.error("EMA_PROTECTION_UNRECOVERABLE_INITIAL_RISK ticket=%s entry=%s sl=%s tp=%s",
+                                 ticket, entry, old_sl, tp)
                     continue
-                if risk <= 0:
-                    logger.error("EMA_PROTECTION_INVALID_INITIAL_RISK ticket=%s risk=%s", ticket, risk)
+                risk = tp_distance * cfg.sl_atr / cfg.tp_atr
+                if not np.isfinite(float(risk)) or risk <= tick_size:
+                    logger.error("EMA_PROTECTION_INVALID_RECOVERED_RISK ticket=%s risk=%s", ticket, risk)
                     continue
                 risk_map[str(ticket)] = float(risk)
+                logger.info("EMA_PROTECTION_RISK_RECOVERED_FROM_TP ticket=%s risk=%s tp_distance=%s",
+                            ticket, risk, tp_distance)
             direction = 1.0 if side == "BUY" else -1.0
             r_multiple = ((exit_price - entry) * direction) / float(risk)
             stage = ("ADVANCED_TRAILING" if r_multiple >= 1.5 else

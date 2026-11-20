@@ -981,8 +981,6 @@ async def auto_cycle():
         AUTO_STATE["last_action"]="PROTECTION_DONE_ENTRY_BLOCKED_BY_DAILY_LIMIT"
         return
     await _sync_consecutive_losses(row["id"],symbol)
-    if int(AUTO_STATE.get("consecutive_losses",0))>=AUTO_MAX_CONSECUTIVE_LOSSES:
-        await _kill_switch("CONSECUTIVE_LOSSES"); return
 
     tf=StrategyConfig().timeframe
     if tf not in AUTO_CANDLE_SECONDS: raise RuntimeError("Unsupported EMA timeframe")

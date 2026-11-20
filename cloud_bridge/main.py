@@ -738,8 +738,7 @@ async def _check_daily_limits(equity):
     AUTO_STATE["daily_loss_pct"]=round(loss*100,4)
     if loss>=AUTO_DAILY_LOSS_LIMIT:
         await _kill_switch("DAILY_LOSS_LIMIT"); return False
-    if int(AUTO_STATE.get("consecutive_losses",0))>=AUTO_MAX_CONSECUTIVE_LOSSES:
-        await _kill_switch("CONSECUTIVE_LOSSES"); return False
+    # Consecutive-loss streak is diagnostic only; it must not stop AUTO.
     if AUTO_STATE["trades_today"]>=AUTO_MAX_TRADES_PER_DAY:
         AUTO_STATE["last_action"]="DAILY_TRADE_LIMIT"; return False
     return True

@@ -79,6 +79,8 @@ public class MainActivity extends Activity {
     private String autoExecutionMessage = "Αυτόματη εκτέλεση DEMO ανενεργή";
     private GoldAiAgent.Signal aiSignal = GoldAiAgent.Signal.waiting("Συλλογή δεδομένων αγοράς…");
     private String multiTimeframeStatus = "EMA CROSSOVER 20/50/200 · M15 · ADX14 · ATR14 · DEMO";
+    // Latest ADX calculated by the cloud strategy from its closed M5 candle; NaN means unavailable.
+    private double latestCloudAdx = Double.NaN;
     private final JSONArray agentActivityLog = new JSONArray();
     private static final String AUDIT_PREFS = "diomaster_ai_audit";
     private static final String AUDIT_EVENTS_KEY = "events";
@@ -926,6 +928,21 @@ public class MainActivity extends Activity {
         indicators.addView(metric("ATR (14)",haveOhlc?String.format(Locale.US,"%.2f",atrValue):"—",GOLD),weight());
         indicators.addView(metric("Τάση EMA 20/50",haveOhlc?(emaFast>emaSlow?"Ανοδική":"Καθοδική"):"—",haveOhlc?(emaFast>emaSlow?GREEN:RED):GOLD),weight());
         market.addView(indicators);
+        // Keep the four existing cards at their original width; place the live cloud ADX
+        // directly beneath them so it remains readable on narrow phone screens.
+        LinearLayout adxRow = new LinearLayout(this);
+        adxRow.setOrientation(LinearLayout.HORIZONTAL);
+        adxRow.setGravity(Gravity.LEFT);
+        String adxText = Double.isFinite(latestCloudAdx)
+                ? String.format(Locale.US, "%.2f · όριο 15", latestCloudAdx) : "—";
+        int adxColor = Double.isFinite(latestCloudAdx) && latestCloudAdx > 15.0 ? GREEN : GOLD;
+        adxRow.addView(metric("ADX (14) · M5", adxText, adxColor), weight());
+        adxRow.addView(new View(this), weight());
+        adxRow.addView(new View(this), weight());
+        adxRow.addView(new View(this), weight());
+        LinearLayout.LayoutParams adxParams = new LinearLayout.LayoutParams(-1, -2);
+        adxParams.setMargins(0, dp(6), 0, 0);
+        market.addView(adxRow, adxParams);
         TextView chartNote = text(brokerChartActive ? "AUTO: EMA 20/50 crossover · EMA 200 trend · ADX 14 · SL 1.5×ATR · TP 3×ATR · M15 DEMO." : "Αναμονή πραγματικών MT5 OHLC candles · δεν εμφανίζονται κατασκευασμένα δεδομένα.", 9, MUTED, false);
         chartNote.setPadding(0, dp(5), 0, 0);
         market.addView(chartNote);
@@ -1523,6 +1540,8 @@ public class MainActivity extends Activity {
                 final double signalTp = signal == null ? 0 : signal.optDouble("take_profit", 0);
                 runOnUiThread(() -> {
                     aiEngineStarted = status.optBoolean("running", false);
+                    latestCloudAdx = signal != null && signal.has("adx")
+                            ? signal.optDouble("adx", Double.NaN) : Double.NaN;
                     JSONObject brokerPosition = mt5OpenPositions.length() > 0 ? mt5OpenPositions.optJSONObject(0) : null;
                     if (brokerPosition != null) {
                         String brokerSide = brokerPosition.optString("side",

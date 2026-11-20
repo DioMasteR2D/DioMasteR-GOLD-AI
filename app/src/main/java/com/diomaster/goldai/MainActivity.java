@@ -955,7 +955,7 @@ public class MainActivity extends Activity {
         TextView confidenceLabel=text("ΕΜΠΙΣΤΟΣΥΝΗ AI",9,MUTED,true);
         confidenceLabel.setGravity(Gravity.RIGHT);
         confidenceBox.addView(confidenceLabel);
-        TextView confidence = text(aiSignal.ready && aiSignal.confidence >= 0 ? aiSignal.confidence + "%" : "—", 22, signalColor, true);
+        TextView confidence = text(aiSignal.ready && aiSignal.confidence >= 0 ? aiSignal.confidence + "%" : "WAIT", 22, signalColor, true);
         confidence.setGravity(Gravity.RIGHT);
         confidenceBox.addView(confidence);
         signalHead.addView(confidenceBox,new LinearLayout.LayoutParams(0,-2,1));
@@ -970,12 +970,21 @@ public class MainActivity extends Activity {
         double displayEntry = hasBrokerPosition ? displayedPosition.optDouble("entryPrice", displayedPosition.optDouble("price_open", 0)) : aiSignal.entry;
         double displaySl = hasBrokerPosition ? displayedPosition.optDouble("stopLoss", displayedPosition.optDouble("sl", 0)) : aiSignal.stopLoss;
         double displayTp = hasBrokerPosition ? displayedPosition.optDouble("takeProfit", displayedPosition.optDouble("tp", 0)) : aiSignal.takeProfit;
-        boolean showLevels=(hasBrokerPosition || aiSignal.ready) && ("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side))
-                && displayEntry>0 && displaySl>0 && displayTp>0;
-        signalLevels.addView(metric(hasBrokerPosition ? "BROKER ENTRY" : "SIGNAL PRICE",showLevels?String.format(Locale.US,"%,.2f",displayEntry):"—",0xFF75C9FF),weight());
-        signalLevels.addView(metric("STOP LOSS",showLevels?String.format(Locale.US,"%,.2f",displaySl):"—",RED),weight());
-        signalLevels.addView(metric("TAKE PROFIT",showLevels?String.format(Locale.US,"%,.2f",displayTp):"—",GREEN),weight());
+        boolean showLevels=(hasBrokerPosition || aiSignal.ready) && ("BUY".equals(aiSignal.side) || "SELL".equals(aiSignal.side));
+        String entryValue = showLevels && displayEntry > 0 ? String.format(Locale.US,"%,.2f",displayEntry) : "WAIT";
+        String stopValue = showLevels && displaySl > 0 ? String.format(Locale.US,"%,.2f",displaySl) : "WAIT";
+        String targetValue = showLevels && displayTp > 0 ? String.format(Locale.US,"%,.2f",displayTp) : "WAIT";
+        signalLevels.addView(metric("ENTRY",entryValue,0xFF75C9FF),weight());
+        signalLevels.addView(metric("STOP LOSS",stopValue,RED),weight());
+        signalLevels.addView(metric("TAKE PROFIT",targetValue,GREEN),weight());
         agent.addView(signalLevels);
+
+        // Both directions remain visible; ACTIVE reflects only the real cloud signal or open broker position.
+        LinearLayout directionChecks = new LinearLayout(this);
+        directionChecks.setOrientation(LinearLayout.HORIZONTAL);
+        directionChecks.addView(metric("BUY", "BUY".equals(aiSignal.side) ? "ACTIVE" : "WAIT", GREEN), weight());
+        directionChecks.addView(metric("SELL", "SELL".equals(aiSignal.side) ? "ACTIVE" : "WAIT", RED), weight());
+        agent.addView(directionChecks);
         LinearLayout evaluation = new LinearLayout(this);
         evaluation.setOrientation(LinearLayout.HORIZONTAL);
         evaluation.addView(metric("LIVE TICK",quoteFresh()?"OK":"WAIT",quoteFresh()?GREEN:RED),weight());
@@ -1462,6 +1471,24 @@ public class MainActivity extends Activity {
         render();
     }
 
+    // Display-only confluence score from the same closed-candle strategy inputs; it never gates orders.
+    // This is a technical confirmation score, not a statistical probability of profit.
+    private int calculateSignalConfidence(String side, JSONObject signal, JSONObject diagnostics) {
+        if (!"BUY".equals(side) && !"SELL".equals(side)) return -1;
+        int score = 0;
+        String bias = diagnostics == null ? "HOLD" : diagnostics.optString("m15_bias", "HOLD");
+        if (side.equalsIgnoreCase(bias)) score += 40;
+        double fast = diagnostics == null ? 0 : diagnostics.optDouble("m5_ema20", 0);
+        double slow = diagnostics == null ? 0 : diagnostics.optDouble("m5_ema50", 0);
+        if (("BUY".equals(side) && fast > slow) || ("SELL".equals(side) && fast < slow)) score += 30;
+        double adx = signal == null ? 0 : signal.optDouble("adx", 0);
+        score += (int)Math.round(20.0 * Math.max(0.0, Math.min(1.0, (adx - 20.0) / 20.0)));
+        double open = diagnostics == null ? 0 : diagnostics.optDouble("m5_open", 0);
+        double close = diagnostics == null ? 0 : diagnostics.optDouble("m5_close", 0);
+        if (("BUY".equals(side) && close > open) || ("SELL".equals(side) && close < open)) score += 10;
+        return Math.max(0, Math.min(100, score));
+    }
+
     // Cloud DEMO is the single source of truth for the live signal and its blockers.
     // Polling this display endpoint never starts/stops AUTO and never places an order.
     private void evaluateAutoSignal(long quoteTimestamp) {
@@ -1506,10 +1533,10 @@ public class MainActivity extends Activity {
                         aiSignal = GoldAiAgent.Signal.cloud(brokerSide,
                                 "ΑΝΟΙΧΤΗ ΘΕΣΗ BROKER #" + brokerPosition.optString("ticket", "—")
                                         + " · πραγματικές τιμές MT5 · " + finalReason,
-                                -1, entry, sl, tp);
+                                calculateSignalConfidence(brokerSide, signal, diagnostics), entry, sl, tp);
                     } else if ("BUY".equals(finalSide) || "SELL".equals(finalSide)) {
                         double executableReference = price > 0 ? price : signalPrice;
-                        aiSignal = GoldAiAgent.Signal.cloud(finalSide, finalReason, -1,
+                        aiSignal = GoldAiAgent.Signal.cloud(finalSide, finalReason, calculateSignalConfidence(finalSide, signal, diagnostics),
                                 executableReference, signalSl, signalTp);
                     } else {
                         aiSignal = GoldAiAgent.Signal.waiting(finalReason);

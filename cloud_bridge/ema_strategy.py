@@ -242,7 +242,7 @@ def get_signal(frame: pd.DataFrame, config: StrategyConfig = StrategyConfig(),
         candle = df.iloc[-1]
         body_up = float(candle["close"]) > float(candle["open"])
         body_down = float(candle["close"]) < float(candle["open"])
-        near_fast = abs(close - vals["ema_fast"]) <= 0.85 * vals["atr"]
+        near_fast = abs(close - vals["ema_fast"]) <= 1.10 * vals["atr"]
         if (trend_bias == "BUY" and still_bullish and close > vals["ema_fast"]
                 and body_up and near_fast):
             direction = "BUY"

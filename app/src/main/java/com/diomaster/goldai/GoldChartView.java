@@ -23,7 +23,7 @@ public final class GoldChartView extends View {
     }
     public GoldChartView(Context context) {
         super(context);
-        grid.setColor(0xFF292D36); grid.setStrokeWidth(1f);
+        grid.setColor(0xFF263443); grid.setStrokeWidth(1f);
         setLayerType(View.LAYER_TYPE_SOFTWARE,null);
     }
     public void setCandles(JSONArray rows) {
@@ -51,6 +51,14 @@ public final class GoldChartView extends View {
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         float w=getWidth(),h=getHeight();
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFF0A121C);
+        canvas.drawRoundRect(new RectF(0,0,w,h),dp(16),dp(16),p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(dp(1));
+        p.setColor(0xFF34495D);
+        canvas.drawRoundRect(new RectF(.5f,.5f,w-.5f,h-.5f),dp(16),dp(16),p);
+        p.setStyle(Paint.Style.FILL);
         for(int i=1;i<=4;i++) canvas.drawLine(0,h*i/5f,w,h*i/5f,grid);
         if(bars.size()>=2) drawBars(canvas,w,h);
         else drawWaiting(canvas,w,h);
@@ -71,12 +79,12 @@ public final class GoldChartView extends View {
             c.drawRect(x-body*.45f,h-3-vh,x+body*.45f,h-3,p);
         }
         // EMA overlays.
-        Path e6=new Path(),e15=new Path();
+        Path e20=new Path(),e50=new Path();
         for(int i=0;i<n;i++){
             float x=(i+.5f)*step;
-            float y6=(float)(bottom-(ema(i,6)-min)/range*chartH);
-            float y15=(float)(bottom-(ema(i,15)-min)/range*chartH);
-            if(i==0){e6.moveTo(x,y6);e15.moveTo(x,y15);}else{e6.lineTo(x,y6);e15.lineTo(x,y15);}
+            float y20=(float)(bottom-(ema(i,20)-min)/range*chartH);
+            float y50=(float)(bottom-(ema(i,50)-min)/range*chartH);
+            if(i==0){e20.moveTo(x,y20);e50.moveTo(x,y50);}else{e20.lineTo(x,y20);e50.lineTo(x,y50);}
         }
         // Candlestick wicks and bodies.
         for(int i=0;i<n;i++){
@@ -92,8 +100,8 @@ public final class GoldChartView extends View {
             float bh=Math.max(2f,Math.abs(yc-yo));
             c.drawRect(x-body/2,Math.min(yo,yc),x+body/2,Math.min(yo,yc)+bh,p);
         }
-        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);p.setColor(BLUE);c.drawPath(e6,p);
-        p.setStrokeWidth(2.2f);p.setColor(GOLD);c.drawPath(e15,p);
+        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.4f);p.setColor(BLUE);c.drawPath(e20,p);
+        p.setStrokeWidth(2.4f);p.setColor(GOLD);c.drawPath(e50,p);
         Bar last=bars.get(n-1);float ly=(float)(bottom-(last.c-min)/range*chartH);
         p.setStyle(Paint.Style.FILL);p.setColor(GOLD);c.drawCircle(w-3,ly,3.5f,p);
     }

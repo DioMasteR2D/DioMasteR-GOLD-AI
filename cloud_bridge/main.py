@@ -922,13 +922,13 @@ async def manage_bot_positions(account_id, symbol, rows):
                 logger.info("EMA_PROTECTION_STAGE ticket=%s side=%s stage=%s r=%.4f initial_risk=%s current_sl=%s",
                             ticket, side, stage, r_multiple, risk, old_sl)
                 stages[str(ticket)] = stage
-            # Convert the requested $5 per-position lock into an exact price
+            # Convert the requested $4 per-position lock into an exact price
             # distance using the broker's account-currency tick value and this
             # position's actual volume. If contract data is unavailable, do not
             # pretend a zero-profit break-even stop is a $3 lock.
             volume = float(p.get("volume") or 0)
             be_profit_price_distance = (
-                5.0 / ((tick_value_account / tick_size) * volume)
+                4.0 / ((tick_value_account / tick_size) * volume)
                 if tick_value_account > 0 and volume > 0 else None
             )
             new_sl = protective_stop(

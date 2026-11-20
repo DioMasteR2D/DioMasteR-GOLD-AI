@@ -236,22 +236,24 @@ class EmaStrategyTests(unittest.TestCase):
 
     def test_protective_stop_stages_for_sell(self):
         cfg=self.config()
-        # TP distance 6.0 with SL:TP ATR ratio 1:2 => initial risk 3.0
-        self.assertIsNone(protective_stop("SELL",100,106,94,98,0.01,cfg))
-        self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.5,0.01,cfg),100.0)
-        self.assertAlmostEqual(protective_stop("SELL",100,106,94,96.4,0.01,cfg),99.1)
-        self.assertAlmostEqual(protective_stop("SELL",100,106,94,95.5,0.01,cfg),97.9)
+        # Initial risk is 3.0. The first stage locks $3; later stages lock 0.15R, 0.35R, then trail 0.80R.
+        self.assertIsNone(protective_stop("SELL",100,106,94,98,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30))
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,98.83,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),99.7)
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.9,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),99.55)
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,97.0,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),98.95)
+        self.assertAlmostEqual(protective_stop("SELL",100,106,94,95.5,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),97.9)
 
     def test_protective_stop_stages_for_buy(self):
         cfg=self.config()
-        self.assertAlmostEqual(protective_stop("BUY",100,94,106,102.5,0.01,cfg),100.0)
-        self.assertAlmostEqual(protective_stop("BUY",100,94,106,103.6,0.01,cfg),100.9)
-        self.assertAlmostEqual(protective_stop("BUY",100,94,106,104.5,0.01,cfg),102.1)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,101.17,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),100.3)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,102.1,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),100.45)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,103.0,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),101.05)
+        self.assertAlmostEqual(protective_stop("BUY",100,94,106,104.5,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30),102.1)
 
     def test_protective_stop_never_widens_existing_stop(self):
         cfg=self.config()
-        self.assertIsNone(protective_stop("SELL",100,99,94,96.4,0.01,cfg))
-        self.assertIsNone(protective_stop("BUY",100,101,106,103.6,0.01,cfg))
+        self.assertIsNone(protective_stop("SELL",100,98.9,94,96.4,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30))
+        self.assertIsNone(protective_stop("BUY",100,101.1,106,103.6,0.01,cfg,initial_risk=3.0,be_profit_price_distance=0.30))
 
     def test_old_crossover_is_not_reused(self):
         cfg=self.config()
